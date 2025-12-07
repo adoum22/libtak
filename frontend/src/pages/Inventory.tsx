@@ -441,7 +441,7 @@ export default function Inventory() {
                     <div className="absolute inset-0 bg-black opacity-50 backdrop-blur-sm" onClick={closeModal} />
                     <div className="relative card w-full max-w-4xl max-h-[90vh] overflow-y-auto animate-slideUp p-0">
                         {/* Header */}
-                        <div className="p-6 border-b flex items-center justify-between bg-white sticky top-0 z-10">
+                        <div className="p-6 border-b flex items-center justify-between bg-secondary sticky top-0 z-10">
                             <h2 className="text-xl font-bold">
                                 {editingProduct ? 'Modifier le produit' : 'Nouveau produit'}
                             </h2>
@@ -472,7 +472,7 @@ export default function Inventory() {
                                             </>
                                         ) : (
                                             <div className="text-center text-muted p-4">
-                                                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm">
+                                                <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm">
                                                     <ImageIcon size={32} />
                                                 </div>
                                                 <p className="font-medium">Ajouter une photo</p>
@@ -527,7 +527,7 @@ export default function Inventory() {
                                             <select
                                                 value={formData.category}
                                                 onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                                                className="w-full p-2.5 bg-white border border-border rounded-lg"
+                                                className="w-full p-2.5 bg-secondary border border-border rounded-lg"
                                             >
                                                 <option value="">-- Non classé --</option>
                                                 {categories.map(cat => (
@@ -566,7 +566,7 @@ export default function Inventory() {
                                             <select
                                                 value={formData.supplier}
                                                 onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
-                                                className="w-full p-3 bg-white border-2 border-accent/20 rounded-xl focus:border-accent focus:ring-accent"
+                                                className="w-full p-3 bg-secondary border-2 border-accent/20 rounded-xl focus:border-accent focus:ring-accent"
                                             >
                                                 <option value="">Sélectionner un fournisseur...</option>
                                                 {suppliers.map(sup => (
@@ -651,7 +651,7 @@ export default function Inventory() {
                                         </div>
 
                                         {formData.sale_price_ht && (
-                                            <div className="text-sm text-right p-2 bg-white rounded-lg border border-border">
+                                            <div className="text-sm text-right p-2 bg-secondary rounded-lg border border-border">
                                                 <span className="text-muted">Prix TTC estimé : </span>
                                                 <span className="font-bold text-primary">
                                                     {(parseFloat(formData.sale_price_ht) * (1 + parseFloat(formData.tva) / 100)).toFixed(2)} DH
@@ -663,7 +663,7 @@ export default function Inventory() {
                             </div>
 
                             {/* Actions */}
-                            <div className="flex justify-end gap-3 pt-6 border-t bg-white sticky bottom-0 -mx-6 px-6 pb-2">
+                            <div className="flex justify-end gap-3 pt-6 border-t bg-secondary sticky bottom-0 -mx-6 px-6 pb-2">
                                 <button type="button" onClick={closeModal} className="btn-secondary px-6">
                                     Annuler
                                 </button>
@@ -685,7 +685,7 @@ export default function Inventory() {
             {viewingImageProduct && (
                 <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setViewingImageProduct(null)} />
-                    <div className="relative bg-white rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale">
+                    <div className="relative bg-secondary rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale">
                         <div className="relative aspect-square bg-gray-100">
                             <img
                                 src={viewingImageProduct.image_url!}
@@ -699,7 +699,7 @@ export default function Inventory() {
                                 <X size={20} />
                             </button>
                         </div>
-                        <div className="p-6 flex items-center justify-between bg-white">
+                        <div className="p-6 flex items-center justify-between bg-secondary">
                             <div>
                                 <h3 className="font-bold text-lg">{viewingImageProduct.name}</h3>
                                 <p className="text-sm text-muted">Aperçu de l'image actuelle</p>

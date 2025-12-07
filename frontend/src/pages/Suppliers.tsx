@@ -366,7 +366,7 @@ export default function Suppliers() {
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeModal} />
                     <div className="relative card w-full max-w-4xl animate-fadeScale p-0 overflow-hidden shadow-2xl">
-                        <div className="p-6 border-b flex items-center justify-between bg-white z-10">
+                        <div className="p-6 border-b flex items-center justify-between bg-secondary z-10">
                             <div>
                                 <h2 className="text-xl font-bold text-primary">
                                     {editingSupplier ? 'Modifier le fournisseur' : 'Nouveau fournisseur'}
@@ -401,7 +401,7 @@ export default function Suppliers() {
                                             </>
                                         ) : (
                                             <div className="text-center text-muted p-4">
-                                                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm">
+                                                <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm">
                                                     <ImageIcon size={32} />
                                                 </div>
                                                 <p className="font-medium">Logo / Photo</p>
@@ -455,7 +455,7 @@ export default function Suppliers() {
                                         <select
                                             value={formData.active ? 'true' : 'false'}
                                             onChange={(e) => setFormData({ ...formData, active: e.target.value === 'true' })}
-                                            className="w-full p-2.5 bg-white border border-border rounded-lg"
+                                            className="w-full p-2.5 bg-secondary border border-border rounded-lg"
                                         >
                                             <option value="true">Actif</option>
                                             <option value="false">Inactif</option>
@@ -535,7 +535,7 @@ export default function Suppliers() {
             {viewingImageSupplier && (
                 <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setViewingImageSupplier(null)} />
-                    <div className="relative bg-white rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale">
+                    <div className="relative bg-secondary rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale">
                         <div className="relative aspect-square bg-gray-100 flex items-center justify-center p-4">
                             <img
                                 src={viewingImageSupplier.image_url!}
@@ -549,7 +549,7 @@ export default function Suppliers() {
                                 <X size={20} />
                             </button>
                         </div>
-                        <div className="p-6 flex items-center justify-between bg-white border-t border-border">
+                        <div className="p-6 flex items-center justify-between bg-secondary border-t border-border">
                             <div>
                                 <h3 className="font-bold text-lg text-primary">{viewingImageSupplier.name}</h3>
                                 <p className="text-sm text-muted">Aperçu du logo actuel</p>

@@ -30,7 +30,7 @@ class ErrorBoundary extends Component<Props, State> {
         if (this.state.hasError) {
             return (
                 <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-                    <div className="bg-white p-8 rounded-lg shadow-xl max-w-2xl w-full">
+                    <div className="bg-secondary p-8 rounded-lg shadow-xl max-w-2xl w-full">
                         <h1 className="text-2xl font-bold text-red-600 mb-4">Une erreur est survenue</h1>
                         <p className="mb-4 text-gray-700">L'application a rencontré un problème inattendu.</p>
 

@@ -168,7 +168,7 @@ export default function POS() {
             {/* Success Overlay (Auto-dismiss) */}
             {showSuccessOverlay && (
                 <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md animate-fadeIn">
-                    <div className="text-center p-12 bg-white rounded-3xl shadow-2xl animate-bounce-short">
+                    <div className="text-center p-12 bg-secondary rounded-3xl shadow-2xl animate-bounce-short">
                         <div className="w-24 h-24 bg-success rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-success/30">
                             <Check size={64} className="text-white" strokeWidth={4} />
                         </div>
@@ -229,7 +229,7 @@ export default function POS() {
                                 <Banknote />
                                 Paiement Espèces
                             </h3>
-                            <button onClick={() => setShowPaymentModal(false)} className="text-white hover:bg-white/20 p-1 rounded">
+                            <button onClick={() => setShowPaymentModal(false)} className="text-white hover:bg-secondary/20 p-1 rounded">
                                 <X size={24} />
                             </button>
                         </div>
@@ -406,7 +406,7 @@ export default function POS() {
                                                 {item.product.name}
                                             </h4>
                                             <div className="text-xs text-muted flex items-center gap-2 mt-1">
-                                                <span className="bg-white px-1.5 rounded">{item.product.barcode}</span>
+                                                <span className="bg-secondary px-1.5 rounded">{item.product.barcode}</span>
                                                 <span>{item.product.price_ttc?.toFixed(2)} DH/u</span>
                                             </div>
                                         </div>
@@ -423,7 +423,7 @@ export default function POS() {
                                             <Trash2 size={16} />
                                         </button>
 
-                                        <div className="flex items-center gap-1 bg-white rounded-lg shadow-sm border border-border p-0.5">
+                                        <div className="flex items-center gap-1 bg-secondary rounded-lg shadow-sm border border-border p-0.5">
                                             <button
                                                 onClick={() => updateQuantity(item.product.id, -1)}
                                                 className="w-8 h-8 flex items-center justify-center hover:bg-tertiary rounded-md transition-colors"

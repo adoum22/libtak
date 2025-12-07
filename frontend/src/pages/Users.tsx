@@ -247,7 +247,7 @@ export default function Users() {
                             key={role}
                             onClick={() => setFilterRole(role)}
                             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${filterRole === role
-                                ? 'bg-white text-primary shadow-sm'
+                                ? 'bg-secondary text-primary shadow-sm'
                                 : 'text-muted hover:text-primary'
                                 }`}
                         >
@@ -362,7 +362,7 @@ export default function Users() {
             {/* User Modal */}
             {isModalOpen && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-                    <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-scaleIn">
+                    <div className="bg-secondary rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-scaleIn">
                         <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
                             <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
                                 {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
@@ -539,7 +539,7 @@ export default function Users() {
             {/* Password Modal */}
             {isPasswordModalOpen && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-                    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl animate-scaleIn">
+                    <div className="bg-secondary rounded-2xl w-full max-w-sm shadow-2xl animate-scaleIn">
                         <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
                             <h3 className="text-lg font-bold">Changer mot de passe</h3>
                             <button onClick={closePasswordModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200">×</button>
