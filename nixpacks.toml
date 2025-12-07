@@ -1,0 +1,8 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[tool.nixpacks]
+providers = ["python"]
+
+[tool.nixpacks.phases]
+install = "cd backend && pip install -r requirements.txt"
