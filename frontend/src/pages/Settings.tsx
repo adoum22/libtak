@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users } from 'lucide-react';
+import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download } from 'lucide-react';
 
 interface ReportSettings {
     email_recipients: string;
@@ -40,7 +40,7 @@ interface AppSettings {
 export default function Settings() {
     const queryClient = useQueryClient();
     const [showSuccess, setShowSuccess] = useState(false);
-    const [activeTab, setActiveTab] = useState<'store' | 'reports' | 'permissions'>('store');
+    const [activeTab, setActiveTab] = useState<'store' | 'reports' | 'permissions' | 'backup'>('store');
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
 
@@ -157,6 +157,16 @@ export default function Settings() {
                 >
                     <Shield size={18} className="inline mr-2" />
                     Permissions & Sécurité
+                </button>
+                <button
+                    onClick={() => setActiveTab('backup')}
+                    className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'backup'
+                        ? 'border-accent text-accent'
+                        : 'border-transparent text-muted hover:text-primary'
+                        }`}
+                >
+                    <Database size={18} className="inline mr-2" />
+                    Sauvegarde
                 </button>
             </div>
 
@@ -558,6 +568,70 @@ export default function Settings() {
                                 Aller à la gestion des Utilisateurs
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Backup Settings */}
+            {activeTab === 'backup' && (
+                <div className="card max-w-2xl">
+                    <div className="card-header flex items-center gap-2">
+                        <Database size={20} className="text-primary" />
+                        <h2 className="font-semibold text-lg">Sauvegarde de la base de données</h2>
+                    </div>
+                    <div className="card-body space-y-6 text-center py-10">
+                        <div className="w-20 h-20 bg-accent-light rounded-full flex items-center justify-center mx-auto mb-4">
+                            <Database size={40} className="text-accent" />
+                        </div>
+
+                        <h3 className="text-xl font-bold">Télécharger une copie de vos données</h3>
+
+                        <p className="text-muted max-w-md mx-auto">
+                            Téléchargez une sauvegarde complète de votre base de données incluant :
+                        </p>
+
+                        <div className="flex flex-wrap justify-center gap-2 text-sm">
+                            <span className="px-3 py-1 bg-tertiary rounded-full">📦 Produits</span>
+                            <span className="px-3 py-1 bg-tertiary rounded-full">📂 Catégories</span>
+                            <span className="px-3 py-1 bg-tertiary rounded-full">🏢 Fournisseurs</span>
+                            <span className="px-3 py-1 bg-tertiary rounded-full">💰 Ventes</span>
+                            <span className="px-3 py-1 bg-tertiary rounded-full">👥 Utilisateurs</span>
+                            <span className="px-3 py-1 bg-tertiary rounded-full">⚙️ Paramètres</span>
+                        </div>
+
+                        <div className="pt-6">
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        const response = await client.get('/auth/backup/', {
+                                            responseType: 'blob'
+                                        });
+                                        const url = window.URL.createObjectURL(new Blob([response.data]));
+                                        const link = document.createElement('a');
+                                        link.href = url;
+                                        const date = new Date().toISOString().split('T')[0];
+                                        link.setAttribute('download', `libtak_backup_${date}.json`);
+                                        document.body.appendChild(link);
+                                        link.click();
+                                        link.remove();
+                                        window.URL.revokeObjectURL(url);
+                                        setShowSuccess(true);
+                                        setTimeout(() => setShowSuccess(false), 3000);
+                                    } catch (error) {
+                                        console.error('Erreur lors du téléchargement:', error);
+                                        alert('Erreur lors du téléchargement de la sauvegarde');
+                                    }
+                                }}
+                                className="btn-primary inline-flex items-center gap-2 px-8 py-3 text-lg"
+                            >
+                                <Download size={24} />
+                                Télécharger la sauvegarde
+                            </button>
+                        </div>
+
+                        <p className="text-xs text-muted mt-4">
+                            Le fichier sera au format JSON. Conservez-le en lieu sûr.
+                        </p>
                     </div>
                 </div>
             )}

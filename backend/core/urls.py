@@ -5,7 +5,7 @@ from rest_framework_simplejwt.views import (
     TokenRefreshView,
     TokenVerifyView
 )
-from .views import UserMeView, UserViewSet, AppSettingsView, PublicSettingsView, CustomTokenObtainPairView
+from .views import UserMeView, UserViewSet, AppSettingsView, PublicSettingsView, CustomTokenObtainPairView, DatabaseExportView
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -22,6 +22,9 @@ urlpatterns = [
     # Settings
     path('settings/', AppSettingsView.as_view(), name='app_settings'),
     path('settings/public/', PublicSettingsView.as_view(), name='public_settings'),
+    
+    # Database export/backup
+    path('backup/', DatabaseExportView.as_view(), name='database_export'),
     
     # User management (admin)
     path('', include(router.urls)),
