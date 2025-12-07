@@ -124,18 +124,19 @@ class PublicSettingsView(generics.RetrieveAPIView):
         return Response(data)
 
 
-from django.http import JsonResponse
-from django.core import serializers
+from django.http import JsonResponse, HttpResponse
 from datetime import datetime
-import json
+from io import BytesIO
 
 class DatabaseExportView(generics.GenericAPIView):
-    """Export de la base de données pour backup"""
+    """Export de la base de données pour backup en Excel"""
     permission_classes = [IsAuthenticated, IsAdminRole]
     
     def get(self, request):
         from inventory.models import Product, Category, Supplier
         from sales.models import Sale, SaleItem
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         
         # Get selection parameters (default to True if not specified)
         include_products = request.query_params.get('products', 'true').lower() == 'true'
@@ -145,118 +146,153 @@ class DatabaseExportView(generics.GenericAPIView):
         include_users = request.query_params.get('users', 'true').lower() == 'true'
         include_settings = request.query_params.get('settings', 'true').lower() == 'true'
         
-        # Collecter les données sélectionnées
-        data = {
-            'export_date': datetime.now().isoformat(),
-            'export_by': request.user.username,
-        }
+        # Créer le workbook Excel
+        wb = Workbook()
         
-        if include_users:
-            data['users'] = []
-        if include_categories:
-            data['categories'] = []
-        if include_suppliers:
-            data['suppliers'] = []
+        # Styles
+        header_font = Font(bold=True, color='FFFFFF')
+        header_fill = PatternFill(start_color='4F46E5', end_color='4F46E5', fill_type='solid')
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        def style_header(ws, headers):
+            for col, header in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center')
+                cell.border = thin_border
+                ws.column_dimensions[cell.column_letter].width = max(15, len(header) + 5)
+        
+        # Sheet: Produits
         if include_products:
-            data['products'] = []
-        if include_sales:
-            data['sales'] = []
-        if include_settings:
-            data['settings'] = {}
+            ws = wb.active
+            ws.title = "Produits"
+            headers = ['ID', 'Nom', 'Code-barres', 'Catégorie', 'Fournisseur', 'Prix Achat', 'Prix Vente', 'TVA %', 'Stock', 'Seuil', 'Unité', 'Actif']
+            style_header(ws, headers)
+            
+            for row, prod in enumerate(Product.objects.all(), 2):
+                ws.cell(row=row, column=1, value=prod.id)
+                ws.cell(row=row, column=2, value=prod.name)
+                ws.cell(row=row, column=3, value=prod.barcode)
+                ws.cell(row=row, column=4, value=prod.category.name if prod.category else '')
+                ws.cell(row=row, column=5, value=prod.supplier.name if prod.supplier else '')
+                ws.cell(row=row, column=6, value=float(prod.purchase_price))
+                ws.cell(row=row, column=7, value=float(prod.sale_price))
+                ws.cell(row=row, column=8, value=float(prod.tva))
+                ws.cell(row=row, column=9, value=prod.stock)
+                ws.cell(row=row, column=10, value=prod.min_stock)
+                ws.cell(row=row, column=11, value=prod.unit)
+                ws.cell(row=row, column=12, value='Oui' if prod.is_active else 'Non')
         
-        # Users (sans les mots de passe)
-        if include_users:
-            for user in User.objects.all():
-                data['users'].append({
-                    'id': user.id,
-                    'username': user.username,
-                    'email': user.email,
-                    'first_name': user.first_name,
-                    'last_name': user.last_name,
-                    'role': user.role,
-                    'phone': user.phone,
-                    'is_active': user.is_active,
-                    'can_view_stock': user.can_view_stock,
-                    'can_manage_stock': user.can_manage_stock,
-                })
-        
-        # Categories
+        # Sheet: Catégories
         if include_categories:
-            for cat in Category.objects.all():
-                data['categories'].append({
-                    'id': cat.id,
-                    'name': cat.name,
-                    'description': getattr(cat, 'description', ''),
-                })
+            ws = wb.create_sheet("Catégories")
+            headers = ['ID', 'Nom', 'Description']
+            style_header(ws, headers)
+            
+            for row, cat in enumerate(Category.objects.all(), 2):
+                ws.cell(row=row, column=1, value=cat.id)
+                ws.cell(row=row, column=2, value=cat.name)
+                ws.cell(row=row, column=3, value=getattr(cat, 'description', ''))
         
-        # Suppliers
+        # Sheet: Fournisseurs
         if include_suppliers:
-            for sup in Supplier.objects.all():
-                data['suppliers'].append({
-                    'id': sup.id,
-                    'name': sup.name,
-                    'contact_name': sup.contact_name,
-                    'email': sup.email,
-                    'phone': sup.phone,
-                    'address': sup.address,
-                    'notes': sup.notes,
-                })
+            ws = wb.create_sheet("Fournisseurs")
+            headers = ['ID', 'Nom', 'Contact', 'Email', 'Téléphone', 'Adresse', 'Notes']
+            style_header(ws, headers)
+            
+            for row, sup in enumerate(Supplier.objects.all(), 2):
+                ws.cell(row=row, column=1, value=sup.id)
+                ws.cell(row=row, column=2, value=sup.name)
+                ws.cell(row=row, column=3, value=sup.contact_name)
+                ws.cell(row=row, column=4, value=sup.email)
+                ws.cell(row=row, column=5, value=sup.phone)
+                ws.cell(row=row, column=6, value=sup.address)
+                ws.cell(row=row, column=7, value=sup.notes)
         
-        # Products
-        if include_products:
-            for prod in Product.objects.all():
-                data['products'].append({
-                    'id': prod.id,
-                    'name': prod.name,
-                    'barcode': prod.barcode,
-                    'description': prod.description,
-                    'category_id': prod.category_id,
-                    'supplier_id': prod.supplier_id,
-                    'purchase_price': str(prod.purchase_price),
-                    'sale_price': str(prod.sale_price),
-                    'tva': str(prod.tva),
-                    'stock': prod.stock,
-                    'min_stock': prod.min_stock,
-                    'unit': prod.unit,
-                    'is_active': prod.is_active,
-                })
-        
-        # Sales
+        # Sheet: Ventes
         if include_sales:
-            for sale in Sale.objects.all().order_by('-created_at')[:1000]:  # Limiter à 1000 dernières ventes
-                sale_data = {
-                    'id': sale.id,
-                    'total': str(sale.total),
-                    'payment_method': sale.payment_method,
-                    'created_at': sale.created_at.isoformat(),
-                    'cashier_id': sale.cashier_id,
-                    'items': []
-                }
+            ws = wb.create_sheet("Ventes")
+            headers = ['ID Vente', 'Date', 'Total', 'Mode Paiement', 'Caissier', 'Produit', 'Quantité', 'Prix Unit.', 'Sous-total']
+            style_header(ws, headers)
+            
+            row = 2
+            for sale in Sale.objects.all().order_by('-created_at')[:1000]:
                 for item in sale.items.all():
-                    sale_data['items'].append({
-                        'product_id': item.product_id,
-                        'product_name': item.product.name if item.product else 'Produit supprimé',
-                        'quantity': item.quantity,
-                        'unit_price': str(item.unit_price),
-                        'total': str(item.total),
-                    })
-                data['sales'].append(sale_data)
+                    ws.cell(row=row, column=1, value=sale.id)
+                    ws.cell(row=row, column=2, value=sale.created_at.strftime('%Y-%m-%d %H:%M'))
+                    ws.cell(row=row, column=3, value=float(sale.total))
+                    ws.cell(row=row, column=4, value=sale.payment_method)
+                    ws.cell(row=row, column=5, value=sale.cashier.username if sale.cashier else '')
+                    ws.cell(row=row, column=6, value=item.product.name if item.product else 'Produit supprimé')
+                    ws.cell(row=row, column=7, value=item.quantity)
+                    ws.cell(row=row, column=8, value=float(item.unit_price))
+                    ws.cell(row=row, column=9, value=float(item.total))
+                    row += 1
         
-        # Settings
+        # Sheet: Utilisateurs
+        if include_users:
+            ws = wb.create_sheet("Utilisateurs")
+            headers = ['ID', 'Nom utilisateur', 'Email', 'Prénom', 'Nom', 'Rôle', 'Téléphone', 'Actif', 'Voir Stock', 'Gérer Stock']
+            style_header(ws, headers)
+            
+            for row, user in enumerate(User.objects.all(), 2):
+                ws.cell(row=row, column=1, value=user.id)
+                ws.cell(row=row, column=2, value=user.username)
+                ws.cell(row=row, column=3, value=user.email)
+                ws.cell(row=row, column=4, value=user.first_name)
+                ws.cell(row=row, column=5, value=user.last_name)
+                ws.cell(row=row, column=6, value=user.role)
+                ws.cell(row=row, column=7, value=user.phone)
+                ws.cell(row=row, column=8, value='Oui' if user.is_active else 'Non')
+                ws.cell(row=row, column=9, value='Oui' if user.can_view_stock else 'Non')
+                ws.cell(row=row, column=10, value='Oui' if user.can_manage_stock else 'Non')
+        
+        # Sheet: Paramètres
         if include_settings:
+            ws = wb.create_sheet("Paramètres")
             settings = AppSettings.get_settings()
-            data['settings'] = {
-                'store_name': settings.store_name,
-                'store_address': settings.store_address,
-                'store_phone': settings.store_phone,
-                'store_email': settings.store_email,
-                'currency': settings.currency,
-                'currency_symbol': settings.currency_symbol,
-                'default_tva': str(settings.default_tva),
-            }
+            
+            ws.cell(row=1, column=1, value="Paramètre").font = header_font
+            ws.cell(row=1, column=1).fill = header_fill
+            ws.cell(row=1, column=2, value="Valeur").font = header_font
+            ws.cell(row=1, column=2).fill = header_fill
+            ws.column_dimensions['A'].width = 25
+            ws.column_dimensions['B'].width = 40
+            
+            params = [
+                ('Nom de la boutique', settings.store_name),
+                ('Adresse', settings.store_address),
+                ('Téléphone', settings.store_phone),
+                ('Email', settings.store_email),
+                ('Devise', settings.currency),
+                ('Symbole devise', settings.currency_symbol),
+                ('TVA par défaut', f"{settings.default_tva}%"),
+                ('Date export', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+            ]
+            
+            for row, (param, value) in enumerate(params, 2):
+                ws.cell(row=row, column=1, value=param)
+                ws.cell(row=row, column=2, value=value)
         
-        # Créer la réponse JSON avec headers de téléchargement
-        response = JsonResponse(data, json_dumps_params={'indent': 2, 'ensure_ascii': False})
-        filename = f"libtak_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        # Si pas de produits sélectionnés, supprimer la feuille par défaut vide
+        if not include_products and 'Sheet' in wb.sheetnames:
+            del wb['Sheet']
+        
+        # Créer la réponse HTTP avec le fichier Excel
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        filename = f"libtak_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response = HttpResponse(
+            output.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response

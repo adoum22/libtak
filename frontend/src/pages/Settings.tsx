@@ -665,7 +665,7 @@ export default function Settings() {
                                         const link = document.createElement('a');
                                         link.href = url;
                                         const date = new Date().toISOString().split('T')[0];
-                                        link.setAttribute('download', `libtak_backup_${date}.json`);
+                                        link.setAttribute('download', `libtak_backup_${date}.xlsx`);
                                         document.body.appendChild(link);
                                         link.click();
                                         link.remove();
@@ -685,7 +685,7 @@ export default function Settings() {
                         </div>
 
                         <p className="text-xs text-muted text-center">
-                            Le fichier sera au format JSON. Conservez-le en lieu sûr.
+                            Le fichier sera au format Excel (.xlsx) avec plusieurs feuilles. Ouvrez-le avec Excel ou Google Sheets.
                         </p>
                     </div>
                 </div>
