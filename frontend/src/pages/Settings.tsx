@@ -579,31 +579,86 @@ export default function Settings() {
                         <Database size={20} className="text-primary" />
                         <h2 className="font-semibold text-lg">Sauvegarde de la base de données</h2>
                     </div>
-                    <div className="card-body space-y-6 text-center py-10">
-                        <div className="w-20 h-20 bg-accent-light rounded-full flex items-center justify-center mx-auto mb-4">
-                            <Database size={40} className="text-accent" />
+                    <div className="card-body space-y-6 py-8">
+                        <div className="text-center">
+                            <div className="w-16 h-16 bg-accent-light rounded-full flex items-center justify-center mx-auto mb-4">
+                                <Database size={32} className="text-accent" />
+                            </div>
+                            <h3 className="text-xl font-bold">Télécharger une copie de vos données</h3>
+                            <p className="text-muted mt-2">Sélectionnez les données à inclure dans la sauvegarde :</p>
                         </div>
 
-                        <h3 className="text-xl font-bold">Télécharger une copie de vos données</h3>
-
-                        <p className="text-muted max-w-md mx-auto">
-                            Téléchargez une sauvegarde complète de votre base de données incluant :
-                        </p>
-
-                        <div className="flex flex-wrap justify-center gap-2 text-sm">
-                            <span className="px-3 py-1 bg-tertiary rounded-full">📦 Produits</span>
-                            <span className="px-3 py-1 bg-tertiary rounded-full">📂 Catégories</span>
-                            <span className="px-3 py-1 bg-tertiary rounded-full">🏢 Fournisseurs</span>
-                            <span className="px-3 py-1 bg-tertiary rounded-full">💰 Ventes</span>
-                            <span className="px-3 py-1 bg-tertiary rounded-full">👥 Utilisateurs</span>
-                            <span className="px-3 py-1 bg-tertiary rounded-full">⚙️ Paramètres</span>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-lg mx-auto">
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-products"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">📦 Produits</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-categories"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">📂 Catégories</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-suppliers"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">🏢 Fournisseurs</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-sales"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">💰 Ventes</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-users"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">👥 Utilisateurs</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
+                                <input
+                                    type="checkbox"
+                                    id="backup-settings"
+                                    defaultChecked
+                                    className="w-5 h-5 accent-accent"
+                                />
+                                <span className="text-sm font-medium">⚙️ Paramètres</span>
+                            </label>
                         </div>
 
-                        <div className="pt-6">
+                        <div className="text-center pt-4">
                             <button
                                 onClick={async () => {
                                     try {
-                                        const response = await client.get('/auth/backup/', {
+                                        // Get selected options
+                                        const params = new URLSearchParams();
+                                        if ((document.getElementById('backup-products') as HTMLInputElement)?.checked) params.append('products', 'true');
+                                        if ((document.getElementById('backup-categories') as HTMLInputElement)?.checked) params.append('categories', 'true');
+                                        if ((document.getElementById('backup-suppliers') as HTMLInputElement)?.checked) params.append('suppliers', 'true');
+                                        if ((document.getElementById('backup-sales') as HTMLInputElement)?.checked) params.append('sales', 'true');
+                                        if ((document.getElementById('backup-users') as HTMLInputElement)?.checked) params.append('users', 'true');
+                                        if ((document.getElementById('backup-settings') as HTMLInputElement)?.checked) params.append('settings', 'true');
+
+                                        const response = await client.get(`/auth/backup/?${params.toString()}`, {
                                             responseType: 'blob'
                                         });
                                         const url = window.URL.createObjectURL(new Blob([response.data]));
@@ -629,7 +684,7 @@ export default function Settings() {
                             </button>
                         </div>
 
-                        <p className="text-xs text-muted mt-4">
+                        <p className="text-xs text-muted text-center">
                             Le fichier sera au format JSON. Conservez-le en lieu sûr.
                         </p>
                     </div>

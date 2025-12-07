@@ -137,102 +137,123 @@ class DatabaseExportView(generics.GenericAPIView):
         from inventory.models import Product, Category, Supplier
         from sales.models import Sale, SaleItem
         
-        # Collecter toutes les données
+        # Get selection parameters (default to True if not specified)
+        include_products = request.query_params.get('products', 'true').lower() == 'true'
+        include_categories = request.query_params.get('categories', 'true').lower() == 'true'
+        include_suppliers = request.query_params.get('suppliers', 'true').lower() == 'true'
+        include_sales = request.query_params.get('sales', 'true').lower() == 'true'
+        include_users = request.query_params.get('users', 'true').lower() == 'true'
+        include_settings = request.query_params.get('settings', 'true').lower() == 'true'
+        
+        # Collecter les données sélectionnées
         data = {
             'export_date': datetime.now().isoformat(),
             'export_by': request.user.username,
-            'users': [],
-            'categories': [],
-            'suppliers': [],
-            'products': [],
-            'sales': [],
-            'settings': {}
         }
+        
+        if include_users:
+            data['users'] = []
+        if include_categories:
+            data['categories'] = []
+        if include_suppliers:
+            data['suppliers'] = []
+        if include_products:
+            data['products'] = []
+        if include_sales:
+            data['sales'] = []
+        if include_settings:
+            data['settings'] = {}
         
         # Users (sans les mots de passe)
-        for user in User.objects.all():
-            data['users'].append({
-                'id': user.id,
-                'username': user.username,
-                'email': user.email,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'role': user.role,
-                'phone': user.phone,
-                'is_active': user.is_active,
-                'can_view_stock': user.can_view_stock,
-                'can_manage_stock': user.can_manage_stock,
-            })
+        if include_users:
+            for user in User.objects.all():
+                data['users'].append({
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'role': user.role,
+                    'phone': user.phone,
+                    'is_active': user.is_active,
+                    'can_view_stock': user.can_view_stock,
+                    'can_manage_stock': user.can_manage_stock,
+                })
         
         # Categories
-        for cat in Category.objects.all():
-            data['categories'].append({
-                'id': cat.id,
-                'name': cat.name,
-                'description': getattr(cat, 'description', ''),
-            })
+        if include_categories:
+            for cat in Category.objects.all():
+                data['categories'].append({
+                    'id': cat.id,
+                    'name': cat.name,
+                    'description': getattr(cat, 'description', ''),
+                })
         
         # Suppliers
-        for sup in Supplier.objects.all():
-            data['suppliers'].append({
-                'id': sup.id,
-                'name': sup.name,
-                'contact_name': sup.contact_name,
-                'email': sup.email,
-                'phone': sup.phone,
-                'address': sup.address,
-                'notes': sup.notes,
-            })
+        if include_suppliers:
+            for sup in Supplier.objects.all():
+                data['suppliers'].append({
+                    'id': sup.id,
+                    'name': sup.name,
+                    'contact_name': sup.contact_name,
+                    'email': sup.email,
+                    'phone': sup.phone,
+                    'address': sup.address,
+                    'notes': sup.notes,
+                })
         
         # Products
-        for prod in Product.objects.all():
-            data['products'].append({
-                'id': prod.id,
-                'name': prod.name,
-                'barcode': prod.barcode,
-                'description': prod.description,
-                'category_id': prod.category_id,
-                'supplier_id': prod.supplier_id,
-                'purchase_price': str(prod.purchase_price),
-                'sale_price': str(prod.sale_price),
-                'tva': str(prod.tva),
-                'stock': prod.stock,
-                'min_stock': prod.min_stock,
-                'unit': prod.unit,
-                'is_active': prod.is_active,
-            })
+        if include_products:
+            for prod in Product.objects.all():
+                data['products'].append({
+                    'id': prod.id,
+                    'name': prod.name,
+                    'barcode': prod.barcode,
+                    'description': prod.description,
+                    'category_id': prod.category_id,
+                    'supplier_id': prod.supplier_id,
+                    'purchase_price': str(prod.purchase_price),
+                    'sale_price': str(prod.sale_price),
+                    'tva': str(prod.tva),
+                    'stock': prod.stock,
+                    'min_stock': prod.min_stock,
+                    'unit': prod.unit,
+                    'is_active': prod.is_active,
+                })
         
         # Sales
-        for sale in Sale.objects.all().order_by('-created_at')[:1000]:  # Limiter à 1000 dernières ventes
-            sale_data = {
-                'id': sale.id,
-                'total': str(sale.total),
-                'payment_method': sale.payment_method,
-                'created_at': sale.created_at.isoformat(),
-                'cashier_id': sale.cashier_id,
-                'items': []
-            }
-            for item in sale.items.all():
-                sale_data['items'].append({
-                    'product_id': item.product_id,
-                    'product_name': item.product.name if item.product else 'Produit supprimé',
-                    'quantity': item.quantity,
-                    'unit_price': str(item.unit_price),
-                    'total': str(item.total),
-                })
-            data['sales'].append(sale_data)
+        if include_sales:
+            for sale in Sale.objects.all().order_by('-created_at')[:1000]:  # Limiter à 1000 dernières ventes
+                sale_data = {
+                    'id': sale.id,
+                    'total': str(sale.total),
+                    'payment_method': sale.payment_method,
+                    'created_at': sale.created_at.isoformat(),
+                    'cashier_id': sale.cashier_id,
+                    'items': []
+                }
+                for item in sale.items.all():
+                    sale_data['items'].append({
+                        'product_id': item.product_id,
+                        'product_name': item.product.name if item.product else 'Produit supprimé',
+                        'quantity': item.quantity,
+                        'unit_price': str(item.unit_price),
+                        'total': str(item.total),
+                    })
+                data['sales'].append(sale_data)
         
         # Settings
-        settings = AppSettings.get_settings()
-        data['settings'] = {
-            'store_name': settings.store_name,
-            'store_address': settings.store_address,
-            'store_phone': settings.store_phone,
-            'store_email': settings.store_email,
-            'currency': settings.currency,
-            'currency_symbol': settings.currency_symbol,
-            'default_tva': str(settings.default_tva),
-        }
+        if include_settings:
+            settings = AppSettings.get_settings()
+            data['settings'] = {
+                'store_name': settings.store_name,
+                'store_address': settings.store_address,
+                'store_phone': settings.store_phone,
+                'store_email': settings.store_email,
+                'currency': settings.currency,
+                'currency_symbol': settings.currency_symbol,
+                'default_tva': str(settings.default_tva),
+            }
         
         # Créer la réponse JSON avec headers de téléchargement
         response = JsonResponse(data, json_dumps_params={'indent': 2, 'ensure_ascii': False})
