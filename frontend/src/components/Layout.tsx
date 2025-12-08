@@ -16,6 +16,7 @@ import {
     Menu
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import SyncStatus from './SyncStatus';
 
 export default function Layout() {
     const { t, i18n } = useTranslation();
@@ -134,6 +135,9 @@ export default function Layout() {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        {/* Sync Status Indicator */}
+                        <SyncStatus />
+
                         {/* Language Switcher */}
                         <div className="flex gap-1">
                             <button

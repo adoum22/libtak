@@ -6,6 +6,7 @@ from rest_framework_simplejwt.views import (
     TokenVerifyView
 )
 from .views import UserMeView, UserViewSet, AppSettingsView, PublicSettingsView, CustomTokenObtainPairView, DatabaseExportView
+from .sync_api import sync_push, sync_status
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -26,6 +27,11 @@ urlpatterns = [
     # Database export/backup
     path('backup/', DatabaseExportView.as_view(), name='database_export'),
     
+    # Sync API (for local-to-cloud synchronization)
+    path('sync/push/', sync_push, name='sync_push'),
+    path('sync/status/', sync_status, name='sync_status'),
+    
     # User management (admin)
     path('', include(router.urls)),
 ]
+

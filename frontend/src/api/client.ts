@@ -1,10 +1,23 @@
 import axios from 'axios';
 
+// Local server (runs at the store) - PRIMARY
+const LOCAL_API_URL = 'http://localhost:8001/api';
+
+// Cloud server (Railway) - for remote access only
+const CLOUD_API_URL = import.meta.env.VITE_API_URL || 'https://libtak-production.up.railway.app/api';
+
+// Determine which server to use
+// In production at the store: use local server
+// For remote access (when explicitly set): use cloud
+const isRemoteAccess = import.meta.env.VITE_REMOTE_ACCESS === 'true';
+const API_URL = isRemoteAccess ? CLOUD_API_URL : LOCAL_API_URL;
+
 const client = axios.create({
-    baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api',
+    baseURL: API_URL,
     headers: {
         'Content-Type': 'application/json',
     },
+    timeout: 10000, // 10 second timeout
 });
 
 // Request interceptor - add token to every request
@@ -38,4 +51,9 @@ client.interceptors.response.use(
     }
 );
 
+// Export API URL for debugging/status display
+export const getApiUrl = () => API_URL;
+export const isUsingLocalServer = () => !isRemoteAccess;
+
 export default client;
+
