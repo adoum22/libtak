@@ -55,7 +55,7 @@ class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     permission_classes = [IsAuthenticated, CanManageUsers]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    pagination_class = None
+    # pagination_class configured in settings.py REST_FRAMEWORK
     
     def get_serializer_class(self):
         if self.action == 'create':

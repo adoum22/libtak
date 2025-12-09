@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Local server (runs at the store) - PRIMARY
-const LOCAL_API_URL = 'http://localhost:8001/api';
+const LOCAL_API_URL = 'http://localhost:8000/api';
 
 // Cloud server (Render) - for remote access only
 const CLOUD_API_URL = import.meta.env.VITE_API_URL || 'https://libtak-api.onrender.com/api';
