@@ -30,8 +30,10 @@ from django.utils import timezone
 from sales.models import Sale, SaleItem
 from inventory.models import Product
 
-# Configuration
-CLOUD_API_URL = os.environ.get('CLOUD_API_URL', 'https://libtak-production.up.railway.app/api')
+# Configuration - Change this URL when switching cloud providers
+# Render: https://libtak-api.onrender.com/api
+# Railway: https://libtak-production.up.railway.app/api
+CLOUD_API_URL = os.environ.get('CLOUD_API_URL', 'https://libtak-api.onrender.com/api')
 SYNC_API_KEY = os.environ.get('SYNC_API_KEY', 'libtak_sync_secret_2024')
 SYNC_STATE_FILE = BASE_DIR / 'sync_state.json'
 SYNC_INTERVAL_MINUTES = 30
