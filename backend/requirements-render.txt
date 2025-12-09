@@ -1,0 +1,19 @@
+# Requirements for Render deployment (simplified)
+# Removed: weasyprint (needs system deps), channels_redis, daphne (need Redis)
+
+Django>=5.0,<6.0
+djangorestframework>=3.14
+psycopg2-binary>=2.9
+django-cors-headers>=4.3
+django-filter>=23.5
+drf-spectacular>=0.27
+djangorestframework-simplejwt>=5.3
+django-environ>=0.11
+gunicorn>=21.2
+whitenoise>=6.6
+dj-database-url>=2.1
+Pillow>=10.2
+qrcode>=7.4
+reportlab>=4.0
+openpyxl>=3.1
+requests>=2.31
