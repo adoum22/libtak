@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Sale, SaleItem
+from .models import Sale, SaleItem, Discount, Return, ReturnItem
 from inventory.models import Product
 
 
@@ -142,3 +142,118 @@ class SaleDetailSerializer(serializers.ModelSerializer):
             'payment_method', 'payment_method_display',
             'created_at'
         )
+
+
+class DiscountSerializer(serializers.ModelSerializer):
+    """Serializer for discounts/promotions"""
+    is_valid = serializers.BooleanField(read_only=True)
+    discount_type_display = serializers.CharField(
+        source='get_discount_type_display',
+        read_only=True
+    )
+    
+    class Meta:
+        model = Discount
+        fields = (
+            'id', 'name', 'code', 'discount_type', 'discount_type_display',
+            'value', 'min_purchase', 'max_uses', 'uses_count',
+            'active', 'start_date', 'end_date', 'is_valid', 'created_at'
+        )
+        read_only_fields = ('uses_count', 'created_at')
+
+
+class DiscountApplySerializer(serializers.Serializer):
+    """Serializer for applying a discount code"""
+    code = serializers.CharField(max_length=50)
+    subtotal = serializers.DecimalField(max_digits=10, decimal_places=2)
+    
+    def validate_code(self, value):
+        try:
+            discount = Discount.objects.get(code__iexact=value)
+            if not discount.is_valid:
+                raise serializers.ValidationError("This discount code is no longer valid.")
+            return value
+        except Discount.DoesNotExist:
+            raise serializers.ValidationError("Invalid discount code.")
+    
+    def validate(self, data):
+        discount = Discount.objects.get(code__iexact=data['code'])
+        if data['subtotal'] < discount.min_purchase:
+            raise serializers.ValidationError({
+                'subtotal': f"Minimum purchase of {discount.min_purchase} DH required."
+            })
+        return data
+
+
+class ReturnItemSerializer(serializers.ModelSerializer):
+    """Serializer for return items"""
+    product_name = serializers.CharField(source='sale_item.product_name', read_only=True)
+    unit_price = serializers.DecimalField(
+        source='sale_item.unit_price_ht',
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    
+    class Meta:
+        model = ReturnItem
+        fields = ('id', 'sale_item', 'quantity', 'product_name', 'unit_price')
+
+
+class ReturnSerializer(serializers.ModelSerializer):
+    """Serializer for returns"""
+    items = ReturnItemSerializer(many=True)
+    status_display = serializers.CharField(
+        source='get_status_display',
+        read_only=True
+    )
+    processed_by_name = serializers.CharField(
+        source='processed_by.username',
+        read_only=True
+    )
+    sale_total = serializers.DecimalField(
+        source='sale.total_ttc',
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
+    
+    class Meta:
+        model = Return
+        fields = (
+            'id', 'sale', 'sale_total', 'status', 'status_display',
+            'reason', 'refund_amount', 'items',
+            'processed_by', 'processed_by_name',
+            'created_at', 'updated_at'
+        )
+        read_only_fields = ('processed_by', 'created_at', 'updated_at')
+    
+    def create(self, validated_data):
+        items_data = validated_data.pop('items')
+        user = self.context['request'].user
+        
+        # Calculate refund amount
+        refund_amount = 0
+        for item_data in items_data:
+            sale_item = item_data['sale_item']
+            qty = item_data['quantity']
+            # Calculate with TVA
+            unit_ttc = sale_item.unit_price_ht * (1 + sale_item.tva_rate / 100)
+            refund_amount += unit_ttc * qty
+        
+        validated_data['refund_amount'] = refund_amount
+        validated_data['processed_by'] = user
+        
+        return_order = Return.objects.create(**validated_data)
+        
+        for item_data in items_data:
+            ReturnItem.objects.create(return_order=return_order, **item_data)
+            
+            # Restore stock
+            sale_item = item_data['sale_item']
+            if sale_item.product:
+                sale_item.product.stock += item_data['quantity']
+                sale_item.product.save()
+        
+        return return_order
+

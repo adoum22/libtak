@@ -9,7 +9,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from .views import UserMeView, UserViewSet, AppSettingsView, PublicSettingsView, CustomTokenObtainPairView, DatabaseExportView
-from .sync_api import sync_push, sync_status
+from .sync_api import receive_sync_data, get_master_data, sync_status, trigger_sync
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -87,8 +87,10 @@ urlpatterns = [
     path('backup/', DatabaseExportView.as_view(), name='database_export'),
     
     # Sync API (for local-to-cloud synchronization)
-    path('sync/push/', sync_push, name='sync_push'),
+    path('sync/receive/', receive_sync_data, name='sync_receive'),
+    path('sync/master-data/', get_master_data, name='sync_master_data'),
     path('sync/status/', sync_status, name='sync_status'),
+    path('sync/trigger/', trigger_sync, name='sync_trigger'),
     
     # User management (admin)
     path('', include(router.urls)),

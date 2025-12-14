@@ -104,3 +104,77 @@ class AppSettings(models.Model):
     
     def __str__(self):
         return self.store_name
+
+
+class AuditLog(models.Model):
+    """Journal d'audit des actions utilisateurs"""
+    class ActionType(models.TextChoices):
+        CREATE = 'CREATE', _('Create')
+        UPDATE = 'UPDATE', _('Update')
+        DELETE = 'DELETE', _('Delete')
+        LOGIN = 'LOGIN', _('Login')
+        LOGOUT = 'LOGOUT', _('Logout')
+        SALE = 'SALE', _('Sale')
+        RETURN = 'RETURN', _('Return')
+        STOCK_IN = 'STOCK_IN', _('Stock In')
+        STOCK_OUT = 'STOCK_OUT', _('Stock Out')
+        EXPORT = 'EXPORT', _('Export')
+    
+    user = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='audit_logs',
+        verbose_name=_('User')
+    )
+    action = models.CharField(
+        _('Action'),
+        max_length=20,
+        choices=ActionType.choices
+    )
+    model_name = models.CharField(_('Model'), max_length=100)
+    object_id = models.IntegerField(_('Object ID'), null=True, blank=True)
+    object_repr = models.CharField(_('Object'), max_length=255, blank=True)
+    changes = models.JSONField(_('Changes'), default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(_('IP Address'), null=True, blank=True)
+    user_agent = models.CharField(_('User Agent'), max_length=500, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Audit Log')
+        verbose_name_plural = _('Audit Logs')
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user', 'timestamp']),
+            models.Index(fields=['action', 'timestamp']),
+            models.Index(fields=['model_name', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"{self.user} - {self.get_action_display()} - {self.model_name}"
+    
+    @classmethod
+    def log(cls, user, action, model_name, object_id=None, object_repr='', changes=None, request=None):
+        """Helper method to create audit log entries"""
+        ip_address = None
+        user_agent = ''
+        
+        if request:
+            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            if x_forwarded_for:
+                ip_address = x_forwarded_for.split(',')[0]
+            else:
+                ip_address = request.META.get('REMOTE_ADDR')
+            user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
+        
+        return cls.objects.create(
+            user=user,
+            action=action,
+            model_name=model_name,
+            object_id=object_id,
+            object_repr=object_repr,
+            changes=changes or {},
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+

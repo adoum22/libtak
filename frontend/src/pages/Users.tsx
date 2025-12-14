@@ -53,9 +53,12 @@ export default function Users() {
     const [previewImage, setPreviewImage] = useState<string | null>(null);
 
     // Fetch Users
-    const { data: users, isLoading } = useQuery<User[]>({
+    const { data: users = [], isLoading } = useQuery<User[]>({
         queryKey: ['users'],
-        queryFn: () => client.get('/auth/users/').then(res => res.data)
+        queryFn: () => client.get('/auth/users/').then(res => {
+            const data = res.data;
+            return Array.isArray(data) ? data : (data.results || []);
+        })
     });
 
     // Mutations

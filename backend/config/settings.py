@@ -132,7 +132,7 @@ SIMPLE_JWT = {
 # CORS
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = True  # Temporaire pour debug
+CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development mode
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -203,6 +203,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'reporting.tasks.send_yearly_report',
         'schedule': crontab(hour=23, minute=55, month_of_year=12, day_of_month=31),
     },
+    'low-stock-alert': {
+        'task': 'reporting.tasks.send_low_stock_alert',
+        'schedule': crontab(hour=9, minute=0),  # Tous les jours à 9h
+    },
+    'daily-backup': {
+        'task': 'reporting.tasks.daily_database_backup',
+        'schedule': crontab(hour=18, minute=0),  # Tous les jours à 18h
+    },
 }
 
 # User Model
@@ -226,3 +234,11 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API pour le système de gestion de la Librairie Attaquaddoum',
     'VERSION': '1.0.0',
 }
+
+# ===== SYNC CONFIGURATION =====
+# For local server: set CLOUD_API_URL to point to your Render deployment
+# For cloud server: set IS_CLOUD_SERVER=True
+CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-api.onrender.com/api'
+SYNC_TOKEN = os.environ.get('SYNC_TOKEN', '')  # Shared secret for sync authentication
+IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'False') == 'True'
+

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Category, Product, Supplier, StockMovement
+from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -144,3 +144,111 @@ class StockInSerializer(serializers.Serializer):
             created_by=self.context['request'].user
         )
         return movement
+
+
+# ---- Purchase Order Serializers ----
+
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    
+    class Meta:
+        model = PurchaseOrderItem
+        fields = ['id', 'product', 'product_name', 'quantity', 'unit_cost', 'received_quantity']
+        read_only_fields = ['received_quantity']
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    items = PurchaseOrderItemSerializer(many=True, read_only=True)
+    supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    
+    class Meta:
+        model = PurchaseOrder
+        fields = [
+            'id', 'reference', 'supplier', 'supplier_name', 
+            'status', 'status_display', 'notes', 'expected_date',
+            'items', 'total_amount',
+            'created_by', 'created_by_name', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['reference', 'created_by', 'created_at', 'updated_at', 'total_amount']
+    
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class PurchaseOrderCreateSerializer(serializers.ModelSerializer):
+    items = serializers.ListField(child=serializers.DictField(), write_only=True)
+    
+    class Meta:
+        model = PurchaseOrder
+        fields = ['supplier', 'notes', 'expected_date', 'items']
+    
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        validated_data['created_by'] = self.context['request'].user
+        order = PurchaseOrder.objects.create(**validated_data)
+        
+        for item in items_data:
+            PurchaseOrderItem.objects.create(
+                order=order,
+                product_id=item['product'],
+                quantity=item['quantity'],
+                unit_cost=item.get('unit_cost', 0)
+            )
+        
+        return order
+
+
+# ---- Inventory Count Serializers ----
+
+class InventoryCountItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_barcode = serializers.CharField(source='product.barcode', read_only=True)
+    difference = serializers.IntegerField(read_only=True)
+    
+    class Meta:
+        model = InventoryCountItem
+        fields = ['id', 'product', 'product_name', 'product_barcode', 
+                  'expected_quantity', 'counted_quantity', 'difference']
+
+
+class InventoryCountSerializer(serializers.ModelSerializer):
+    items = InventoryCountItemSerializer(many=True, read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    
+    class Meta:
+        model = InventoryCount
+        fields = ['id', 'name', 'status', 'status_display', 'notes',
+                  'items', 'created_by', 'created_by_name', 
+                  'created_at', 'completed_at']
+        read_only_fields = ['created_by', 'created_at', 'completed_at']
+    
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+class InventoryCountCreateSerializer(serializers.ModelSerializer):
+    items = serializers.ListField(child=serializers.DictField(), write_only=True)
+    
+    class Meta:
+        model = InventoryCount
+        fields = ['name', 'notes', 'items']
+    
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        validated_data['created_by'] = self.context['request'].user
+        count = InventoryCount.objects.create(**validated_data)
+        
+        for item in items_data:
+            InventoryCountItem.objects.create(
+                count=count,
+                product_id=item['product'],
+                expected_quantity=item.get('expected_quantity', 0)
+            )
+        
+        return count
+

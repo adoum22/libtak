@@ -13,7 +13,10 @@ import {
     Settings,
     Sun,
     Moon,
-    Menu
+    Menu,
+    RotateCcw,
+    ClipboardList,
+    ClipboardCheck
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -65,6 +68,9 @@ export default function Layout() {
             show: isAdmin || currentUser?.can_view_stock === true
         },
         { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin },
+        { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin },
+        { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin },
+        { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin },
         { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin },
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },

@@ -107,18 +107,19 @@ class ExportReportView(APIView):
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
             ]))
             elements.append(summary_table)
-            elements.append(Spacer(1, 30))
+            elements.append(Spacer(1, 20))
 
             # Détail des ventes
             elements.append(Paragraph("Détail des produits vendus", styles['Heading2']))
             elements.append(Spacer(1, 10))
 
             # En-têtes tableau produits
-            table_data = [['Produit', 'Qté', 'CA', 'Marge']]
+            table_data = [['Produit', 'Prix Unit.', 'Qté', 'Total', 'Marge']]
             
             for item in data['items_sold']:
                 table_data.append([
-                    item['name'][:40] + ('...' if len(item['name']) > 40 else ''), # Tronquer noms longs
+                    item['name'][:35] + ('...' if len(item['name']) > 35 else ''), # Tronquer noms longs
+                    f"{item.get('unit_price', 0):.2f}",
                     str(item['quantity']),
                     f"{item['revenue']:.2f}",
                     f"{item['profit']:.2f}"
@@ -126,7 +127,7 @@ class ExportReportView(APIView):
                 
             # Création tableau produits
             row_count = len(table_data)
-            product_table = Table(table_data, colWidths=[9*cm, 2*cm, 3*cm, 3*cm])
+            product_table = Table(table_data, colWidths=[7*cm, 2.5*cm, 1.5*cm, 3*cm, 3*cm])
             
             product_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
@@ -142,11 +143,43 @@ class ExportReportView(APIView):
             ]))
             
             elements.append(product_table)
+            elements.append(Spacer(1, 20))
+            
+            # Section Retours (en bas, après le tableau produits)
+            if data.get('returns_count', 0) > 0:
+                returns_data = [
+                    ['CA Brut', 'Retours', 'CA Net'],
+                    [f"{data.get('gross_revenue', 0):.2f} DH", 
+                     f"-{data.get('total_returns', 0):.2f} DH ({data.get('returns_count', 0)})", 
+                     f"{data['total_revenue']:.2f} DH"]
+                ]
+                
+                returns_table = Table(returns_data, colWidths=[5*cm, 5*cm, 5*cm])
+                returns_table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#fef2f2')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#dc2626')),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                    ('BACKGROUND', (0, 1), (-1, 1), colors.white),
+                    ('TEXTCOLOR', (0, 1), (0, 1), colors.black),
+                    ('TEXTCOLOR', (1, 1), (1, 1), colors.red),  # Retours en rouge
+                    ('TEXTCOLOR', (2, 1), (2, 1), colors.HexColor('#1e40af')),  # CA Net en bleu
+                    ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 1), (-1, 1), 12),
+                    ('TOPPADDING', (0, 1), (-1, 1), 8),
+                    ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#fecaca')),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#fecaca')),
+                ]))
+                elements.append(returns_table)
+                elements.append(Spacer(1, 20))
             
             # Footer
-            elements.append(Spacer(1, 40))
+            elements.append(Spacer(1, 20))
             footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.gray, alignment=1)
-            elements.append(Paragraph(f"Généré automatiquement par Librairie App le {timezone.now().strftime('%d/%m/%Y à %H:%M')}", footer_style))
+            local_time = timezone.localtime(timezone.now())
+            elements.append(Paragraph(f"Généré automatiquement par Librairie App le {local_time.strftime('%d/%m/%Y à %H:%M')}", footer_style))
 
             # Build
             doc.build(elements)

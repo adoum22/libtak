@@ -2,19 +2,25 @@ from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from core.permissions import CanManageInventory, CanViewInventory
+from core.permissions import CanManageInventory, CanViewInventory, IsAdminRole
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F
+from django.utils import timezone
 
-from .models import Category, Product, Supplier, StockMovement
+from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 from .serializers import (
     CategorySerializer, 
     ProductSerializer, 
     ProductCreateSerializer,
     SupplierSerializer, 
     StockMovementSerializer,
-    StockInSerializer
+    StockInSerializer,
+    PurchaseOrderSerializer,
+    PurchaseOrderCreateSerializer,
+    InventoryCountSerializer,
+    InventoryCountCreateSerializer,
+    InventoryCountItemSerializer
 )
 
 
@@ -301,4 +307,154 @@ class StockMovementViewSet(viewsets.ModelViewSet):
             'errors': errors,
             'total_success': len(results),
             'total_errors': len(errors)
+        })
+
+
+class PurchaseOrderViewSet(viewsets.ModelViewSet):
+    """API pour les commandes fournisseurs"""
+    queryset = PurchaseOrder.objects.select_related('supplier', 'created_by').prefetch_related('items__product').all()
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['supplier', 'status']
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return PurchaseOrderCreateSerializer
+        return PurchaseOrderSerializer
+    
+    @action(detail=True, methods=['post'])
+    def send(self, request, pk=None):
+        """Marquer commande comme envoyée"""
+        order = self.get_object()
+        if order.status != 'DRAFT':
+            return Response({'detail': 'Commande déjà envoyée'}, status=400)
+        order.status = 'SENT'
+        order.save()
+        return Response({'status': 'Commande envoyée'})
+    
+    @action(detail=True, methods=['post'])
+    def receive(self, request, pk=None):
+        """Réceptionner la commande et mettre à jour le stock"""
+        order = self.get_object()
+        if order.status not in ['SENT', 'PARTIAL']:
+            return Response({'detail': 'Commande non envoyée'}, status=400)
+        
+        received_items = request.data.get('items', [])
+        
+        for received in received_items:
+            try:
+                item = order.items.get(id=received['item_id'])
+                qty = int(received.get('quantity', item.quantity))
+                item.received_quantity += qty
+                item.save()
+                
+                # Ajouter au stock
+                item.product.stock += qty
+                item.product.save()
+                
+                # Créer mouvement de stock
+                StockMovement.objects.create(
+                    product=item.product,
+                    movement_type='IN',
+                    quantity=qty,
+                    unit_cost=item.unit_cost,
+                    supplier=order.supplier,
+                    reference=f"PO-{order.reference}",
+                    created_by=request.user
+                )
+            except PurchaseOrderItem.DoesNotExist:
+                pass
+        
+        # Vérifier si toute la commande est reçue
+        all_received = all(i.received_quantity >= i.quantity for i in order.items.all())
+        order.status = 'RECEIVED' if all_received else 'PARTIAL'
+        order.save()
+        
+        return Response(PurchaseOrderSerializer(order, context={'request': request}).data)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Annuler la commande"""
+        order = self.get_object()
+        order.status = 'CANCELLED'
+        order.save()
+        return Response({'status': 'Commande annulée'})
+
+
+class InventoryCountViewSet(viewsets.ModelViewSet):
+    """API pour les inventaires physiques"""
+    queryset = InventoryCount.objects.select_related('created_by').prefetch_related('items__product').all()
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ['-created_at']
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return InventoryCountCreateSerializer
+        return InventoryCountSerializer
+    
+    @action(detail=True, methods=['post'])
+    def update_counts(self, request, pk=None):
+        """Mettre à jour les quantités comptées"""
+        count = self.get_object()
+        if count.status != 'IN_PROGRESS':
+            return Response({'detail': 'Comptage non en cours'}, status=400)
+        
+        counted_items = request.data.get('items', [])
+        for item_data in counted_items:
+            try:
+                item = count.items.get(id=item_data['id'])
+                item.counted_quantity = item_data.get('counted_quantity', 0)
+                item.save()
+            except InventoryCountItem.DoesNotExist:
+                pass
+        
+        return Response(InventoryCountSerializer(count, context={'request': request}).data)
+    
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        """Marquer le comptage comme terminé"""
+        count = self.get_object()
+        count.status = 'COMPLETED'
+        count.completed_at = timezone.now()
+        count.save()
+        return Response({'status': 'Comptage terminé'})
+    
+    @action(detail=True, methods=['post'])
+    def validate(self, request, pk=None):
+        """Valider le comptage et ajuster le stock"""
+        count = self.get_object()
+        if count.status != 'COMPLETED':
+            return Response({'detail': 'Comptage non terminé'}, status=400)
+        
+        adjustments = []
+        for item in count.items.all():
+            diff = item.difference
+            if diff != 0:
+                # Ajuster le stock
+                item.product.stock = item.counted_quantity
+                item.product.save()
+                
+                # Créer mouvement de stock
+                StockMovement.objects.create(
+                    product=item.product,
+                    movement_type='ADJUSTMENT',
+                    quantity=abs(diff),
+                    notes=f"Ajustement inventaire #{count.id}: {diff:+d}",
+                    created_by=request.user
+                )
+                adjustments.append({
+                    'product': item.product.name,
+                    'expected': item.expected_quantity,
+                    'counted': item.counted_quantity,
+                    'difference': diff
+                })
+        
+        count.status = 'VALIDATED'
+        count.save()
+        
+        return Response({
+            'status': 'Stock ajusté',
+            'adjustments': adjustments
         })

@@ -13,7 +13,9 @@ import {
     Package,
     X,
     Check,
-    ScanLine
+    ScanLine,
+    Tag,
+    Percent
 } from 'lucide-react';
 
 interface Product {
@@ -47,6 +49,17 @@ export default function POS() {
 
     // Price Check State
     const [checkedProduct, setCheckedProduct] = useState<Product | null>(null);
+
+    // Discount State
+    const [discountCode, setDiscountCode] = useState('');
+    const [appliedDiscount, setAppliedDiscount] = useState<{
+        id: number;
+        name: string;
+        discount_type: string;
+        value: number;
+        discount_amount: number;
+    } | null>(null);
+    const [discountError, setDiscountError] = useState('');
 
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -82,7 +95,7 @@ export default function POS() {
                 (error.response?.data?.detail || error.message || "Erreur inconnue")
             );
         },
-        onSuccess: () => {
+        onSuccess: (response) => {
             // 1. Close modal
             setShowPaymentModal(false);
 
@@ -93,7 +106,25 @@ export default function POS() {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
 
-            // 4. Auto Reset after 2 seconds
+            // 4. Print receipt if configured
+            try {
+                import('../utils/printService').then(({ printReceipt }) => {
+                    printReceipt({
+                        saleId: response.data?.id || Date.now(),
+                        items: cart,
+                        subtotal: subtotal,
+                        discount: appliedDiscount ? { name: appliedDiscount.name, amount: appliedDiscount.discount_amount } : undefined,
+                        total: total,
+                        paymentMethod: 'CASH',
+                        amountGiven: parseFloat(amountGiven) || total,
+                        change: changeAmount > 0 ? changeAmount : 0
+                    });
+                });
+            } catch (e) {
+                console.log('Print service not available');
+            }
+
+            // 5. Auto Reset after 2 seconds
             setTimeout(() => {
                 resetSale();
                 setShowSuccessOverlay(false);
@@ -150,12 +181,46 @@ export default function POS() {
         setCart([]);
         setAmountGiven('');
         setSearchTerm('');
+        setDiscountCode('');
+        setAppliedDiscount(null);
+        setDiscountError('');
         searchInputRef.current?.focus();
     };
 
-    const total = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
+    const subtotal = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
+    const discountAmount = appliedDiscount?.discount_amount || 0;
+    const total = subtotal - discountAmount;
     const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
     const changeAmount = parseFloat(amountGiven) ? parseFloat(amountGiven) - total : 0;
+
+    // Apply discount code
+    const applyDiscountCode = async () => {
+        if (!discountCode.trim()) return;
+        setDiscountError('');
+
+        try {
+            const response = await client.post('/sales/discounts/apply/', {
+                code: discountCode,
+                subtotal: subtotal
+            });
+            setAppliedDiscount({
+                ...response.data.discount,
+                discount_amount: response.data.discount_amount
+            });
+            toast.success(`Remise "${response.data.discount.name}" appliquée!`);
+        } catch (error: any) {
+            const errorMsg = error.response?.data?.code?.[0] || error.response?.data?.detail || 'Code invalide';
+            setDiscountError(errorMsg);
+            setAppliedDiscount(null);
+        }
+    };
+
+    // Remove discount
+    const removeDiscount = () => {
+        setAppliedDiscount(null);
+        setDiscountCode('');
+        setDiscountError('');
+    };
 
     // Focus search on mount
     useEffect(() => {
@@ -323,46 +388,76 @@ export default function POS() {
                             <p className="text-lg">Scannez un code-barres ou recherchez un produit</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
                             {products.map((product) => (
                                 <button
                                     key={product.id}
                                     onClick={() => handleProductAction(product)}
                                     disabled={mode === 'SALE' && product.stock <= 0}
-                                    className={`card p-4 text-left transition hover:scale-[1.02] hover:shadow-lg relative overflow-hidden group ${mode === 'SALE' && product.stock <= 0 ? 'opacity-50 cursor-not-allowed' : ''
+                                    className={`card p-0 text-left transition-all duration-300 hover:scale-[1.03] hover:shadow-2xl hover:shadow-accent/10 relative overflow-hidden group border-2 border-transparent hover:border-accent/30 ${mode === 'SALE' && product.stock <= 0 ? 'opacity-50 cursor-not-allowed grayscale' : ''
                                         }`}
                                 >
+                                    {/* Mode indicator badge */}
                                     {mode === 'PRICE_CHECK' && (
-                                        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity bg-accent text-white p-1 rounded-full">
-                                            <ScanLine size={16} />
+                                        <div className="absolute top-3 right-3 z-10 opacity-0 group-hover:opacity-100 transition-all duration-200 bg-accent text-white p-2 rounded-full shadow-lg">
+                                            <ScanLine size={18} />
                                         </div>
                                     )}
 
-                                    <div className="w-full h-32 bg-tertiary rounded-lg mb-3 flex items-center justify-center overflow-hidden">
+                                    {/* Stock indicator badge */}
+                                    <div className={`absolute top-3 left-3 z-10 px-3 py-1.5 rounded-full text-xs font-bold shadow-md ${product.stock > 5 ? 'bg-success text-white' :
+                                            product.stock > 0 ? 'bg-warning text-white' :
+                                                'bg-danger text-white'
+                                        }`}>
+                                        {product.stock > 0 ? `${product.stock} en stock` : 'Rupture'}
+                                    </div>
+
+                                    {/* Large Product Image */}
+                                    <div className="w-full h-48 bg-gradient-to-br from-tertiary to-tertiary/50 flex items-center justify-center overflow-hidden relative">
                                         {product.image_url ? (
                                             <img
                                                 src={product.image_url}
                                                 alt={product.name}
-                                                className="w-full h-full object-cover rounded-lg"
+                                                className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-110"
                                             />
                                         ) : (
-                                            <Package size={40} className="text-muted" />
+                                            <div className="flex flex-col items-center justify-center text-muted/50">
+                                                <Package size={64} strokeWidth={1.5} />
+                                                <span className="text-xs mt-2">Pas d'image</span>
+                                            </div>
                                         )}
+                                        {/* Gradient overlay for better text readability */}
+                                        <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/20 to-transparent" />
                                     </div>
-                                    <h3 className="font-bold text-lg leading-tight mb-1 text-primary">
-                                        {product.name}
-                                    </h3>
-                                    <p className="text-xs text-muted font-mono mb-3 truncate">
-                                        {product.barcode}
-                                    </p>
-                                    <div className="flex items-end justify-between mt-auto">
-                                        <span className="font-bold text-xl text-accent">
-                                            {product.price_ttc?.toFixed(2)} <span className="text-sm">DH</span>
-                                        </span>
-                                        <span className={`badge ${product.stock > 5 ? 'badge-success' : product.stock > 0 ? 'badge-warning' : 'badge-danger'}`}>
-                                            {product.stock}
-                                        </span>
+
+                                    {/* Product Info Section */}
+                                    <div className="p-4 space-y-3">
+                                        {/* Product Name - Large and Bold */}
+                                        <h3 className="font-bold text-lg leading-snug text-primary line-clamp-2 min-h-[3.5rem] group-hover:text-accent transition-colors">
+                                            {product.name}
+                                        </h3>
+
+                                        {/* Barcode */}
+                                        <p className="text-xs text-muted font-mono bg-tertiary/50 px-2 py-1 rounded inline-block">
+                                            📦 {product.barcode}
+                                        </p>
+
+                                        {/* Price - Large and Prominent */}
+                                        <div className="pt-2 border-t border-border">
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs text-muted uppercase font-medium">Prix TTC</span>
+                                            </div>
+                                            <div className="flex items-baseline gap-1 mt-1">
+                                                <span className="font-black text-3xl text-accent leading-none">
+                                                    {product.price_ttc?.toFixed(2)}
+                                                </span>
+                                                <span className="text-lg font-bold text-accent/70">DH</span>
+                                            </div>
+                                        </div>
                                     </div>
+
+                                    {/* Hover action hint */}
+                                    <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
                                 </button>
                             ))}
 
@@ -449,7 +544,64 @@ export default function POS() {
                 </div>
 
                 {/* Cart Footer */}
-                <div className="border-t p-6 bg-tertiary/10 space-y-6">
+                <div className="border-t p-6 bg-tertiary/10 space-y-4">
+                    {/* Discount Code Section */}
+                    {cart.length > 0 && (
+                        <div className="space-y-2">
+                            {!appliedDiscount ? (
+                                <>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 relative">
+                                            <Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
+                                            <input
+                                                type="text"
+                                                placeholder="Code promo..."
+                                                className="input-sm w-full pl-9 pr-3 py-2 text-sm"
+                                                value={discountCode}
+                                                onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
+                                                onKeyDown={(e) => e.key === 'Enter' && applyDiscountCode()}
+                                            />
+                                        </div>
+                                        <button
+                                            onClick={applyDiscountCode}
+                                            disabled={!discountCode.trim()}
+                                            className="btn-secondary px-4 py-2 text-sm font-medium"
+                                        >
+                                            Appliquer
+                                        </button>
+                                    </div>
+                                    {discountError && (
+                                        <p className="text-danger text-xs">{discountError}</p>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="flex items-center justify-between p-3 bg-success-light rounded-lg border border-success/20">
+                                    <div className="flex items-center gap-2">
+                                        <Percent size={16} className="text-success" />
+                                        <span className="font-medium text-success-dark">{appliedDiscount.name}</span>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <span className="font-bold text-success">-{appliedDiscount.discount_amount.toFixed(2)} DH</span>
+                                        <button
+                                            onClick={removeDiscount}
+                                            className="p-1 text-danger hover:bg-danger-light rounded"
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Totals */}
+                    {appliedDiscount && (
+                        <div className="flex items-baseline justify-between text-muted">
+                            <span className="text-sm">Sous-total</span>
+                            <span className="text-lg">{subtotal.toFixed(2)} DH</span>
+                        </div>
+                    )}
+
                     <div className="flex items-baseline justify-between">
                         <span className="text-muted font-medium uppercase text-sm">Total à payer</span>
                         <span className="text-3xl font-bold text-primary">{total.toFixed(2)} <span className="text-lg text-muted">DH</span></span>

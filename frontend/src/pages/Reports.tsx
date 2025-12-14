@@ -29,10 +29,14 @@ interface ReportData {
     total_sales: number;
     total_revenue: number;
     total_profit: number;
+    returns_count?: number;
+    total_returns?: number;
+    gross_revenue?: number;
     items_sold: Array<{
         name: string;
         barcode: string;
         quantity: number;
+        unit_price?: number;
         revenue: number;
         profit: number;
     }>;
@@ -270,6 +274,22 @@ export default function Reports() {
                                 <p className="stat-value text-success">{report.total_profit?.toLocaleString('fr-FR')} DH</p>
                             </div>
                         </div>
+
+                        {/* Retours - Affiché seulement s'il y en a */}
+                        {report.returns_count && report.returns_count > 0 && (
+                            <div className="stat-card border-2 border-red-200">
+                                <div className="stat-icon bg-red-100">
+                                    <TrendingUp size={24} className="text-red-500 rotate-180" />
+                                </div>
+                                <div>
+                                    <p className="stat-label">Retours ({report.returns_count})</p>
+                                    <p className="stat-value text-red-500">-{report.total_returns?.toLocaleString('fr-FR')} DH</p>
+                                    {report.gross_revenue && (
+                                        <p className="text-xs text-muted mt-1">CA brut: {report.gross_revenue.toLocaleString('fr-FR')} DH</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Charts Section */}
@@ -330,10 +350,10 @@ export default function Reports() {
                                 <thead>
                                     <tr>
                                         <th>Produit</th>
-                                        <th>Code-barres</th>
-                                        <th className="text-right">Quantité</th>
-                                        <th className="text-right">CA</th>
-                                        <th className="text-right">Bénéfice</th>
+                                        <th className="text-right">Prix Unit.</th>
+                                        <th className="text-center">Qté</th>
+                                        <th className="text-right">Total</th>
+                                        <th className="text-right">Marge</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -341,8 +361,8 @@ export default function Reports() {
                                         report.items_sold.map((item, i) => (
                                             <tr key={i}>
                                                 <td className="font-medium">{item.name}</td>
-                                                <td className="font-mono text-sm text-muted">{item.barcode}</td>
-                                                <td className="text-right">
+                                                <td className="text-right">{item.unit_price?.toFixed(2) || '-'} DH</td>
+                                                <td className="text-center">
                                                     <span className="badge badge-accent">{item.quantity}</span>
                                                 </td>
                                                 <td className="text-right">{item.revenue?.toFixed(2)} DH</td>

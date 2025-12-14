@@ -1,6 +1,0 @@
-﻿src/pages/Dashboard.tsx(85,66): error TS2339: Property 'sales_count' does not exist on type 'DailyData'.
-src/pages/Dashboard.tsx(97,45): error TS2339: Property 'revenue' does not exist on type 'DailyData'.
-src/pages/Inventory.tsx(63,33): error TS6133: 'isLoading' is declared but its value is never read.
-src/pages/Inventory.tsx(63,44): error TS6133: 'isError' is declared but its value is never read.
-src/pages/Inventory.tsx(63,53): error TS6133: 'error' is declared but its value is never read.
-src/pages/POS.tsx(35,11): error TS6133: 't' is declared but its value is never read.
