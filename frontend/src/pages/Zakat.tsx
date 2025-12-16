@@ -36,12 +36,21 @@ export default function Zakat() {
     });
 
     // Fetch ALL products to calculate total capital (without pagination)
-    const { data: allProducts } = useQuery<Product[]>({
+    const { data: allProducts, isLoading: isLoadingAll } = useQuery<Product[]>({
         queryKey: ['products-all-zakat'],
         queryFn: async () => {
-            // Fetch all products by getting a large page size
-            const response = await client.get('/inventory/products/?page_size=10000');
-            return response.data.results || response.data;
+            // Fetch all products - try without pagination first
+            const response = await client.get('/inventory/products/', {
+                params: { page_size: 10000 }
+            });
+            // Handle both paginated and non-paginated responses
+            const data = response.data;
+            if (Array.isArray(data)) {
+                return data;
+            } else if (data.results) {
+                return data.results;
+            }
+            return [];
         }
     });
 
@@ -79,7 +88,13 @@ export default function Zakat() {
                         </div>
                         <div>
                             <p className="text-white/80 text-sm uppercase tracking-wider">Capital Total</p>
-                            <p className="text-4xl font-bold">{totalCapital.toFixed(2)} <span className="text-lg">MAD</span></p>
+                            {isLoadingAll ? (
+                                <div className="h-10 flex items-center">
+                                    <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
+                                </div>
+                            ) : (
+                                <p className="text-4xl font-bold">{totalCapital.toFixed(2)} <span className="text-lg">MAD</span></p>
+                            )}
                             <p className="text-white/60 text-sm mt-1">
                                 Somme (Quantité × Prix d'Achat)
                             </p>
@@ -94,7 +109,13 @@ export default function Zakat() {
                         </div>
                         <div>
                             <p className="text-white/80 text-sm uppercase tracking-wider">Zakat (2.5%)</p>
-                            <p className="text-4xl font-bold">{zakatAmount.toFixed(2)} <span className="text-lg">MAD</span></p>
+                            {isLoadingAll ? (
+                                <div className="h-10 flex items-center">
+                                    <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
+                                </div>
+                            ) : (
+                                <p className="text-4xl font-bold">{zakatAmount.toFixed(2)} <span className="text-lg">MAD</span></p>
+                            )}
                             <p className="text-white/60 text-sm mt-1">
                                 Montant à verser
                             </p>
@@ -229,8 +250,8 @@ export default function Zakat() {
                                     key={pageNum}
                                     onClick={() => setPage(pageNum)}
                                     className={`w-10 h-10 rounded-lg font-medium transition-all ${page === pageNum
-                                            ? 'bg-primary text-white shadow-lg'
-                                            : 'bg-tertiary/20 hover:bg-tertiary/40'
+                                        ? 'bg-primary text-white shadow-lg'
+                                        : 'bg-tertiary/20 hover:bg-tertiary/40'
                                         }`}
                                 >
                                     {pageNum}
