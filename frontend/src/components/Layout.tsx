@@ -63,7 +63,7 @@ export default function Layout() {
         { icon: ShoppingCart, label: t('POS'), path: '/pos', show: true },
         {
             icon: Package,
-            label: t('Inventory'),
+            label: 'Stock',
             path: '/inventory',
             show: isAdmin || currentUser?.can_view_stock === true
         },
