@@ -1,5 +1,6 @@
 import axios from 'axios';
 
+// Build timestamp: 2025-12-16T11:52 - Force fresh build for new API URL
 // Local server for development
 const LOCAL_API_URL = 'http://localhost:8000/api';
 
