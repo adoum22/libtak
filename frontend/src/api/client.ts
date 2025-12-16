@@ -1,16 +1,16 @@
 import axios from 'axios';
 
-// Local server (runs at the store) - PRIMARY
+// Local server for development
 const LOCAL_API_URL = 'http://localhost:8000/api';
 
-// Cloud server (Render) - for remote access only
-const CLOUD_API_URL = import.meta.env.VITE_API_URL || 'https://libtak-api.onrender.com/api';
+// Production server (PythonAnywhere)
+const PRODUCTION_API_URL = 'https://dido22.pythonanywhere.com/api';
 
 // Determine which server to use
-// In production at the store: use local server
-// For remote access (when explicitly set): use cloud
-const isRemoteAccess = import.meta.env.VITE_REMOTE_ACCESS === 'true';
-const API_URL = isRemoteAccess ? CLOUD_API_URL : LOCAL_API_URL;
+// In development (localhost): use local server
+// In production (Vercel): use PythonAnywhere
+const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const API_URL = import.meta.env.VITE_API_URL || (isDevelopment ? LOCAL_API_URL : PRODUCTION_API_URL);
 
 const client = axios.create({
     baseURL: API_URL,
@@ -53,7 +53,7 @@ client.interceptors.response.use(
 
 // Export API URL for debugging/status display
 export const getApiUrl = () => API_URL;
-export const isUsingLocalServer = () => !isRemoteAccess;
+export const isUsingLocalServer = () => isDevelopment;
 
 export default client;
 
