@@ -70,7 +70,7 @@ export default function Layout() {
         { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin },
         { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin },
         { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin },
-        { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin },
+        { icon: ClipboardCheck, label: 'Stock', path: '/stock-count', show: isAdmin },
         { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin },
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },
