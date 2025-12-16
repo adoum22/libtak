@@ -59,8 +59,8 @@ def get_report_data(start_date, end_date):
     )
     
     total_sales = sales.count()
-    gross_revenue = float(sales.aggregate(total=Sum('total'))['total'] or 0)
-    returns_amount = float(returns.aggregate(total=Sum('total'))['total'] or 0)
+    gross_revenue = float(sales.aggregate(total=Sum('total_ttc'))['total'] or 0)
+    returns_amount = float(returns.aggregate(total=Sum('total_ttc'))['total'] or 0)
     total_revenue = gross_revenue - returns_amount
     
     # Calcul du profit
