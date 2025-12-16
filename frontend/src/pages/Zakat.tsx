@@ -69,7 +69,7 @@ export default function Zakat() {
 
             {/* Total Capital Card */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="card bg-gradient-to-br from-primary to-primary/80 text-white p-6">
+                <div className="rounded-2xl p-6 text-white shadow-lg" style={{ background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)' }}>
                     <div className="flex items-center gap-4">
                         <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
                             <DollarSign size={32} />
@@ -90,7 +90,7 @@ export default function Zakat() {
                     </div>
                 </div>
 
-                <div className="card bg-gradient-to-br from-accent to-accent/80 text-white p-6">
+                <div className="rounded-2xl p-6 text-white shadow-lg" style={{ background: 'linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)' }}>
                     <div className="flex items-center gap-4">
                         <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
                             <Calculator size={32} />
