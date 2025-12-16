@@ -14,6 +14,7 @@ import Users from './pages/Users';
 import Returns from './pages/Returns';
 import PurchaseOrders from './pages/PurchaseOrders';
 import StockCount from './pages/StockCount';
+import Zakat from './pages/Zakat';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token');
@@ -40,6 +41,7 @@ function App() {
             <Route path="returns" element={<Returns />} />
             <Route path="purchase-orders" element={<PurchaseOrders />} />
             <Route path="stock-count" element={<StockCount />} />
+            <Route path="zakat" element={<Zakat />} />
           </Route>
         </Routes>
         <PWAInstallPrompt />

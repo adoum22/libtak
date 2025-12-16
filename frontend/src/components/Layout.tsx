@@ -16,7 +16,8 @@ import {
     Menu,
     RotateCcw,
     ClipboardList,
-    ClipboardCheck
+    ClipboardCheck,
+    Calculator
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -73,6 +74,7 @@ export default function Layout() {
         { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin },
         { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin },
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
+        { icon: Calculator, label: 'Zakat', path: '/zakat', show: isAdmin },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },
     ];
 
