@@ -158,6 +158,8 @@ export default function Users() {
         setIsPasswordModalOpen(false);
         setSelectedUserForPassword(null);
         setNewPassword('');
+        // Refresh user list to avoid rendering issues
+        queryClient.invalidateQueries({ queryKey: ['users'] });
     };
 
     const handleSubmit = (e: React.FormEvent) => {
