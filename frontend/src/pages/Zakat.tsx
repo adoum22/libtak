@@ -35,29 +35,17 @@ export default function Zakat() {
         queryFn: () => client.get(`/inventory/products/?page=${page}&page_size=${pageSize}`).then(res => res.data)
     });
 
-    // Fetch ALL products to calculate total capital (without pagination)
-    const { data: allProducts, isLoading: isLoadingAll } = useQuery<Product[]>({
-        queryKey: ['products-all-zakat'],
-        queryFn: async () => {
-            // Fetch all products - try without pagination first
-            const response = await client.get('/inventory/products/', {
-                params: { page_size: 10000 }
-            });
-            // Handle both paginated and non-paginated responses
-            const data = response.data;
-            if (Array.isArray(data)) {
-                return data;
-            } else if (data.results) {
-                return data.results;
-            }
-            return [];
-        }
+    // Fetch stock stats using optimized backend endpoint (database aggregation)
+    const { data: statsData, isLoading: isLoadingStats } = useQuery<{
+        total_products: number;
+        stock_value: number;
+    }>({
+        queryKey: ['products-stats-zakat'],
+        queryFn: () => client.get('/inventory/products/stats/').then(res => res.data)
     });
 
-    // Calculate total capital
-    const totalCapital = allProducts?.reduce((sum, product) => {
-        return sum + (product.stock * product.purchase_price);
-    }, 0) || 0;
+    // Calculate total capital from stats endpoint (optimized for large datasets)
+    const totalCapital = statsData?.stock_value || 0;
 
     // Calculate Zakat (2.5% of capital)
     const zakatAmount = totalCapital * 0.025;
@@ -88,7 +76,7 @@ export default function Zakat() {
                         </div>
                         <div>
                             <p className="text-white/80 text-sm uppercase tracking-wider">Capital Total</p>
-                            {isLoadingAll ? (
+                            {isLoadingStats ? (
                                 <div className="h-10 flex items-center">
                                     <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
                                 </div>
@@ -109,7 +97,7 @@ export default function Zakat() {
                         </div>
                         <div>
                             <p className="text-white/80 text-sm uppercase tracking-wider">Zakat (2.5%)</p>
-                            {isLoadingAll ? (
+                            {isLoadingStats ? (
                                 <div className="h-10 flex items-center">
                                     <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
                                 </div>
