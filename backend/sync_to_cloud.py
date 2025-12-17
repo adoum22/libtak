@@ -28,7 +28,7 @@ from inventory.models import Product
 from core.models import SyncLog
 
 # Configuration
-CLOUD_URL = "https://dido22.pythonanywhere.com/api"
+CLOUD_URL = "https://dido22.pythonanywhere.com/api/auth"
 SYNC_TOKEN = os.environ.get('SYNC_TOKEN', 'libtak-sync-token-2025')
 
 
@@ -39,7 +39,7 @@ def get_unsynced_sales():
 
 def get_unsynced_returns():
     """Récupère les retours non synchronisés."""
-    return Return.objects.filter(synced=False).select_related('sale', 'processed_by').prefetch_related('items__product')
+    return Return.objects.filter(synced=False).select_related('sale', 'processed_by').prefetch_related('items__sale_item')
 
 
 def serialize_sale(sale):
@@ -50,7 +50,7 @@ def serialize_sale(sale):
             'product_barcode': item.product.barcode if item.product else None,
             'product_name': item.product.name if item.product else item.product_name,
             'quantity': item.quantity,
-            'unit_price': str(item.unit_price),
+            'unit_price': str(item.unit_price_ht),
         })
     
     return {
@@ -69,10 +69,14 @@ def serialize_return(return_obj):
     """Sérialise un retour pour l'envoi."""
     items = []
     for item in return_obj.items.all():
+        # ReturnItem a sale_item, pas product directement
+        product_barcode = None
+        if item.sale_item and item.sale_item.product:
+            product_barcode = item.sale_item.product.barcode
         items.append({
-            'product_barcode': item.product.barcode if item.product else None,
+            'product_barcode': product_barcode,
             'quantity': item.quantity,
-            'refund_amount': str(item.refund_amount),
+            'refund_amount': str(item.sale_item.unit_price_ht * item.quantity) if item.sale_item else '0',
         })
     
     return {
@@ -128,7 +132,7 @@ def sync_to_cloud():
     # Envoyer au cloud
     headers = {
         'Content-Type': 'application/json',
-        'X-Sync-Token': SYNC_TOKEN,
+        'Authorization': f'SyncToken {SYNC_TOKEN}',
     }
     
     try:

@@ -236,9 +236,9 @@ SPECTACULAR_SETTINGS = {
 }
 
 # ===== SYNC CONFIGURATION =====
-# For local server: set CLOUD_API_URL to point to your Render deployment
+# For local server: set CLOUD_API_URL to point to your cloud deployment
 # For cloud server: set IS_CLOUD_SERVER=True
 CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-api.onrender.com/api'
-SYNC_TOKEN = os.environ.get('SYNC_TOKEN', '')  # Shared secret for sync authentication
-IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'False') == 'True'
+SYNC_TOKEN = os.environ.get('SYNC_TOKEN', 'libtak-sync-token-2025')  # Shared secret for sync authentication
+IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
 

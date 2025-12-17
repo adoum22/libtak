@@ -46,6 +46,7 @@ export default function Users() {
         role: 'CASHIER' as 'ADMIN' | 'CASHIER',
         phone: '',
         password: '',
+        password_confirm: '',
         can_view_stock: false,
         can_manage_stock: false,
         avatar: null as File | null
@@ -118,6 +119,7 @@ export default function Users() {
                 role: user.role,
                 phone: user.phone || '',
                 password: '',
+                password_confirm: '',
                 can_view_stock: user.can_view_stock || false,
                 can_manage_stock: user.can_manage_stock || false,
                 avatar: null
@@ -132,7 +134,8 @@ export default function Users() {
                 last_name: '',
                 role: 'CASHIER',
                 phone: '',
-                password: '', // Only for creation
+                password: '',
+                password_confirm: '',
                 can_view_stock: false,
                 can_manage_stock: false,
                 avatar: null
@@ -190,7 +193,10 @@ export default function Users() {
             data.append('phone', formData.phone);
             data.append('can_view_stock', String(formData.can_view_stock));
             data.append('can_manage_stock', String(formData.can_manage_stock));
-            if (formData.password) data.append('password', formData.password);
+            if (formData.password) {
+                data.append('password', formData.password);
+                data.append('password_confirm', formData.password_confirm);
+            }
             if (formData.avatar) data.append('avatar', formData.avatar);
 
             createMutation.mutate(data);
@@ -436,6 +442,7 @@ export default function Users() {
                                         />
                                     </div>
                                     <div className="form-group">
+                                        <label>Rôle</label>
                                         <select
                                             value={formData.role}
                                             onChange={e => setFormData({ ...formData, role: e.target.value as 'ADMIN' | 'CASHIER' })}
@@ -499,15 +506,27 @@ export default function Users() {
                                 </div>
 
                                 {!editingUser && (
-                                    <div className="form-group">
-                                        <label>Mot de passe</label>
-                                        <input
-                                            type="password"
-                                            value={formData.password}
-                                            onChange={e => setFormData({ ...formData, password: e.target.value })}
-                                            required
-                                            minLength={6}
-                                        />
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="form-group">
+                                            <label>Mot de passe</label>
+                                            <input
+                                                type="password"
+                                                value={formData.password}
+                                                onChange={e => setFormData({ ...formData, password: e.target.value })}
+                                                required
+                                                minLength={6}
+                                            />
+                                        </div>
+                                        <div className="form-group">
+                                            <label>Confirmer mot de passe</label>
+                                            <input
+                                                type="password"
+                                                value={formData.password_confirm}
+                                                onChange={e => setFormData({ ...formData, password_confirm: e.target.value })}
+                                                required
+                                                minLength={6}
+                                            />
+                                        </div>
                                     </div>
                                 )}
 
