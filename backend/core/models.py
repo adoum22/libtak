@@ -178,3 +178,30 @@ class AuditLog(models.Model):
             user_agent=user_agent
         )
 
+
+class SyncLog(models.Model):
+    """Journal de synchronisation LOCAL ↔ CLOUD"""
+    
+    class SyncType(models.TextChoices):
+        PUSH = 'PUSH', _('Local → Cloud')
+        PULL = 'PULL', _('Cloud → Local')
+    
+    sync_type = models.CharField(
+        _('Sync Type'),
+        max_length=10,
+        choices=SyncType.choices
+    )
+    records_synced = models.IntegerField(_('Records Synced'), default=0)
+    success = models.BooleanField(_('Success'), default=True)
+    error_message = models.TextField(_('Error Message'), blank=True)
+    details = models.JSONField(_('Details'), default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = _('Sync Log')
+        verbose_name_plural = _('Sync Logs')
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.get_sync_type_display()} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+

@@ -1,24 +1,27 @@
 @echo off
 REM ============================================
-REM Libtak Local Server - Auto-Start Script
+REM   LibTak - Démarrer le serveur local
+REM   Point de Vente Librairie
 REM ============================================
-REM This script starts the Django server on port 8001
-REM It runs automatically at Windows startup via Task Scheduler
 
-title Libtak Local Server
+title LibTak - Serveur Local
 
 cd /d "D:\Application Librairie\App\backend"
 
-REM Activate virtual environment if exists
-if exist "venv\Scripts\activate.bat" (
-    call venv\Scripts\activate.bat
-)
+echo.
+echo ============================================
+echo   LibTak - Serveur Local
+echo   Librairie Attaquaddoum
+echo ============================================
+echo.
+echo Le serveur demarre...
+echo Ouvrez votre navigateur sur: http://localhost:8000
+echo.
+echo Pour arreter le serveur, fermez cette fenetre.
+echo ============================================
+echo.
 
-REM Start the Django development server on port 8001
-echo Starting Libtak Local Server on port 8001...
-echo Press Ctrl+C to stop
+REM Demarrer le serveur Django
+python manage.py runserver 0.0.0.0:8000
 
-python manage.py runserver 0.0.0.0:8001 --noreload
-
-REM If server stops, wait before exiting
 pause
