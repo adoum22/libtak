@@ -2,12 +2,15 @@ from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
 from core.models import AuditLog
-from .models import Sale, Discount, Return
+from core.permissions import IsAdminRole
+from .models import Sale, Discount, Return, CashRegisterSession
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
     DiscountSerializer, DiscountApplySerializer,
-    ReturnSerializer
+    ReturnSerializer,
+    CashRegisterSessionSerializer, CashRegisterCloseSerializer,
 )
 
 
@@ -163,4 +166,96 @@ class ReturnViewSet(viewsets.ModelViewSet):
             request=request,
         )
         return Response(ReturnSerializer(return_order).data)
+
+
+class CashRegisterSessionViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Weekly cash register session management.
+
+    - GET  /cash-sessions/          — history (admin/manager only)
+    - GET  /cash-sessions/current/  — currently open session (any authenticated user)
+    - POST /cash-sessions/open/     — open a new session (admin/manager only)
+    - POST /cash-sessions/{id}/close/ — close a session (admin/manager only)
+    """
+    queryset = CashRegisterSession.objects.select_related('opened_by', 'closed_by').all()
+    serializer_class = CashRegisterSessionSerializer
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['opened_at', 'closed_at']
+    ordering = ['-opened_at']
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def current(self, request):
+        """Return the currently open session, or 404 if none."""
+        session = CashRegisterSession.objects.filter(
+            status=CashRegisterSession.SessionStatus.OPEN
+        ).select_related('opened_by').first()
+        if not session:
+            return Response({'detail': 'No open cash register session.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(CashRegisterSessionSerializer(session, context={'request': request}).data)
+
+    @action(detail=False, methods=['post'])
+    def open(self, request):
+        """Open a new cash register session. Only one session can be open at a time."""
+        if CashRegisterSession.objects.filter(status=CashRegisterSession.SessionStatus.OPEN).exists():
+            return Response(
+                {'error': 'A cash register session is already open. Close it first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = CashRegisterSessionSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        session = serializer.save(opened_by=request.user, status=CashRegisterSession.SessionStatus.OPEN)
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='CashRegisterSession',
+            object_id=session.id,
+            object_repr=str(session),
+            changes={'opening_amount': str(session.opening_amount)},
+            request=request,
+        )
+        return Response(
+            CashRegisterSessionSerializer(session, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=['post'])
+    def close(self, request, pk=None):
+        """Close a session with the actual declared cash amount."""
+        session = self.get_object()
+        if session.status != CashRegisterSession.SessionStatus.OPEN:
+            return Response(
+                {'error': 'Only open sessions can be closed.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = CashRegisterCloseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        actual = serializer.validated_data['actual_declared_amount']
+        theoretical = session.theoretical_closing_amount
+        variance = actual - theoretical
+
+        session.actual_declared_amount = actual
+        session.variance = variance
+        session.closed_at = timezone.now()
+        session.closed_by = request.user
+        session.status = CashRegisterSession.SessionStatus.CLOSED
+        session.notes = serializer.validated_data.get('notes', '') or session.notes
+        session.save()
+
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='CashRegisterSession',
+            object_id=session.id,
+            object_repr=str(session),
+            changes={
+                'status': 'CLOSED',
+                'actual_declared_amount': str(actual),
+                'theoretical_closing_amount': str(theoretical),
+                'variance': str(variance),
+            },
+            request=request,
+        )
+        return Response(CashRegisterSessionSerializer(session, context={'request': request}).data)
 

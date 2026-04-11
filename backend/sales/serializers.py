@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Sale, SaleItem, Discount, Return, ReturnItem
+from .models import Sale, SaleItem, Discount, Return, ReturnItem, CashRegisterSession
 from inventory.models import Product
 
 
@@ -256,4 +256,34 @@ class ReturnSerializer(serializers.ModelSerializer):
                 sale_item.product.save()
         
         return return_order
+
+
+class CashRegisterSessionSerializer(serializers.ModelSerializer):
+    theoretical_closing_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, read_only=True
+    )
+    opened_by_username = serializers.CharField(source='opened_by.username', read_only=True)
+    closed_by_username = serializers.CharField(source='closed_by.username', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = CashRegisterSession
+        fields = (
+            'id', 'status', 'status_display',
+            'opening_amount', 'actual_declared_amount',
+            'theoretical_closing_amount', 'variance',
+            'opened_at', 'closed_at',
+            'opened_by', 'opened_by_username',
+            'closed_by', 'closed_by_username',
+            'notes',
+        )
+        read_only_fields = (
+            'status', 'variance', 'opened_at', 'closed_at',
+            'opened_by', 'closed_by',
+        )
+
+
+class CashRegisterCloseSerializer(serializers.Serializer):
+    actual_declared_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
 

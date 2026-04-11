@@ -164,11 +164,113 @@ class ReturnItem(models.Model):
     return_order = models.ForeignKey(Return, on_delete=models.CASCADE, related_name='items')
     sale_item = models.ForeignKey(SaleItem, on_delete=models.CASCADE)
     quantity = models.IntegerField(_('Quantity'), default=1)
-    
+
     class Meta:
         verbose_name = _('Return Item')
         verbose_name_plural = _('Return Items')
 
     def __str__(self):
         return f"{self.quantity}x {self.sale_item.product_name}"
+
+
+class CashRegisterSession(models.Model):
+    """
+    Weekly cash register session.
+
+    Opened on Monday (or manually) and closed on Sunday or by a manager.
+    The theoretical closing amount is computed on demand from the opening
+    balance plus all CASH sales minus all CASH refunds in the period.
+    The variance highlights discrepancies between theory and what was
+    actually counted in the drawer.
+    """
+    class SessionStatus(models.TextChoices):
+        OPEN = 'OPEN', _('Open')
+        CLOSED = 'CLOSED', _('Closed')
+
+    opening_amount = models.DecimalField(
+        _('Opening Amount'),
+        max_digits=10,
+        decimal_places=2,
+        help_text=_('Cash in the drawer at session open'),
+    )
+    actual_declared_amount = models.DecimalField(
+        _('Actual Declared Amount'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Cash counted in the drawer at session close'),
+    )
+    variance = models.DecimalField(
+        _('Variance'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('actual_declared_amount − theoretical_closing_amount (negative = shortage)'),
+    )
+    opened_at = models.DateTimeField(_('Opened At'), auto_now_add=True)
+    closed_at = models.DateTimeField(_('Closed At'), null=True, blank=True)
+    opened_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='opened_cash_sessions',
+    )
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='closed_cash_sessions',
+    )
+    status = models.CharField(
+        _('Status'),
+        max_length=10,
+        choices=SessionStatus.choices,
+        default=SessionStatus.OPEN,
+        db_index=True,
+    )
+    notes = models.TextField(_('Notes'), blank=True)
+
+    class Meta:
+        verbose_name = _('Cash Register Session')
+        verbose_name_plural = _('Cash Register Sessions')
+        ordering = ['-opened_at']
+
+    def __str__(self):
+        return f"Session #{self.id} ({self.status}) — opened {self.opened_at:%Y-%m-%d}"
+
+    @property
+    def theoretical_closing_amount(self):
+        """
+        opening_amount
+          + sum of CASH sale totals during this session
+          − sum of CASH refunds during this session
+        """
+        from django.db.models import Sum
+        end = self.closed_at or __import__('django.utils.timezone', fromlist=['timezone']).timezone.now()
+
+        cash_sales = (
+            Sale.objects
+            .filter(
+                payment_method=Sale.PaymentMethod.CASH,
+                created_at__gte=self.opened_at,
+                created_at__lte=end,
+            )
+            .aggregate(total=Sum('total_ttc'))['total'] or 0
+        )
+
+        cash_refunds = (
+            Return.objects
+            .filter(
+                status=Return.ReturnStatus.COMPLETED,
+                sale__payment_method=Sale.PaymentMethod.CASH,
+                created_at__gte=self.opened_at,
+                created_at__lte=end,
+            )
+            .aggregate(total=Sum('refund_amount'))['total'] or 0
+        )
+
+        return self.opening_amount + cash_sales - cash_refunds
 
