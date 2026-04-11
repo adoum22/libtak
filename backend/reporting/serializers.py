@@ -4,7 +4,18 @@ from .models import ReportSettings, ReportLog
 
 class ReportSettingsSerializer(serializers.ModelSerializer):
     recipients_list = serializers.SerializerMethodField()
-    
+    # S-11: sender_password is write-only (never returned by the API) and
+    # deprecated — prefer the REPORT_SMTP_PASSWORD environment variable.
+    # This field is kept for backward compatibility with existing deployments
+    # that store the password in the DB; new deployments should use the env var.
+    sender_password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        style={'input_type': 'password'},
+        help_text='Deprecated: use REPORT_SMTP_PASSWORD env var instead.'
+    )
+
     class Meta:
         model = ReportSettings
         fields = [
@@ -18,9 +29,6 @@ class ReportSettingsSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = ['updated_at']
-        extra_kwargs = {
-            'sender_password': {'write_only': True}
-        }
     
     def get_recipients_list(self, obj):
         return obj.get_recipients_list()

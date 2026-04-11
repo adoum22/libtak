@@ -236,17 +236,24 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
     """
     
     # Envoi avec SMTP dynamique
+    # S-11: SMTP password priority order:
+    #   1. REPORT_SMTP_PASSWORD environment variable (recommended — never stored in DB)
+    #   2. sender_password field in ReportSettings (legacy, stored in plaintext — migrate away)
+    # To migrate: set REPORT_SMTP_PASSWORD in your environment and clear the DB field.
+    import os
+    smtp_password = os.environ.get('REPORT_SMTP_PASSWORD') or settings_obj.sender_password
+
     try:
         connection = None
         from_email = settings.DEFAULT_FROM_EMAIL
 
         # Si configuration SMTP personnalisée
-        if settings_obj.sender_email and settings_obj.sender_password:
+        if settings_obj.sender_email and smtp_password:
             connection = get_connection(
                 host=settings_obj.smtp_host,
                 port=settings_obj.smtp_port,
                 username=settings_obj.sender_email,
-                password=settings_obj.sender_password,
+                password=smtp_password,
                 use_tls=True
             )
             from_email = settings_obj.sender_email
@@ -453,8 +460,9 @@ def send_low_stock_alert():
         return "No recipients configured"
     
     # Trouver les produits en stock bas
+    from django.db.models import F
     low_stock_products = Product.objects.filter(
-        stock__lte=models.F('min_stock'),
+        stock__lte=F('min_stock'),
         active=True
     ).order_by('stock')
     
@@ -526,16 +534,17 @@ def send_low_stock_alert():
         connection = None
         from_email = settings.DEFAULT_FROM_EMAIL
 
-        if settings_obj.sender_email and settings_obj.sender_password:
+        smtp_password_alert = os.environ.get('REPORT_SMTP_PASSWORD') or settings_obj.sender_password
+        if settings_obj.sender_email and smtp_password_alert:
             connection = get_connection(
                 host=settings_obj.smtp_host,
                 port=settings_obj.smtp_port,
                 username=settings_obj.sender_email,
-                password=settings_obj.sender_password,
+                password=smtp_password_alert,
                 use_tls=True
             )
             from_email = settings_obj.sender_email
-        
+
         send_mail(
             subject=f"⚠️ [Librairie] Alerte Stock Bas - {low_stock_products.count()} produits",
             message=f"{low_stock_products.count()} produits sont en stock bas.",
