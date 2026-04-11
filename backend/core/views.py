@@ -3,11 +3,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.throttling import AnonRateThrottle
 from django.contrib.auth import get_user_model
 
 from .serializers import (
-    UserSerializer, 
-    UserCreateSerializer, 
+    UserSerializer,
+    UserCreateSerializer,
     UserUpdateSerializer,
     ChangePasswordSerializer,
     AppSettingsSerializer,
@@ -17,11 +18,17 @@ from .models import AppSettings
 from .permissions import IsAdminRole, CanManageUsers
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+
+class LoginRateThrottle(AnonRateThrottle):
+    """5 login attempts per minute per IP (scope defined in settings DEFAULT_THROTTLE_RATES)."""
+    scope = 'login'
+
 User = get_user_model()
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_classes = [LoginRateThrottle]
 
 
 class UserMeView(generics.RetrieveUpdateAPIView):

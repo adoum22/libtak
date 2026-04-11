@@ -119,6 +119,16 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'COERCE_DECIMAL_TO_STRING': False,
+    # Rate limiting (S-12): applied globally; login uses a tighter custom scope
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/minute',
+        'user': '300/minute',
+        'login': '5/minute',    # Tight limit for authentication endpoint
+    },
 }
 
 # JWT Settings
