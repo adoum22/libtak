@@ -239,22 +239,21 @@ class DatabaseExportView(generics.GenericAPIView):
         if include_products:
             ws = wb.active
             ws.title = "Produits"
-            headers = ['ID', 'Nom', 'Code-barres', 'Catégorie', 'Fournisseur', 'Prix Achat', 'Prix Vente', 'TVA %', 'Stock', 'Seuil', 'Unité', 'Actif']
+            headers = ['ID', 'Nom', 'Code-barres', 'Catégorie', 'Fournisseur', 'Prix Achat', 'Prix Vente HT', 'TVA %', 'Stock', 'Seuil', 'Actif']
             style_header(ws, headers)
-            
-            for row, prod in enumerate(Product.objects.all(), 2):
+
+            for row, prod in enumerate(Product.objects.select_related('category', 'supplier').all(), 2):
                 ws.cell(row=row, column=1, value=prod.id)
                 ws.cell(row=row, column=2, value=prod.name)
                 ws.cell(row=row, column=3, value=prod.barcode)
                 ws.cell(row=row, column=4, value=prod.category.name if prod.category else '')
                 ws.cell(row=row, column=5, value=prod.supplier.name if prod.supplier else '')
                 ws.cell(row=row, column=6, value=float(prod.purchase_price))
-                ws.cell(row=row, column=7, value=float(prod.sale_price))
+                ws.cell(row=row, column=7, value=float(prod.sale_price_ht))
                 ws.cell(row=row, column=8, value=float(prod.tva))
                 ws.cell(row=row, column=9, value=prod.stock)
                 ws.cell(row=row, column=10, value=prod.min_stock)
-                ws.cell(row=row, column=11, value=prod.unit)
-                ws.cell(row=row, column=12, value='Oui' if prod.is_active else 'Non')
+                ws.cell(row=row, column=11, value='Oui' if prod.active else 'Non')
         
         # Sheet: Catégories
         if include_categories:
@@ -285,21 +284,28 @@ class DatabaseExportView(generics.GenericAPIView):
         # Sheet: Ventes
         if include_sales:
             ws = wb.create_sheet("Ventes")
-            headers = ['ID Vente', 'Date', 'Total', 'Mode Paiement', 'Caissier', 'Produit', 'Quantité', 'Prix Unit.', 'Sous-total']
+            headers = ['ID Vente', 'Date', 'Total TTC', 'Mode Paiement', 'Caissier', 'Produit', 'Quantité', 'Prix Unit. HT', 'Sous-total HT']
             style_header(ws, headers)
-            
+
+            export_limit = int(request.query_params.get('sales_limit', 5000))
+            sales_qs = (
+                Sale.objects
+                .select_related('user')
+                .prefetch_related('items__product')
+                .order_by('-created_at')[:export_limit]
+            )
             row = 2
-            for sale in Sale.objects.all().order_by('-created_at')[:1000]:
+            for sale in sales_qs:
                 for item in sale.items.all():
                     ws.cell(row=row, column=1, value=sale.id)
                     ws.cell(row=row, column=2, value=sale.created_at.strftime('%Y-%m-%d %H:%M'))
-                    ws.cell(row=row, column=3, value=float(sale.total))
+                    ws.cell(row=row, column=3, value=float(sale.total_ttc))
                     ws.cell(row=row, column=4, value=sale.payment_method)
-                    ws.cell(row=row, column=5, value=sale.cashier.username if sale.cashier else '')
+                    ws.cell(row=row, column=5, value=sale.user.username if sale.user else '')
                     ws.cell(row=row, column=6, value=item.product.name if item.product else 'Produit supprimé')
                     ws.cell(row=row, column=7, value=item.quantity)
-                    ws.cell(row=row, column=8, value=float(item.unit_price))
-                    ws.cell(row=row, column=9, value=float(item.total))
+                    ws.cell(row=row, column=8, value=float(item.unit_price_ht))
+                    ws.cell(row=row, column=9, value=float(item.total_price_ht))
                     row += 1
         
         # Sheet: Utilisateurs
