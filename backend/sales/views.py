@@ -2,6 +2,7 @@ from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from core.models import AuditLog
 from .models import Sale, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
@@ -25,7 +26,17 @@ class SaleViewSet(viewsets.ModelViewSet):
         return SaleSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        sale = serializer.save(user=self.request.user)
+        # S-17: log every sale for audit trail
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.SALE,
+            model_name='Sale',
+            object_id=sale.id,
+            object_repr=str(sale),
+            changes={'total_ttc': str(sale.total_ttc), 'payment_method': sale.payment_method},
+            request=self.request,
+        )
 
 
 class DiscountViewSet(viewsets.ModelViewSet):
@@ -96,9 +107,16 @@ class ReturnViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return_order.status = Return.ReturnStatus.APPROVED
+        return_order.processed_by = request.user
         return_order.save()
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=str(return_order), changes={'status': 'APPROVED'},
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
-    
+
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
         """Reject a return request"""
@@ -109,16 +127,23 @@ class ReturnViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return_order.status = Return.ReturnStatus.REJECTED
+        return_order.processed_by = request.user
         return_order.save()
-        
-        # Restore stock was already done on create, so we need to reverse it
+
+        # Reverse the stock restoration that was done on create
         for item in return_order.items.all():
             if item.sale_item.product:
                 item.sale_item.product.stock -= item.quantity
                 item.sale_item.product.save()
-        
+
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=str(return_order), changes={'status': 'REJECTED'},
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
-    
+
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         """Mark a return as completed (refund processed)"""
@@ -129,6 +154,13 @@ class ReturnViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         return_order.status = Return.ReturnStatus.COMPLETED
+        return_order.processed_by = request.user
         return_order.save()
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=str(return_order), changes={'status': 'COMPLETED'},
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
 

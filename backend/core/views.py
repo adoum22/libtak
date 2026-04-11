@@ -14,7 +14,7 @@ from .serializers import (
     AppSettingsSerializer,
     CustomTokenObtainPairSerializer
 )
-from .models import AppSettings
+from .models import AppSettings, AuditLog
 from .permissions import IsAdminRole, CanManageUsers
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -29,6 +29,25 @@ User = get_user_model()
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     throttle_classes = [LoginRateThrottle]
+
+    def post(self, request, *args, **kwargs):
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            # S-17: log successful logins for audit trail
+            User = get_user_model()
+            username = request.data.get('username', '')
+            user = User.objects.filter(username=username).first() or \
+                   User.objects.filter(email=username).first()
+            if user:
+                AuditLog.log(
+                    user=user,
+                    action=AuditLog.ActionType.LOGIN,
+                    model_name='User',
+                    object_id=user.id,
+                    object_repr=str(user),
+                    request=request,
+                )
+        return response
 
 
 class UserMeView(generics.RetrieveUpdateAPIView):
@@ -77,27 +96,68 @@ class UserViewSet(viewsets.ModelViewSet):
         if role:
             queryset = queryset.filter(role=role)
         return queryset.order_by('username')
-    
+
+    def perform_create(self, serializer):
+        user = serializer.save()
+        # S-17: log user creation
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='User',
+            object_id=user.id,
+            object_repr=str(user),
+            request=self.request,
+        )
+
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
         """Réinitialiser le mot de passe d'un utilisateur (Admin)"""
         user = self.get_object()
-        new_password = request.data.get('new_password', 'password123')
+        # S-04: require new_password explicitly — no silent fallback
+        new_password = request.data.get('new_password')
+        if not new_password:
+            return Response(
+                {'error': 'new_password est requis.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        if len(new_password) < 8:
+            return Response(
+                {'error': 'Le mot de passe doit contenir au moins 8 caractères.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         user.set_password(new_password)
         user.save()
-        return Response({
-            'message': f'Mot de passe réinitialisé pour {user.username}'
-        })
-    
+        # S-17: log password reset
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='User',
+            object_id=user.id,
+            object_repr=str(user),
+            changes={'action': 'password_reset'},
+            request=request,
+        )
+        return Response({'message': f'Mot de passe réinitialisé pour {user.username}'})
+
     @action(detail=True, methods=['post'])
     def toggle_active(self, request, pk=None):
         """Activer/Désactiver un utilisateur"""
         user = self.get_object()
         user.is_active = not user.is_active
         user.save()
+        # S-17: log account enable/disable
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='User',
+            object_id=user.id,
+            object_repr=str(user),
+            changes={'is_active': user.is_active},
+            request=request,
+        )
         return Response({
             'message': f'Utilisateur {"activé" if user.is_active else "désactivé"}',
-            'is_active': user.is_active
+            'is_active': user.is_active,
         })
 
 
