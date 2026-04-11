@@ -29,6 +29,7 @@ INSTALLED_APPS = _OPTIONAL_APPS + [
     # Third-party
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     'drf_spectacular',
@@ -122,17 +123,18 @@ REST_FRAMEWORK = {
 
 # JWT Settings
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),   # Short-lived; frontend must use refresh
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    'BLACKLIST_AFTER_ROTATION': True,                 # Requires token_blacklist in INSTALLED_APPS
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'UPDATE_LAST_LOGIN': True,
 }
 
 # CORS
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development mode
+CORS_ALLOW_ALL_ORIGINS = False  # Never open CORS to all origins, even in development
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
@@ -246,4 +248,29 @@ CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-
 SYNC_TOKEN = os.environ.get('SYNC_TOKEN')
 
 IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
+
+# ===== SECURITY HEADERS (S-15) =====
+# X-Content-Type-Options: prevents MIME-type sniffing
+SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# X-Frame-Options: prevents clickjacking (already via XFrameOptionsMiddleware)
+X_FRAME_OPTIONS = 'DENY'
+
+# Production-only settings (require HTTPS)
+if not DEBUG:
+    # HSTS: force HTTPS for 1 year, include subdomains, allow preloading
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    # Redirect all HTTP to HTTPS
+    SECURE_SSL_REDIRECT = True
+
+# ===== COOKIE SECURITY (S-16) =====
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+# Secure flag: True in production (HTTPS only), False in dev (HTTP)
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
