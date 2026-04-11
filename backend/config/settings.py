@@ -239,6 +239,11 @@ SPECTACULAR_SETTINGS = {
 # For local server: set CLOUD_API_URL to point to your cloud deployment
 # For cloud server: set IS_CLOUD_SERVER=True
 CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-api.onrender.com/api'
-SYNC_TOKEN = os.environ.get('SYNC_TOKEN', 'libtak-sync-token-2025')  # Shared secret for sync authentication
+
+# Shared secret for local<->cloud sync authentication.
+# MUST be set via environment variable — no default is provided intentionally.
+# Generate a strong token: python -c "import secrets; print(secrets.token_hex(32))"
+SYNC_TOKEN = os.environ.get('SYNC_TOKEN')
+
 IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
 
