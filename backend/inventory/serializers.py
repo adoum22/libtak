@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
+from core.validators import validate_image_upload
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -18,6 +19,9 @@ class SupplierSerializer(serializers.ModelSerializer):
     
     def get_products_count(self, obj):
         return obj.products.count()
+
+    def validate_image(self, value):
+        return validate_image_upload(value)
 
     def get_image_url(self, obj):
         if obj.image:
@@ -87,6 +91,9 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         if Product.objects.filter(barcode=value).exists():
             raise serializers.ValidationError("Un produit avec ce code-barres existe déjà.")
         return value
+
+    def validate_image(self, value):
+        return validate_image_upload(value)
 
 
 class StockMovementSerializer(serializers.ModelSerializer):

@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
 from .models import AppSettings
+from .validators import validate_image_upload
 
 User = get_user_model()
 
@@ -91,6 +92,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'role', 'phone', 'avatar', 'is_active',
             'can_view_stock', 'can_manage_stock'
         ]
+
+    def validate_avatar(self, value):
+        return validate_image_upload(value)
 
 
 

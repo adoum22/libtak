@@ -119,14 +119,21 @@ class ProductViewSet(viewsets.ModelViewSet):
                 )
 
             from .models import Category, Supplier
+            from core.validators import validate_import_file
 
             if 'file' not in request.FILES:
                 return Response({'detail': 'Aucun fichier fourni.'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             file = request.FILES['file']
-            
+
+            # S-09: validate extension and size before touching pandas
             try:
-                if file.name.endswith('.csv'):
+                validate_import_file(file)
+            except ValueError as e:
+                return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                if file.name.lower().endswith('.csv'):
                     df = pd.read_csv(file)
                 else:
                     df = pd.read_excel(file)
