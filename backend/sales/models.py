@@ -9,6 +9,17 @@ class Sale(models.Model):
         CARD = 'CARD', _('Card')
         OTHER = 'OTHER', _('Other')
 
+    # S-18: stable identifier from the local server, used for idempotent sync.
+    # Null for sales created before this field was added (pre-sync era).
+    local_id = models.CharField(
+        _('Local ID'),
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text='Unique ID from the local POS used to prevent duplicate imports during sync.',
+    )
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     total_ht = models.DecimalField(_('Total HT'), max_digits=10, decimal_places=2)
     total_tva = models.DecimalField(_('Total VAT'), max_digits=10, decimal_places=2)
@@ -111,6 +122,15 @@ class Return(models.Model):
         REJECTED = 'REJECTED', _('Rejected')
         COMPLETED = 'COMPLETED', _('Completed')
     
+    # S-18: same deduplication pattern as Sale.local_id
+    local_id = models.CharField(
+        _('Local ID'),
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+    )
+
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name='returns')
     status = models.CharField(
         _('Status'),
