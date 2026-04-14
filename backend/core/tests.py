@@ -6,9 +6,14 @@ from unittest.mock import patch
 
 User = get_user_model()
 
+# Use a dummy cache so throttle counters never accumulate during tests.
+_NO_THROTTLE = override_settings(
+    CACHES={'default': {'BACKEND': 'django.core.cache.backends.dummy.DummyCache'}}
+)
+
 
 def _auth(client, username, password):
-    """Helper: login and return JWT access token."""
+    """Login and return JWT access token. Returns '' on failure."""
     resp = client.post('/api/auth/login/', {'username': username, 'password': password})
     return resp.data.get('access', '')
 
@@ -55,9 +60,10 @@ class UserModelTest(TestCase):
         self.assertFalse(user.can_manage_stock)
 
 
+@_NO_THROTTLE
 class AuthenticationAPITest(APITestCase):
     """Tests pour l'API d'authentification"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(
             username='testuser',
@@ -105,9 +111,10 @@ class AuthenticationAPITest(APITestCase):
         self.assertEqual(response.data['username'], 'testuser')
 
 
+@_NO_THROTTLE
 class UserAPITest(APITestCase):
     """Tests pour l'API de gestion des utilisateurs"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -146,6 +153,7 @@ class UserAPITest(APITestCase):
 # S-04 / S-14 — Password strength
 # ---------------------------------------------------------------------------
 
+@_NO_THROTTLE
 class PasswordStrengthTest(APITestCase):
     """Ensure short passwords are rejected at the API boundary."""
 
@@ -197,6 +205,7 @@ class PasswordStrengthTest(APITestCase):
 # Permission boundary — cashier cannot reach admin endpoints
 # ---------------------------------------------------------------------------
 
+@_NO_THROTTLE
 class PermissionBoundaryTest(APITestCase):
     """Cashier-role users must not access admin-only endpoints."""
 
@@ -208,6 +217,7 @@ class PermissionBoundaryTest(APITestCase):
             username='cas', password='Cash1234!', role='CASHIER'
         )
         self.cashier_token = _auth(self.client, 'cas', 'Cash1234!')
+        self.assertNotEqual(self.cashier_token, '', 'Cashier login failed in setUp')
 
     def _as_cashier(self):
         _bearer(self.client, self.cashier_token)
@@ -235,7 +245,7 @@ class PermissionBoundaryTest(APITestCase):
 
     def test_cashier_cannot_access_settings(self):
         self._as_cashier()
-        resp = self.client.get('/api/settings/')
+        resp = self.client.get('/api/auth/settings/')
         self.assertIn(resp.status_code, [status.HTTP_403_FORBIDDEN, status.HTTP_401_UNAUTHORIZED])
 
     # Unauthenticated — must always get 401
@@ -260,6 +270,7 @@ class PermissionBoundaryTest(APITestCase):
 # S-13 — Sync token validation
 # ---------------------------------------------------------------------------
 
+@_NO_THROTTLE
 @override_settings(SYNC_TOKEN='test-valid-token-32chars-abcdefgh')
 class SyncTokenPermissionTest(APITestCase):
     """SyncTokenPermission must accept valid tokens and reject everything else."""
@@ -271,7 +282,7 @@ class SyncTokenPermissionTest(APITestCase):
         if auth_header is not None:
             headers['HTTP_AUTHORIZATION'] = auth_header
         return self.client.post(
-            '/api/sync/receive/',
+            '/api/auth/sync/receive/',
             data or {},
             format='json',
             **headers,
@@ -309,6 +320,7 @@ class SyncTokenPermissionTest(APITestCase):
 # S-05 — Inactive user cannot log in
 # ---------------------------------------------------------------------------
 
+@_NO_THROTTLE
 class InactiveUserLoginTest(APITestCase):
     """Disabled accounts must receive a clear rejection, not a token."""
 
