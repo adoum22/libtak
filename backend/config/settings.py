@@ -40,6 +40,7 @@ INSTALLED_APPS = _OPTIONAL_APPS + [
     'inventory',
     'sales',
     'reporting',
+    'accounting',
 ]
 
 MIDDLEWARE = [
