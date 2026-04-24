@@ -26,7 +26,13 @@ import logging
 from io import BytesIO
 
 class ExportReportView(APIView):
-    """Générer un PDF du rapport (Via ReportLab pour compatibilité Windows)"""
+    """Exporter un rapport.
+
+    PDF si reportlab est installé (poste local), sinon fallback Excel
+    via openpyxl (cloud PythonAnywhere — quota disque trop serré pour
+    reportlab). Le client n'a rien à changer : on sert un fichier
+    téléchargeable avec le bon Content-Type.
+    """
     permission_classes = [IsAuthenticated, CanAccessReports]
 
     def get(self, request):
@@ -49,9 +55,14 @@ class ExportReportView(APIView):
                 end_date = start_date.replace(year=year+1, month=1, day=1) - timedelta(days=1)
             else:
                 end_date = start_date.replace(month=month+1, day=1) - timedelta(days=1)
-        
+
         # Données
         data = get_report_data(start_date, end_date)
+
+        # Forcer Excel si demandé explicitement (?format=xlsx)
+        fmt = (request.query_params.get('format') or '').lower()
+        if fmt in ('xlsx', 'excel'):
+            return self._export_excel(report_type, start_date, end_date, data)
 
         try:
             # Lazy import — only load reportlab when this endpoint is hit.
@@ -60,6 +71,12 @@ class ExportReportView(APIView):
             from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             from reportlab.lib.units import cm
+        except ImportError:
+            # Pas de reportlab (ex: PythonAnywhere free tier) -> Excel.
+            logger.info("reportlab indisponible, fallback export Excel")
+            return self._export_excel(report_type, start_date, end_date, data)
+
+        try:
             # Création du PDF
             buffer = BytesIO()
             doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
@@ -200,9 +217,130 @@ class ExportReportView(APIView):
             return response
 
         except Exception:
-            logger.exception("PDF report generation failed")
+            logger.exception("PDF report generation failed, fallback Excel")
+            return self._export_excel(report_type, start_date, end_date, data)
+
+    def _export_excel(self, report_type, start_date, end_date, data):
+        """Export Excel (.xlsx) du même rapport — utilisé en fallback ou
+        explicitement avec ?format=xlsx. Dépend uniquement d'openpyxl,
+        toujours disponible (utilisé déjà par /core/backup/)."""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = f"Rapport {report_type}"
+
+            blue = Font(bold=True, color='FFFFFF', size=12)
+            blue_fill = PatternFill('solid', fgColor='1E40AF')
+            grey_fill = PatternFill('solid', fgColor='F3F4F6')
+            green = Font(bold=True, color='16A34A')
+            red = Font(bold=True, color='DC2626')
+            border = Border(
+                left=Side(style='thin', color='E5E7EB'),
+                right=Side(style='thin', color='E5E7EB'),
+                top=Side(style='thin', color='E5E7EB'),
+                bottom=Side(style='thin', color='E5E7EB'),
+            )
+
+            # En-tête
+            ws['A1'] = f"Rapport {report_type.capitalize()}"
+            ws['A1'].font = Font(bold=True, size=16, color='1E40AF')
+            ws.merge_cells('A1:E1')
+            ws['A1'].alignment = Alignment(horizontal='center')
+
+            ws['A2'] = (
+                f"Période du {start_date.strftime('%d/%m/%Y')} "
+                f"au {end_date.strftime('%d/%m/%Y')}"
+            )
+            ws.merge_cells('A2:E2')
+            ws['A2'].alignment = Alignment(horizontal='center')
+            ws['A2'].font = Font(italic=True, color='6B7280')
+
+            # Bloc résumé
+            row = 4
+            summary = [
+                ('Ventes', data.get('total_sales', 0), None),
+                ('CA HT (net)', f"{data.get('total_revenue', 0):.2f} DH", None),
+                ('Marge brute (vente - achat)',
+                 f"{data.get('gross_margin', 0):.2f} DH", None),
+                ('Dépenses d\'exploitation',
+                 f"{data.get('operating_expenses', 0):.2f} DH", red),
+                ('Bénéfice net',
+                 f"{data.get('total_profit', 0):.2f} DH", green),
+            ]
+            for label, value, font in summary:
+                ws.cell(row=row, column=1, value=label).font = Font(bold=True)
+                ws.cell(row=row, column=1).fill = grey_fill
+                cell = ws.cell(row=row, column=2, value=value)
+                if font:
+                    cell.font = font
+                row += 1
+
+            if data.get('returns_count', 0) > 0:
+                ws.cell(row=row, column=1,
+                        value='Retours').font = Font(bold=True)
+                ws.cell(row=row, column=2,
+                        value=f"-{data.get('total_returns', 0):.2f} DH "
+                              f"({data.get('returns_count', 0)})").font = red
+                row += 1
+
+            # Tableau produits
+            row += 2
+            headers = ['Produit', 'Code-barres', 'Prix unit. HT',
+                       'Qté', 'CA HT', 'Marge']
+            for col, h in enumerate(headers, start=1):
+                c = ws.cell(row=row, column=col, value=h)
+                c.font = blue
+                c.fill = blue_fill
+                c.alignment = Alignment(horizontal='center')
+                c.border = border
+            row += 1
+
+            for item in data.get('items_sold', []):
+                ws.cell(row=row, column=1, value=item.get('name', ''))
+                ws.cell(row=row, column=2, value=item.get('barcode', ''))
+                ws.cell(row=row, column=3,
+                        value=float(item.get('unit_price', 0)))
+                ws.cell(row=row, column=4, value=item.get('quantity', 0))
+                ws.cell(row=row, column=5,
+                        value=float(item.get('revenue', 0)))
+                margin_cell = ws.cell(row=row, column=6,
+                                      value=float(item.get('profit', 0)))
+                margin_cell.font = green
+                for col in range(1, 7):
+                    ws.cell(row=row, column=col).border = border
+                row += 1
+
+            # Largeurs colonnes
+            widths = [38, 18, 14, 8, 14, 14]
+            for i, w in enumerate(widths, start=1):
+                ws.column_dimensions[chr(64 + i)].width = w
+
+            # Pied de page
+            row += 2
+            local_time = timezone.localtime(timezone.now())
+            ws.cell(row=row, column=1,
+                    value=f"Généré le {local_time.strftime('%d/%m/%Y à %H:%M')}"
+                    ).font = Font(italic=True, color='6B7280', size=9)
+
+            buffer = BytesIO()
+            wb.save(buffer)
+            buffer.seek(0)
+
+            response = HttpResponse(
+                buffer.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            )
+            response['Content-Disposition'] = (
+                f'attachment; filename="rapport_{report_type}_{start_date}.xlsx"'
+            )
+            return response
+        except Exception:
+            logger.exception("Excel report generation failed")
             return Response(
-                {'detail': "Erreur lors de la génération du PDF."},
+                {'detail': "Erreur lors de la génération du rapport."},
                 status=500,
             )
 
@@ -318,6 +456,45 @@ class StatsView(APIView):
         if yesterday_revenue > 0:
             revenue_change = ((today_revenue - yesterday_revenue) / yesterday_revenue) * 100
         
+        # Série 7 derniers jours (pour AreaChart Dashboard)
+        from django.db.models.functions import TruncDay, TruncHour
+        seven_days_ago = today - timedelta(days=6)  # 7 jours inclus today
+        daily_qs = (
+            Sale.objects.filter(created_at__date__gte=seven_days_ago)
+            .annotate(day=TruncDay('created_at'))
+            .values('day')
+            .annotate(revenue=Sum('total_ttc'), count=Count('id'))
+            .order_by('day')
+        )
+        by_day = {row['day'].date(): row for row in daily_qs}
+        revenue_7d = []
+        for i in range(7):
+            d = seven_days_ago + timedelta(days=i)
+            row = by_day.get(d)
+            revenue_7d.append({
+                'label': d.strftime('%a %d/%m'),
+                'date': d.isoformat(),
+                'revenue': float(row['revenue'] or 0) if row else 0.0,
+                'count': row['count'] if row else 0,
+            })
+
+        # Série horaire pour aujourd'hui (BarChart)
+        hourly_qs = (
+            today_sales.annotate(hour=TruncHour('created_at'))
+            .values('hour')
+            .annotate(revenue=Sum('total_ttc'), count=Count('id'))
+            .order_by('hour')
+        )
+        by_hour = {row['hour'].hour: row for row in hourly_qs}
+        hourly_today = []
+        for h in range(8, 22):  # 8h -> 21h
+            row = by_hour.get(h)
+            hourly_today.append({
+                'label': f'{h}h',
+                'revenue': float(row['revenue'] or 0) if row else 0.0,
+                'count': row['count'] if row else 0,
+            })
+
         return Response({
             'today': {
                 'sales_count': today_sales.count(),
@@ -333,7 +510,9 @@ class StatsView(APIView):
                 'revenue': float(month_revenue)
             },
             'top_products': list(top_products),
-            'low_stock': list(low_stock)
+            'low_stock': list(low_stock),
+            'revenue_7d': revenue_7d,
+            'hourly_today': hourly_today,
         })
 
 

@@ -10,7 +10,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsAdminRole
-from sales.aggregates import revenue_for_month
+from calendar import monthrange
+from datetime import date as _date
+
+from sales.aggregates import (
+    revenue_for_month,
+    gross_margin_for_period,
+)
 
 from .models import ExpenseCategory, MonthlyAccounting, Expense
 from .serializers import (
@@ -57,13 +63,20 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         monthly, _ = MonthlyAccounting.objects.get_or_create(year=year, month=month)
         data = self.get_serializer(monthly).data
         data['revenue'] = float(revenue_for_month(year, month))
-        # Accounting profit = gross revenue TTC - manager withdrawal - operating expenses.
-        # This intentionally differs from the Reporting "profit" (revenue - COGS),
-        # because accounting tracks owner cash flow while reporting tracks margin.
-        data['net_profit'] = (
-            data['revenue']
-            - float(monthly.manager_withdrawal)
-            - data['total_expenses']
+
+        # Bornes du mois pour le calcul de la marge brute
+        last_day = monthrange(year, month)[1]
+        start = _date(year, month, 1)
+        end = _date(year, month, last_day)
+        gross_margin = float(gross_margin_for_period(start, end))
+
+        # Bénéfice net = marge brute (vente HT - achat) - dépenses d'exploitation.
+        # Le prélèvement gérant est une distribution de bénéfice, pas une charge :
+        # on l'expose à part pour le suivi de trésorerie.
+        data['gross_margin'] = gross_margin
+        data['net_profit'] = gross_margin - data['total_expenses']
+        data['cash_after_withdrawal'] = (
+            data['net_profit'] - float(monthly.manager_withdrawal)
         )
         return Response(data)
 
@@ -104,13 +117,19 @@ class YearSummaryView(APIView):
                 float(sum(e.amount for e in entry.expenses.all())) if entry else 0.0
             )
             revenue = float(revenue_for_month(year, m))
+            last_day = monthrange(year, m)[1]
+            gross_margin = float(gross_margin_for_period(
+                _date(year, m, 1), _date(year, m, last_day)
+            ))
+            net_profit = gross_margin - expenses_total
             months.append({
                 'month': m,
                 'label': date(year, m, 1).strftime('%b'),
                 'revenue': revenue,
+                'gross_margin': gross_margin,
                 'manager_withdrawal': withdrawal,
                 'expenses': expenses_total,
-                'net_profit': revenue - withdrawal - expenses_total,
+                'net_profit': net_profit,
             })
 
         # Quarters
@@ -121,6 +140,7 @@ class YearSummaryView(APIView):
                 'quarter': q,
                 'label': f'Q{q}',
                 'revenue': sum(x['revenue'] for x in qmonths),
+                'gross_margin': sum(x['gross_margin'] for x in qmonths),
                 'manager_withdrawal': sum(x['manager_withdrawal'] for x in qmonths),
                 'expenses': sum(x['expenses'] for x in qmonths),
                 'net_profit': sum(x['net_profit'] for x in qmonths),
@@ -140,6 +160,7 @@ class YearSummaryView(APIView):
 
         totals = {
             'revenue': sum(m['revenue'] for m in months),
+            'gross_margin': sum(m['gross_margin'] for m in months),
             'manager_withdrawal': sum(m['manager_withdrawal'] for m in months),
             'expenses': sum(m['expenses'] for m in months),
             'net_profit': sum(m['net_profit'] for m in months),

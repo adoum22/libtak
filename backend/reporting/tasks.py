@@ -73,9 +73,14 @@ def get_report_data(start_date, end_date):
     for ret in completed_returns:
         total_returns += ret.refund_amount or Decimal('0')
     
-    # Soustraire les retours du CA et du bénéfice
+    # Dépenses d'exploitation rattachées à la période (loyer, salaires, etc.)
+    from sales.aggregates import operating_expenses_for_period
+    operating_expenses = operating_expenses_for_period(start_date, end_date)
+
+    # Bénéfice net = (prix_vente - prix_achat) - retours - dépenses
     net_revenue = float(total_revenue) - float(total_returns)
-    net_profit = float(total_profit) - float(total_returns)
+    gross_margin = float(total_profit) - float(total_returns)
+    net_profit = gross_margin - float(operating_expenses)
     
     # Données pour le graphique
     from django.db.models.functions import TruncHour, TruncDay
@@ -127,8 +132,10 @@ def get_report_data(start_date, end_date):
 
     result = {
         'total_sales': total_sales,
-        'total_revenue': net_revenue,  # CA net (après retours)
-        'total_profit': net_profit,     # Bénéfice net (après retours)
+        'total_revenue': net_revenue,       # CA net (après retours)
+        'gross_margin': gross_margin,       # Marge brute = revenue HT - COGS - retours
+        'operating_expenses': float(operating_expenses),
+        'total_profit': net_profit,         # Bénéfice net = marge brute - dépenses
         'items_sold': items_sold,
         'chart_data': chart_data
     }

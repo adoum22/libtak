@@ -75,38 +75,65 @@ export default function Reports() {
         queryFn: () => client.get(`/reporting/${reportType}/${getQueryParams()}`).then(res => res.data)
     });
 
-    const handleDownloadPDF = async () => {
+    const handleDownload = async (format?: 'xlsx') => {
         try {
-            const response = await client.get(`/reporting/export_pdf/${getQueryParams()}&type=${reportType}`, {
-                responseType: 'blob'
-            });
+            const fmtQuery = format ? `&format=${format}` : '';
+            const response = await client.get(
+                `/reporting/export_pdf/${getQueryParams()}&type=${reportType}${fmtQuery}`,
+                { responseType: 'blob' }
+            );
 
-            const url = window.URL.createObjectURL(new Blob([response.data]));
+            // Détecter le type réel renvoyé (le serveur peut servir Excel
+            // en fallback si reportlab n'est pas installé).
+            const contentType: string = response.headers?.['content-type'] || '';
+            const isExcel = contentType.includes('spreadsheetml');
+            const ext = isExcel ? 'xlsx' : 'pdf';
+            const blob = new Blob([response.data], { type: contentType || undefined });
+
+            const url = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.setAttribute('download', `Rapport_${reportType}_${new Date().toISOString().split('T')[0]}.pdf`);
+            link.setAttribute(
+                'download',
+                `Rapport_${reportType}_${new Date().toISOString().split('T')[0]}.${ext}`
+            );
             document.body.appendChild(link);
             link.click();
             link.remove();
+            window.URL.revokeObjectURL(url);
         } catch (error: any) {
-            console.error('Erreur lors du téléchargement du PDF', error);
-            const message = error.response?.data?.detail || error.message || 'Erreur lors du téléchargement du PDF';
+            console.error('Erreur lors du téléchargement', error);
+            const message = error.response?.data?.detail || error.message || 'Erreur lors du téléchargement';
             toast.error('Erreur : ' + message);
         }
     };
+
+    const handleDownloadPDF = () => handleDownload();
+    const handleDownloadExcel = () => handleDownload('xlsx');
 
     return (
         <div className="space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold">Rapports de Ventes</h1>
                 {report && (
-                    <button
-                        onClick={handleDownloadPDF}
-                        className="btn-outline flex items-center gap-2 text-primary border-primary hover:bg-primary hover:text-white"
-                    >
-                        <Download size={20} />
-                        <span>Télécharger PDF</span>
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={handleDownloadPDF}
+                            className="btn-outline flex items-center gap-2 text-primary border-primary hover:bg-primary hover:text-white"
+                            title="PDF si disponible, sinon Excel automatiquement"
+                        >
+                            <Download size={20} />
+                            <span>Télécharger PDF</span>
+                        </button>
+                        <button
+                            onClick={handleDownloadExcel}
+                            className="btn-outline flex items-center gap-2 text-success border-success hover:bg-success hover:text-white"
+                            title="Forcer l'export Excel"
+                        >
+                            <Download size={20} />
+                            <span>Excel</span>
+                        </button>
+                    </div>
                 )}
             </div>
 

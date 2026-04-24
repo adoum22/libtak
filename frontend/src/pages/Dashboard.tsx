@@ -10,6 +10,17 @@ import {
     ArrowDownRight,
     Package
 } from 'lucide-react';
+import {
+    AreaChart,
+    Area,
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer,
+} from 'recharts';
 
 interface DailyData {
     total_sales: number;
@@ -33,6 +44,17 @@ interface StatsData {
         name: string;
         stock: number;
         min_stock: number;
+    }>;
+    revenue_7d?: Array<{
+        label: string;
+        date: string;
+        revenue: number;
+        count: number;
+    }>;
+    hourly_today?: Array<{
+        label: string;
+        revenue: number;
+        count: number;
     }>;
 }
 
@@ -138,6 +160,102 @@ export default function Dashboard() {
                     </div>
                 </div>
             </div>
+
+            {/* Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* CA 7 derniers jours */}
+                <div className="card">
+                    <div className="card-header">
+                        <h2 className="text-lg font-semibold">📈 CA — 7 derniers jours</h2>
+                    </div>
+                    <div className="card-body">
+                        {stats?.revenue_7d?.some(d => d.revenue > 0) ? (
+                            <ResponsiveContainer width="100%" height={240}>
+                                <AreaChart data={stats.revenue_7d}>
+                                    <defs>
+                                        <linearGradient id="caGradient" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.5} />
+                                            <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        formatter={(v: number) => [`${v.toLocaleString('fr-FR')} DH`, 'CA']}
+                                        contentStyle={{ borderRadius: 8, fontSize: 12 }}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="revenue"
+                                        stroke="#3b82f6"
+                                        strokeWidth={2}
+                                        fill="url(#caGradient)"
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="text-center py-12 text-muted">
+                                Pas de ventes sur les 7 derniers jours.
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Activité par heure aujourd'hui */}
+                <div className="card">
+                    <div className="card-header">
+                        <h2 className="text-lg font-semibold">🕐 Activité par heure (aujourd'hui)</h2>
+                    </div>
+                    <div className="card-body">
+                        {stats?.hourly_today?.some(h => h.revenue > 0) ? (
+                            <ResponsiveContainer width="100%" height={240}>
+                                <BarChart data={stats.hourly_today}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip
+                                        formatter={(v: number) => [`${v.toLocaleString('fr-FR')} DH`, 'CA']}
+                                        contentStyle={{ borderRadius: 8, fontSize: 12 }}
+                                    />
+                                    <Bar dataKey="revenue" fill="#10b981" radius={[6, 6, 0, 0]} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="text-center py-12 text-muted">
+                                Pas encore de ventes aujourd'hui.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Top produits BarChart horizontal */}
+            {stats?.top_products && stats.top_products.length > 0 && (
+                <div className="card">
+                    <div className="card-header">
+                        <h2 className="text-lg font-semibold">🏆 Top produits — quantité (ce mois)</h2>
+                    </div>
+                    <div className="card-body">
+                        <ResponsiveContainer width="100%" height={Math.max(180, stats.top_products.length * 42)}>
+                            <BarChart
+                                data={stats.top_products.map(p => ({
+                                    name: (p.product__name || '').slice(0, 28),
+                                    qty: Number(p.total_qty) || 0,
+                                }))}
+                                layout="vertical"
+                                margin={{ left: 16, right: 16 }}
+                            >
+                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                <XAxis type="number" tick={{ fontSize: 11 }} />
+                                <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={150} />
+                                <Tooltip contentStyle={{ borderRadius: 8, fontSize: 12 }} />
+                                <Bar dataKey="qty" fill="#6366f1" radius={[0, 6, 6, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            )}
 
             {/* Two Column Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
