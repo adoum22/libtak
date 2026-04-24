@@ -17,7 +17,8 @@ import {
     RotateCcw,
     ClipboardList,
     ClipboardCheck,
-    Calculator
+    Calculator,
+    BookOpenText,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -111,7 +112,13 @@ export default function Layout() {
             {/* Sidebar */}
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
                 <div className="sidebar-brand">
-                    <h1>📚 Librairie Attaquaddoum</h1>
+                    <div className="brand-logo">
+                        <BookOpenText size={22} strokeWidth={2.2} />
+                    </div>
+                    <div className="brand-text">
+                        <h1>Librairie</h1>
+                        <p>Attaquaddoum</p>
+                    </div>
                 </div>
 
                 <nav className="sidebar-nav">

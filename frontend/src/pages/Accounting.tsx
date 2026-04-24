@@ -171,11 +171,14 @@ export default function Accounting() {
 
         return (
             <div className="space-y-6">
-                {/* KPI cards */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                {/* KPI cards — 4 horizontales comme l'onglet Annuel */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="stat-card">
                         <div className="stat-icon bg-success-light"><DollarSign size={24} className="text-success" /></div>
-                        <div><p className="stat-label">Chiffre d'affaires</p><p className="stat-value">{fmt(revenue)} DH</p></div>
+                        <div>
+                            <p className="stat-label">Chiffre d'affaires</p>
+                            <p className="stat-value">{fmt(revenue)} DH</p>
+                        </div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-blue-100"><TrendingUp size={24} className="text-blue-600" /></div>
@@ -187,7 +190,10 @@ export default function Accounting() {
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-red-100"><TrendingDown size={24} className="text-red-500" /></div>
-                        <div><p className="stat-label">Dépenses</p><p className="stat-value">{fmt(totalExp)} DH</p></div>
+                        <div>
+                            <p className="stat-label">Dépenses</p>
+                            <p className="stat-value">{fmt(totalExp)} DH</p>
+                        </div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-accent-light"><TrendingUp size={24} className="text-accent" /></div>
@@ -195,14 +201,6 @@ export default function Accounting() {
                             <p className="stat-label">Bénéfice net</p>
                             <p className={`stat-value ${net >= 0 ? 'text-success' : 'text-red-500'}`}>{fmt(net)} DH</p>
                             <p className="text-xs text-muted">Marge − Dépenses</p>
-                        </div>
-                    </div>
-                    <div className="stat-card">
-                        <div className="stat-icon bg-warning-light"><TrendingDown size={24} className="text-warning" /></div>
-                        <div>
-                            <p className="stat-label">Retrait gérant</p>
-                            <p className="stat-value">{fmt(wd)} DH</p>
-                            <p className="text-xs text-muted">Reste : {fmt(cashAfter)} DH</p>
                         </div>
                     </div>
                 </div>
@@ -259,7 +257,14 @@ export default function Accounting() {
 
                 {/* Withdrawal + notes form */}
                 <div className="card p-6">
-                    <h2 className="text-lg font-semibold mb-4">Saisie du mois</h2>
+                    <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                        <h2 className="text-lg font-semibold">Saisie du mois</h2>
+                        <div className="text-sm text-muted">
+                            Retrait gérant : <span className="font-semibold text-warning">{fmt(wd)} DH</span>
+                            <span className="mx-2">•</span>
+                            Reste après retrait : <span className={`font-semibold ${cashAfter >= 0 ? 'text-success' : 'text-red-500'}`}>{fmt(cashAfter)} DH</span>
+                        </div>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label className="block text-sm font-medium mb-1">Retrait du gérant (DH)</label>

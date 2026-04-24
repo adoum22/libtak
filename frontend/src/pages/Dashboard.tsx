@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import client from '../api/client';
 import { useTranslation } from 'react-i18next';
 import {
@@ -58,14 +59,23 @@ interface StatsData {
     }>;
 }
 
+type ChartRange = 7 | 30 | 90;
+
 export default function Dashboard() {
     const { t } = useTranslation();
+    const [range, setRange] = useState<ChartRange>(7);
 
     const { data: stats, isLoading } = useQuery<StatsData>({
-        queryKey: ['dashboardStats'],
-        queryFn: () => client.get('/reporting/stats/').then(res => res.data),
+        queryKey: ['dashboardStats', range],
+        queryFn: () => client.get(`/reporting/stats/?days=${range}`).then(res => res.data),
         refetchInterval: 30000 // Refresh every 30s
     });
+
+    const rangeOptions: { value: ChartRange; label: string }[] = [
+        { value: 7, label: '7 jours' },
+        { value: 30, label: '30 jours' },
+        { value: 90, label: '3 mois' },
+    ];
 
     if (isLoading) {
         return (
@@ -163,10 +173,27 @@ export default function Dashboard() {
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* CA 7 derniers jours */}
+                {/* CA — période sélectionnable */}
                 <div className="card">
-                    <div className="card-header">
-                        <h2 className="text-lg font-semibold">📈 CA — 7 derniers jours</h2>
+                    <div className="card-header flex items-center justify-between gap-3 flex-wrap">
+                        <h2 className="text-lg font-semibold">
+                            📈 CA — {rangeOptions.find(r => r.value === range)?.label}
+                        </h2>
+                        <div className="inline-flex bg-tertiary rounded-lg p-1 text-sm">
+                            {rangeOptions.map(opt => (
+                                <button
+                                    key={opt.value}
+                                    onClick={() => setRange(opt.value)}
+                                    className={`px-3 py-1.5 rounded-md transition font-medium ${
+                                        range === opt.value
+                                            ? 'bg-accent text-white shadow-sm'
+                                            : 'text-muted hover:text-primary'
+                                    }`}
+                                >
+                                    {opt.label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                     <div className="card-body">
                         {stats?.revenue_7d?.some(d => d.revenue > 0) ? (

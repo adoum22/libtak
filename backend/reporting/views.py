@@ -456,27 +456,56 @@ class StatsView(APIView):
         if yesterday_revenue > 0:
             revenue_change = ((today_revenue - yesterday_revenue) / yesterday_revenue) * 100
         
-        # Série 7 derniers jours (pour AreaChart Dashboard)
-        from django.db.models.functions import TruncDay, TruncHour
-        seven_days_ago = today - timedelta(days=6)  # 7 jours inclus today
-        daily_qs = (
-            Sale.objects.filter(created_at__date__gte=seven_days_ago)
-            .annotate(day=TruncDay('created_at'))
-            .values('day')
-            .annotate(revenue=Sum('total_ttc'), count=Count('id'))
-            .order_by('day')
-        )
-        by_day = {row['day'].date(): row for row in daily_qs}
-        revenue_7d = []
-        for i in range(7):
-            d = seven_days_ago + timedelta(days=i)
-            row = by_day.get(d)
-            revenue_7d.append({
-                'label': d.strftime('%a %d/%m'),
-                'date': d.isoformat(),
-                'revenue': float(row['revenue'] or 0) if row else 0.0,
-                'count': row['count'] if row else 0,
-            })
+        # Série N derniers jours (pour AreaChart Dashboard).
+        # ?days=7 (défaut) | 30 | 90, clamp 1..365.
+        from django.db.models.functions import TruncDay, TruncHour, TruncWeek
+        try:
+            days = int(request.query_params.get('days', 7))
+        except (TypeError, ValueError):
+            days = 7
+        days = max(1, min(365, days))
+
+        period_start = today - timedelta(days=days - 1)
+
+        if days <= 31:
+            # granularité jour
+            daily_qs = (
+                Sale.objects.filter(created_at__date__gte=period_start)
+                .annotate(day=TruncDay('created_at'))
+                .values('day')
+                .annotate(revenue=Sum('total_ttc'), count=Count('id'))
+                .order_by('day')
+            )
+            by_day = {row['day'].date(): row for row in daily_qs}
+            revenue_7d = []
+            for i in range(days):
+                d = period_start + timedelta(days=i)
+                row = by_day.get(d)
+                fmt = '%a %d/%m' if days <= 7 else '%d/%m'
+                revenue_7d.append({
+                    'label': d.strftime(fmt),
+                    'date': d.isoformat(),
+                    'revenue': float(row['revenue'] or 0) if row else 0.0,
+                    'count': row['count'] if row else 0,
+                })
+        else:
+            # granularité semaine pour > 1 mois (sinon trop dense)
+            weekly_qs = (
+                Sale.objects.filter(created_at__date__gte=period_start)
+                .annotate(w=TruncWeek('created_at'))
+                .values('w')
+                .annotate(revenue=Sum('total_ttc'), count=Count('id'))
+                .order_by('w')
+            )
+            revenue_7d = [
+                {
+                    'label': row['w'].strftime('S%V'),
+                    'date': row['w'].date().isoformat(),
+                    'revenue': float(row['revenue'] or 0),
+                    'count': row['count'],
+                }
+                for row in weekly_qs
+            ]
 
         # Série horaire pour aujourd'hui (BarChart)
         hourly_qs = (
