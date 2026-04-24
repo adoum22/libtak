@@ -65,3 +65,9 @@ htmlcov/
 # Misc
 *.bak
 *.tmp
+
+# Local secrets / notes (never push)
+code secret*.txt
+*secret*.txt
+secrets/
+*.local.txt
