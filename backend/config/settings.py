@@ -20,6 +20,11 @@ if not SECRET_KEY:
 
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
+# CSRF (needed when frontend is on a different domain, e.g. Vercel)
+CSRF_TRUSTED_ORIGINS = [
+    o.strip() for o in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()
+]
+
 # Application definition
 _OPTIONAL_APPS = []
 
