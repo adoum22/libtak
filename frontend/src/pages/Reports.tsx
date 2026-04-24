@@ -87,7 +87,7 @@ export default function Reports() {
             // le header content-type via axios -> on lit aussi blob.type
             // qui est posé par le navigateur depuis la réponse.
             const blobType: string = (response.data as Blob)?.type || '';
-            const headerType: string = response.headers?.['content-type'] || '';
+            const headerType: string = String(response.headers?.['content-type'] ?? '');
             const contentType = blobType || headerType;
             const isExcel = contentType.includes('spreadsheetml')
                 || contentType.includes('officedocument')

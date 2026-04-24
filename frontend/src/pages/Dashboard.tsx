@@ -182,7 +182,7 @@ export default function Dashboard() {
                                     <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                                     <YAxis tick={{ fontSize: 11 }} />
                                     <Tooltip
-                                        formatter={(v: number) => [`${v.toLocaleString('fr-FR')} DH`, 'CA']}
+                                        formatter={(v: any) => [`${(Number(v) || 0).toLocaleString('fr-FR')} DH`, 'CA']}
                                         contentStyle={{ borderRadius: 8, fontSize: 12 }}
                                     />
                                     <Area
@@ -215,7 +215,7 @@ export default function Dashboard() {
                                     <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                                     <YAxis tick={{ fontSize: 11 }} />
                                     <Tooltip
-                                        formatter={(v: number) => [`${v.toLocaleString('fr-FR')} DH`, 'CA']}
+                                        formatter={(v: any) => [`${(Number(v) || 0).toLocaleString('fr-FR')} DH`, 'CA']}
                                         contentStyle={{ borderRadius: 8, fontSize: 12 }}
                                     />
                                     <Bar dataKey="revenue" fill="#10b981" radius={[6, 6, 0, 0]} />
