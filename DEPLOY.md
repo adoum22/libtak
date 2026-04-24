@@ -71,6 +71,39 @@ Onglet **Web** → bouton vert **Reload** → visite `https://dido22.pythonanywh
 
 ---
 
+### 1.8 Rapports automatiques par email (sans Celery/Redis)
+
+Le tier gratuit PA n'a pas Redis → Celery Beat ne tourne pas. À la place on utilise la **Scheduled Task** intégrée de PA (1 tâche/jour gratuite) qui appelle une commande Django unique.
+
+1. Va sur le dashboard PA → onglet **Tasks**.
+2. Dans **"Daily task"**, choisis l'heure : **23:00**.
+3. Dans la case commande, colle exactement (remplace `dido22` si besoin) :
+   ```
+   workon libtak && cd /home/dido22/libtak/backend && python manage.py send_scheduled_reports
+   ```
+4. Clique **Create**.
+
+Cette commande :
+- Envoie le rapport **quotidien** chaque jour
+- Envoie le **hebdomadaire** chaque dimanche
+- Envoie le **mensuel** le 28
+- Envoie le **trimestriel** le 28 mars/juin/sept/déc
+- Envoie l'**annuel** le 31 décembre
+- Envoie l'**alerte stock bas** chaque jour
+- Fait le **backup DB** chaque jour
+
+**Test manuel** (depuis la console Bash) :
+```bash
+workon libtak
+cd ~/libtak/backend
+python manage.py send_scheduled_reports --dry-run     # voir ce qui tournerait aujourd'hui
+python manage.py send_scheduled_reports --force-all   # forcer tous les rapports maintenant
+```
+
+> ℹ️ Pour que les emails partent vraiment, vérifie que les variables `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL` sont bien définies (étape 1.5) et que `email_recipients` est rempli dans **Settings → Rapports** sur le frontend.
+
+---
+
 ## 2. Frontend — Vercel (gratuit)
 
 ### 2.1 Push du code (déjà fait)
