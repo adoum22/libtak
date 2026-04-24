@@ -20,11 +20,9 @@ from .serializers import ReportSettingsSerializer, ReportLogSerializer
 from .tasks import get_report_data
 import logging
 
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
+# reportlab is imported lazily inside the PDF endpoint so the rest of the
+# app keeps working on lightweight environments (e.g. PythonAnywhere free
+# tier) where reportlab can't fit in the disk quota.
 from io import BytesIO
 
 class ExportReportView(APIView):
@@ -56,6 +54,12 @@ class ExportReportView(APIView):
         data = get_report_data(start_date, end_date)
 
         try:
+            # Lazy import — only load reportlab when this endpoint is hit.
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import cm
             # Création du PDF
             buffer = BytesIO()
             doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
