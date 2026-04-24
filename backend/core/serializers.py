@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
-from .models import AppSettings
+from .models import AppSettings, AuditLog
+from .image_validators import validate_image_upload
 
 User = get_user_model()
 
@@ -18,7 +19,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             if not user:
                 # Try email if username not found
                 user = User.objects.filter(email=username).first()
-            
+
             if user:
                 if user.check_password(password):
                     if not user.is_active:
@@ -28,13 +29,28 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                         )
                 # If password incorrect, let standard auth handle it (or return generic error)
 
-        return super().validate(attrs)
+        data = super().validate(attrs)
+        try:
+            AuditLog.log(
+                user=self.user,
+                action=AuditLog.ActionType.LOGIN,
+                model_name='User',
+                object_id=self.user.id,
+                object_repr=str(self.user),
+                request=self.context.get('request'),
+            )
+        except Exception:
+            pass
+        return data
 
 
 class UserSerializer(serializers.ModelSerializer):
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     is_admin_role = serializers.BooleanField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
+
+    def validate_avatar(self, value):
+        return validate_image_upload(value)
     
     class Meta:
         model = User
@@ -57,7 +73,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=6)
+    password = serializers.CharField(write_only=True, min_length=12)
     password_confirm = serializers.CharField(write_only=True)
     
     class Meta:
@@ -92,12 +108,15 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             'can_view_stock', 'can_manage_stock'
         ]
 
+    def validate_avatar(self, value):
+        return validate_image_upload(value)
+
 
 
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
-    new_password = serializers.CharField(required=True, min_length=6)
+    new_password = serializers.CharField(required=True, min_length=12)
     new_password_confirm = serializers.CharField(required=True)
     
     def validate(self, attrs):
@@ -110,7 +129,10 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class AppSettingsSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
-    
+
+    def validate_store_logo(self, value):
+        return validate_image_upload(value)
+
     class Meta:
         model = AppSettings
         fields = [

@@ -16,7 +16,7 @@ class User(AbstractUser):
         choices=Role.choices,
         default=Role.CASHIER
     )
-    phone = models.CharField(_('Phone'), max_length=20, blank=True)
+    phone = models.CharField(_('Phone'), max_length=30, blank=True)
     avatar = models.ImageField(
         _('Avatar'),
         upload_to='avatars/',

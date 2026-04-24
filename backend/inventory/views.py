@@ -7,6 +7,9 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, F
 from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 from .serializers import (
@@ -112,10 +115,11 @@ class ProductViewSet(viewsets.ModelViewSet):
             try:
                 import pandas as pd
                 import openpyxl # Check existence
-            except ImportError as e:
+            except ImportError:
+                logger.exception("Missing import dependency for product import")
                 return Response(
-                    {'detail': f'Erreur configuration serveur (librairie manquante): {str(e)}. Essayez de redémarrer le serveur backend.'}, 
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    {'detail': "Configuration serveur incomplète pour l'import."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
             from .models import Category, Supplier
@@ -130,8 +134,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                     df = pd.read_csv(file)
                 else:
                     df = pd.read_excel(file)
-            except Exception as e:
-                return Response({'detail': f'Impossible de lire le fichier : {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                logger.exception("Could not parse uploaded import file")
+                return Response(
+                    {'detail': "Impossible de lire le fichier."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             
             # Standardize column names (lowercase, strip)
             df.columns = df.columns.str.lower().str.strip()
@@ -215,11 +223,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                 'errors': errors
             }, status=status.HTTP_201_CREATED)
             
-        except Exception as e:
-            # Catch-all for any other unhandled error
-            import traceback
-            traceback.print_exc()
-            return Response({'detail': f'Erreur interne : {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception:
+            logger.exception("Product import failed")
+            return Response(
+                {'detail': "Erreur interne lors de l'import."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=['post'])
     def add_stock(self, request, pk=None):
@@ -350,8 +359,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 item.save()
                 
                 # Ajouter au stock
-                item.product.stock += qty
-                item.product.save()
+                # Stock update handled by StockMovement signal
                 
                 # Créer mouvement de stock
                 StockMovement.objects.create(
@@ -384,7 +392,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
 class InventoryCountViewSet(viewsets.ModelViewSet):
     """API pour les inventaires physiques"""
-    queryset = InventoryCount.objects.select_related('created_by').prefetch_related('items__product').all()
+    queryset = InventoryCount.objects.select_related('counted_by').prefetch_related('items__product').all()
     permission_classes = [IsAuthenticated, IsAdminRole]
     filter_backends = [filters.OrderingFilter]
     ordering = ['-created_at']

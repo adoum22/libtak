@@ -3,11 +3,12 @@ API endpoints for data synchronization between local and cloud servers.
 """
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.response import Response
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
+from django.utils.crypto import constant_time_compare
 import logging
 
 from sales.models import Sale, SaleItem, Return, ReturnItem
@@ -16,38 +17,29 @@ from inventory.models import Product, Category, Supplier
 logger = logging.getLogger(__name__)
 
 
-class SyncTokenPermission:
+class SyncTokenPermission(BasePermission):
     """
-    Permission class that checks for valid sync token.
-    Used for server-to-server sync authentication.
+    Permission class that checks for a valid sync token using a
+    constant-time comparison to avoid timing attacks.
     """
     def has_permission(self, request, view):
         auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('SyncToken '):
-            token = auth_header[10:]
-            expected_token = getattr(settings, 'SYNC_TOKEN', None)
-            return token and token == expected_token
-        return False
+        if not auth_header.startswith('SyncToken '):
+            return False
+        token = auth_header[len('SyncToken '):]
+        expected = getattr(settings, 'SYNC_TOKEN', None)
+        if not expected or not token:
+            return False
+        return constant_time_compare(token, expected)
 
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Uses custom token auth
+@permission_classes([SyncTokenPermission])
 def receive_sync_data(request):
     """
     Endpoint for receiving sync data from local server.
     This runs on the cloud server.
     """
-    # Verify sync token
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('SyncToken '):
-        return Response({'error': 'Invalid authorization'}, status=status.HTTP_401_UNAUTHORIZED)
-    
-    token = auth_header[10:]
-    expected_token = getattr(settings, 'SYNC_TOKEN', None)
-    
-    if not expected_token or token != expected_token:
-        return Response({'error': 'Invalid sync token'}, status=status.HTTP_401_UNAUTHORIZED)
-    
     data = request.data
     
     try:
@@ -79,38 +71,37 @@ def receive_sync_data(request):
             'sync_time': timezone.now().isoformat()
         })
     
-    except Exception as e:
-        logger.error(f"Sync receive error: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except Exception:
+        logger.exception("Sync receive failed")
+        return Response(
+            {'detail': 'Une erreur est survenue lors de la synchronisation.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 def _import_sale(sale_data: dict) -> bool:
     """Import a sale from local server."""
-    # Check if this sale already exists (by local_id)
     local_id = sale_data.get('local_id')
     if not local_id:
         return False
-    
-    # Use a reference field to track imported sales
-    existing = Sale.objects.filter(
-        created_at=sale_data['created_at']
-    ).first()
-    
-    if existing:
+    local_id = str(local_id)
+
+    if Sale.objects.filter(local_sync_id=local_id).exists():
         return False  # Already imported
-    
+
     from core.models import User
     user = None
     if sale_data.get('user_username'):
         user = User.objects.filter(username=sale_data['user_username']).first()
-    
+
     sale = Sale.objects.create(
         user=user,
         total_ht=sale_data['total_ht'],
         total_tva=0,  # Will be calculated
         total_ttc=sale_data['total_ttc'],
         payment_method=sale_data.get('payment_method', 'CASH'),
-        synced=True  # Mark as already synced
+        synced=True,
+        local_sync_id=local_id,
     )
     
     # Override created_at
@@ -135,33 +126,35 @@ def _import_sale(sale_data: dict) -> bool:
 
 def _import_return(return_data: dict) -> bool:
     """Import a return from local server."""
-    # Skip if already imported
     local_id = return_data.get('local_id')
     if not local_id:
         return False
-    
-    existing = Return.objects.filter(
-        created_at=return_data['created_at']
-    ).first()
-    
-    if existing:
+    local_id = str(local_id)
+
+    if Return.objects.filter(local_sync_id=local_id).exists():
         return False
-    
-    # Find the corresponding sale
-    sale = Sale.objects.filter(
-        created_at=return_data.get('sale_created_at')
-    ).first()
-    
+
+    sale_local_id = return_data.get('sale_local_id')
+    if sale_local_id:
+        sale_local_id = str(sale_local_id)
+    sale = None
+    if sale_local_id:
+        sale = Sale.objects.filter(local_sync_id=sale_local_id).first()
     if not sale:
-        logger.warning(f"Could not find sale for return {local_id}")
+        sale = Sale.objects.filter(
+            created_at=return_data.get('sale_created_at')
+        ).first()
+    if not sale:
+        logger.warning("Could not find sale for return %s", local_id)
         return False
-    
+
     ret = Return.objects.create(
         sale=sale,
         reason=return_data['reason'],
         refund_amount=return_data['total_refund'],
         status=return_data.get('status', 'COMPLETED'),
-        synced=True
+        synced=True,
+        local_sync_id=local_id,
     )
     
     Return.objects.filter(id=ret.id).update(created_at=return_data['created_at'])
@@ -186,22 +179,12 @@ def _update_cloud_stock_reference(stock_data: dict):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Uses custom token auth  
+@permission_classes([SyncTokenPermission])
 def get_master_data(request):
     """
     Endpoint for providing master data to local server.
     This runs on the cloud server.
     """
-    auth_header = request.headers.get('Authorization', '')
-    if not auth_header.startswith('SyncToken '):
-        return Response({'error': 'Invalid authorization'}, status=status.HTTP_401_UNAUTHORIZED)
-    
-    token = auth_header[10:]
-    expected_token = getattr(settings, 'SYNC_TOKEN', None)
-    
-    if not expected_token or token != expected_token:
-        return Response({'error': 'Invalid sync token'}, status=status.HTTP_401_UNAUTHORIZED)
-    
     since = request.query_params.get('since')
     
     # Get master data updated since the given timestamp
@@ -221,14 +204,14 @@ def get_master_data(request):
             pass
     
     products = []
-    for p in products_qs:
+    for p in products_qs.select_related('category'):
         products.append({
             'barcode': p.barcode,
             'name': p.name,
             'category_name': p.category.name if p.category else None,
-            'purchase_price_ht': str(p.purchase_price_ht),
+            'purchase_price': str(p.purchase_price),
             'sale_price_ht': str(p.sale_price_ht),
-            'tva_rate': str(p.tva_rate),
+            'tva': str(p.tva),
             'stock': p.stock,
             'min_stock': p.min_stock,
         })

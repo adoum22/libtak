@@ -38,6 +38,12 @@ frontend/.vite/
 *.swo
 *~
 
+# Claude Code agent state
+.claude/
+
+# PWA service-worker dev output
+frontend/dev-dist/
+
 # OS
 .DS_Store
 Thumbs.db

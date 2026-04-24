@@ -17,6 +17,10 @@ class Sale(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     synced = models.BooleanField(_('Synced to cloud'), default=False)
+    local_sync_id = models.CharField(
+        _('Local Sync ID'), max_length=64, unique=True, null=True, blank=True,
+        help_text=_('Unique id from origin server, used to dedupe imports'),
+    )
 
     class Meta:
         ordering = ['-created_at']
@@ -129,6 +133,10 @@ class Return(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     synced = models.BooleanField(_('Synced to cloud'), default=False)
+    local_sync_id = models.CharField(
+        _('Local Sync ID'), max_length=64, unique=True, null=True, blank=True,
+        help_text=_('Unique id from origin server, used to dedupe imports'),
+    )
 
     class Meta:
         verbose_name = _('Return')

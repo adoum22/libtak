@@ -46,7 +46,7 @@ class ProductModelTest(TestCase):
     def test_profit_percentage_calculation(self):
         """Test calcul du pourcentage de marge"""
         expected_percentage = ((Decimal('10.00') - Decimal('6.00')) / Decimal('6.00')) * 100
-        self.assertAlmostEqual(self.product.profit_percentage, float(expected_percentage), places=2)
+        self.assertAlmostEqual(float(self.product.profit_percentage), float(expected_percentage), places=2)
     
     def test_is_low_stock(self):
         """Test détection stock bas"""

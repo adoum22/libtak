@@ -3,6 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 
 from .serializers import (
@@ -13,7 +15,7 @@ from .serializers import (
     AppSettingsSerializer,
     CustomTokenObtainPairSerializer
 )
-from .models import AppSettings
+from .models import AppSettings, AuditLog
 from .permissions import IsAdminRole, CanManageUsers
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -22,6 +24,32 @@ User = get_user_model()
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_scope = 'login'
+
+
+class LogoutView(APIView):
+    """Blacklist the supplied refresh token."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        refresh = request.data.get('refresh')
+        if refresh:
+            try:
+                RefreshToken(refresh).blacklist()
+            except Exception:
+                pass
+        try:
+            AuditLog.log(
+                user=request.user,
+                action=AuditLog.ActionType.LOGOUT,
+                model_name='User',
+                object_id=request.user.id,
+                object_repr=str(request.user),
+                request=request,
+            )
+        except Exception:
+            pass
+        return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
 class UserMeView(generics.RetrieveUpdateAPIView):
@@ -70,12 +98,43 @@ class UserViewSet(viewsets.ModelViewSet):
         if role:
             queryset = queryset.filter(role=role)
         return queryset.order_by('username')
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        AuditLog.log(
+            user=self.request.user, action=AuditLog.ActionType.CREATE,
+            model_name='User', object_id=instance.id,
+            object_repr=str(instance), request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        AuditLog.log(
+            user=self.request.user, action=AuditLog.ActionType.UPDATE,
+            model_name='User', object_id=instance.id,
+            object_repr=str(instance), request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        repr_ = str(instance)
+        obj_id = instance.id
+        super().perform_destroy(instance)
+        AuditLog.log(
+            user=self.request.user, action=AuditLog.ActionType.DELETE,
+            model_name='User', object_id=obj_id,
+            object_repr=repr_, request=self.request,
+        )
     
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
         """Réinitialiser le mot de passe d'un utilisateur (Admin)"""
         user = self.get_object()
-        new_password = request.data.get('new_password', 'password123')
+        new_password = request.data.get('new_password')
+        if not new_password or len(new_password) < 12:
+            return Response(
+                {'detail': "Mot de passe d'au moins 12 caractères requis."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         user.set_password(new_password)
         user.save()
         return Response({
@@ -124,7 +183,7 @@ class PublicSettingsView(generics.RetrieveAPIView):
         return Response(data)
 
 
-from django.http import JsonResponse, HttpResponse
+from django.http import HttpResponse
 from datetime import datetime
 from io import BytesIO
 
@@ -172,22 +231,21 @@ class DatabaseExportView(generics.GenericAPIView):
         if include_products:
             ws = wb.active
             ws.title = "Produits"
-            headers = ['ID', 'Nom', 'Code-barres', 'Catégorie', 'Fournisseur', 'Prix Achat', 'Prix Vente', 'TVA %', 'Stock', 'Seuil', 'Unité', 'Actif']
+            headers = ['ID', 'Nom', 'Code-barres', 'Catégorie', 'Fournisseur', 'Prix Achat', 'Prix Vente HT', 'TVA %', 'Stock', 'Seuil', 'Actif']
             style_header(ws, headers)
-            
-            for row, prod in enumerate(Product.objects.all(), 2):
+
+            for row, prod in enumerate(Product.objects.select_related('category', 'supplier'), 2):
                 ws.cell(row=row, column=1, value=prod.id)
                 ws.cell(row=row, column=2, value=prod.name)
                 ws.cell(row=row, column=3, value=prod.barcode)
                 ws.cell(row=row, column=4, value=prod.category.name if prod.category else '')
                 ws.cell(row=row, column=5, value=prod.supplier.name if prod.supplier else '')
                 ws.cell(row=row, column=6, value=float(prod.purchase_price))
-                ws.cell(row=row, column=7, value=float(prod.sale_price))
+                ws.cell(row=row, column=7, value=float(prod.sale_price_ht))
                 ws.cell(row=row, column=8, value=float(prod.tva))
                 ws.cell(row=row, column=9, value=prod.stock)
                 ws.cell(row=row, column=10, value=prod.min_stock)
-                ws.cell(row=row, column=11, value=prod.unit)
-                ws.cell(row=row, column=12, value='Oui' if prod.is_active else 'Non')
+                ws.cell(row=row, column=11, value='Oui' if prod.active else 'Non')
         
         # Sheet: Catégories
         if include_categories:
@@ -218,21 +276,26 @@ class DatabaseExportView(generics.GenericAPIView):
         # Sheet: Ventes
         if include_sales:
             ws = wb.create_sheet("Ventes")
-            headers = ['ID Vente', 'Date', 'Total', 'Mode Paiement', 'Caissier', 'Produit', 'Quantité', 'Prix Unit.', 'Sous-total']
+            headers = ['ID Vente', 'Date', 'Total TTC', 'Mode Paiement', 'Caissier', 'Produit', 'Quantité', 'Prix Unit. HT', 'Sous-total HT']
             style_header(ws, headers)
-            
+
             row = 2
-            for sale in Sale.objects.all().order_by('-created_at')[:1000]:
+            sales_qs = (
+                Sale.objects.select_related('user')
+                .prefetch_related('items__product')
+                .order_by('-created_at')[:1000]
+            )
+            for sale in sales_qs:
                 for item in sale.items.all():
                     ws.cell(row=row, column=1, value=sale.id)
                     ws.cell(row=row, column=2, value=sale.created_at.strftime('%Y-%m-%d %H:%M'))
-                    ws.cell(row=row, column=3, value=float(sale.total))
+                    ws.cell(row=row, column=3, value=float(sale.total_ttc))
                     ws.cell(row=row, column=4, value=sale.payment_method)
-                    ws.cell(row=row, column=5, value=sale.cashier.username if sale.cashier else '')
-                    ws.cell(row=row, column=6, value=item.product.name if item.product else 'Produit supprimé')
+                    ws.cell(row=row, column=5, value=sale.user.username if sale.user else '')
+                    ws.cell(row=row, column=6, value=item.product.name if item.product else (item.product_name or 'Produit supprimé'))
                     ws.cell(row=row, column=7, value=item.quantity)
-                    ws.cell(row=row, column=8, value=float(item.unit_price))
-                    ws.cell(row=row, column=9, value=float(item.total))
+                    ws.cell(row=row, column=8, value=float(item.unit_price_ht))
+                    ws.cell(row=row, column=9, value=float(item.total_price_ht))
                     row += 1
         
         # Sheet: Utilisateurs

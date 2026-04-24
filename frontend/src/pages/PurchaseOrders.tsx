@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import { useToast } from '../components/Toast';
+import ProductCreateModal from '../components/ProductCreateModal';
 import {
     ClipboardList,
     Plus,
@@ -12,7 +13,10 @@ import {
     ChevronDown,
     ChevronUp,
     Trash2,
-    Calendar
+    Calendar,
+    Search,
+    Barcode,
+    AlertTriangle
 } from 'lucide-react';
 
 interface Supplier {
@@ -35,6 +39,7 @@ interface PurchaseOrderItem {
     quantity: number;
     unit_cost: number;
     received_quantity: number;
+    barcode?: string;
 }
 
 interface PurchaseOrder {
@@ -57,12 +62,13 @@ export default function PurchaseOrders() {
     const toast = useToast();
 
     const [showForm, setShowForm] = useState(false);
+    const [showCreateProduct, setShowCreateProduct] = useState(false);
     const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
     const [formData, setFormData] = useState({
         supplier: '',
         notes: '',
         expected_date: '',
-        items: [] as { product: number; quantity: number; unit_cost: number; productName?: string }[]
+        items: [] as { product: number; quantity: number; unit_cost: number; productName?: string; barcode?: string }[]
     });
     const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
     const [itemQty, setItemQty] = useState(1);
@@ -98,7 +104,10 @@ export default function PurchaseOrders() {
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             resetForm();
         },
-        onError: () => toast.error('Erreur lors de la création')
+        onError: (err: any) => {
+            console.error("Create Order Error:", err);
+            toast.error(err.response?.data?.detail || 'Erreur lors de la création');
+        }
     });
 
     // Send order
@@ -112,11 +121,16 @@ export default function PurchaseOrders() {
 
     // Receive order
     const receiveOrder = useMutation({
-        mutationFn: (id: number) => client.post(`/inventory/purchase-orders/${id}/receive/`),
+        mutationFn: ({ id, items }: { id: number, items: any[] }) =>
+            client.post(`/inventory/purchase-orders/${id}/receive/`, { items }),
         onSuccess: () => {
-            toast.success('Commande reçue - Stock mis à jour');
+            toast.success('Réception validée - Stock mis à jour');
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
+        },
+        onError: (err: any) => {
+            toast.error('Erreur lors de la réception');
+            console.error(err);
         }
     });
 
@@ -155,7 +169,8 @@ export default function PurchaseOrders() {
                     product: selectedProduct.id,
                     quantity: itemQty,
                     unit_cost: selectedProduct.purchase_price,
-                    productName: selectedProduct.name
+                    productName: selectedProduct.name,
+                    barcode: selectedProduct.barcode
                 }]
             });
         }
@@ -172,16 +187,61 @@ export default function PurchaseOrders() {
     };
 
     const handleSubmit = () => {
-        if (!formData.supplier || formData.items.length === 0) {
-            toast.error('Sélectionnez un fournisseur et ajoutez des articles');
+        if (!formData.supplier) {
+            toast.error('Veuillez sélectionner un fournisseur');
             return;
         }
-        createOrder.mutate({
+        if (formData.items.length === 0) {
+            toast.error('Veuillez ajouter au moins un produit');
+            return;
+        }
+
+        const payload = {
             supplier: parseInt(formData.supplier),
             notes: formData.notes,
             expected_date: formData.expected_date || null,
             items: formData.items.map(({ product, quantity, unit_cost }) => ({ product, quantity, unit_cost }))
+        };
+
+        createOrder.mutate(payload);
+    };
+
+    const handleReceiveClick = (order: PurchaseOrder) => {
+        // Calculate remaining items to avoid double receiving
+        const itemsToReceive = order.items
+            .map(item => ({
+                item_id: item.id,
+                quantity: Math.max(0, item.quantity - (item.received_quantity || 0)),
+                product_name: item.product_name
+            }))
+            .filter(i => i.quantity > 0);
+
+        if (itemsToReceive.length === 0) {
+            toast.info("Tous les articles de cette commande ont déjà été reçus.");
+            return;
+        }
+
+        const confirmMessage = `Confirmer la réception des articles RESTANTS ?\n\nStock à ajouter :\n${itemsToReceive.map(i => `- ${i.quantity} x ${i.product_name}`).join('\n')}\n\nAttention : Cliquez une seule fois.`;
+
+        if (window.confirm(confirmMessage)) {
+            const payload = itemsToReceive.map(({ item_id, quantity }) => ({ item_id, quantity }));
+            receiveOrder.mutate({ id: order.id, items: payload });
+        }
+    };
+
+    const handleProductCreated = (newProduct: any) => {
+        // Automatically add the created product to the list
+        setFormData({
+            ...formData,
+            items: [...formData.items, {
+                product: newProduct.id,
+                quantity: 1,
+                unit_cost: parseFloat(newProduct.purchase_price) || 0,
+                productName: newProduct.name,
+                barcode: newProduct.barcode
+            }]
         });
+        setSearchProduct('');
     };
 
     const getStatusBadge = (status: string) => {
@@ -247,50 +307,90 @@ export default function PurchaseOrders() {
                         </div>
                     </div>
 
-                    {/* Add Product */}
-                    <div className="mb-4">
-                        <label className="block text-sm font-medium mb-1">Ajouter un produit</label>
-                        <div className="flex gap-2">
-                            <div className="flex-1 relative">
-                                <input
-                                    type="text"
-                                    placeholder="Rechercher un produit..."
-                                    className="input w-full"
-                                    value={searchProduct}
-                                    onChange={(e) => setSearchProduct(e.target.value)}
-                                />
-                                {products.length > 0 && searchProduct && (
-                                    <div className="absolute top-full left-0 right-0 bg-surface border rounded-lg shadow-lg z-10 max-h-48 overflow-auto">
+                    {/* Add Product Section */}
+                    <div className="mb-4 bg-tertiary/30 p-4 rounded-lg">
+                        <label className="block text-sm font-medium mb-2">Ajouter des articles</label>
+                        <div className="flex flex-wrap gap-2 items-start">
+                            <div className="flex-1 min-w-[250px] relative z-50">
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
+                                    <input
+                                        type="text"
+                                        placeholder="Nom ou Code-barres..."
+                                        className="input w-full pl-10"
+                                        value={searchProduct}
+                                        onChange={(e) => setSearchProduct(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && products.length > 0) {
+                                                setSelectedProduct(products[0]);
+                                                setSearchProduct(products[0].name);
+                                            }
+                                        }}
+                                    />
+                                </div>
+
+                                {/* Product Suggestions Dropdown */}
+                                {products.length > 0 && searchProduct && !selectedProduct && (
+                                    <div className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-xl z-[100] max-h-60 overflow-auto mt-1 ring-1 ring-black/5">
                                         {products.slice(0, 10).map(p => (
                                             <div
                                                 key={p.id}
-                                                className="p-2 hover:bg-tertiary cursor-pointer"
+                                                className="p-3 hover:bg-tertiary cursor-pointer border-b border-border last:border-0"
                                                 onClick={() => {
                                                     setSelectedProduct(p);
                                                     setSearchProduct(p.name);
                                                 }}
                                             >
-                                                <div className="font-medium">{p.name}</div>
-                                                <div className="text-xs text-muted">{p.barcode} - {p.purchase_price} DH</div>
+                                                <div className="font-medium text-primary">{p.name}</div>
+                                                <div className="flex items-center justify-between text-xs text-muted mt-1">
+                                                    <span className="flex items-center gap-1">
+                                                        <Barcode size={12} /> {p.barcode}
+                                                    </span>
+                                                    <span className="font-bold text-accent">{p.purchase_price} DH</span>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 )}
+
+                                {/* "New Product" Prompt if no results */}
+                                {searchProduct.length > 1 && products.length === 0 && (
+                                    <div className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-lg z-20 p-2 mt-1 text-center">
+                                        <p className="text-sm text-muted mb-2">Aucun produit trouvé</p>
+                                        <button
+                                            onClick={() => setShowCreateProduct(true)}
+                                            className="btn-primary-outline text-xs w-full"
+                                        >
+                                            <Plus size={14} className="inline mr-1" /> Créer "{searchProduct}"
+                                        </button>
+                                    </div>
+                                )}
                             </div>
+
                             <input
                                 type="number"
                                 min={1}
                                 value={itemQty}
                                 onChange={(e) => setItemQty(parseInt(e.target.value) || 1)}
-                                className="input w-20 text-center"
+                                className="input w-20 text-center h-[42px]"
                                 placeholder="Qté"
                             />
+
                             <button
                                 onClick={addItem}
                                 disabled={!selectedProduct}
-                                className="btn-secondary"
+                                className="btn-secondary h-[42px]"
+                                title="Ajouter à la liste"
                             >
                                 <Plus size={18} />
+                            </button>
+
+                            <button
+                                onClick={() => setShowCreateProduct(true)}
+                                className="btn-primary h-[42px]"
+                                title="Créer un nouveau produit"
+                            >
+                                <Plus size={18} /> Nouveau Produit
                             </button>
                         </div>
                     </div>
@@ -299,21 +399,41 @@ export default function PurchaseOrders() {
                     {formData.items.length > 0 && (
                         <div className="mb-4">
                             <h3 className="font-medium mb-2">Articles ({formData.items.length})</h3>
-                            <div className="space-y-2">
+                            <div className="space-y-2 border rounded-lg overflow-hidden">
+                                <div className="bg-tertiary px-3 py-2 text-xs font-semibold uppercase text-muted flex">
+                                    <div className="flex-1">Produit</div>
+                                    <div className="w-24 text-right">Prix Unit.</div>
+                                    <div className="w-20 text-center">Qté</div>
+                                    <div className="w-24 text-right">Total</div>
+                                    <div className="w-10"></div>
+                                </div>
                                 {formData.items.map((item) => (
-                                    <div key={item.product} className="flex items-center justify-between p-2 bg-tertiary rounded">
-                                        <span>{item.productName || `Produit #${item.product}`}</span>
-                                        <div className="flex items-center gap-4">
-                                            <span>{item.quantity} x {item.unit_cost.toFixed(2)} DH</span>
-                                            <span className="font-bold">{(item.quantity * item.unit_cost).toFixed(2)} DH</span>
-                                            <button onClick={() => removeItem(item.product)} className="text-danger">
+                                    <div key={item.product} className="flex items-center p-3 border-t border-border hover:bg-tertiary/30">
+                                        <div className="flex-1">
+                                            <div className="font-medium">{item.productName || `Produit #${item.product}`}</div>
+                                            <div className="text-xs text-muted flex items-center gap-1">
+                                                <Barcode size={10} /> {item.barcode || '---'}
+                                            </div>
+                                        </div>
+                                        <div className="w-24 text-right text-sm">
+                                            {item.unit_cost.toFixed(2)}
+                                        </div>
+                                        <div className="w-20 text-center font-bold">
+                                            {item.quantity}
+                                        </div>
+                                        <div className="w-24 text-right font-bold text-accent">
+                                            {(item.quantity * item.unit_cost).toFixed(2)}
+                                        </div>
+                                        <div className="w-10 text-right">
+                                            <button onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded">
                                                 <Trash2 size={16} />
                                             </button>
                                         </div>
                                     </div>
                                 ))}
-                                <div className="flex justify-end pt-2 border-t">
-                                    <span className="text-lg font-bold">Total: {orderTotal.toFixed(2)} DH</span>
+                                <div className="bg-tertiary/50 p-3 flex justify-end items-center border-t border-border">
+                                    <span className="text-muted mr-3">Total Estimé:</span>
+                                    <span className="text-xl font-bold">{orderTotal.toFixed(2)} DH</span>
                                 </div>
                             </div>
                         </div>
@@ -331,11 +451,11 @@ export default function PurchaseOrders() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex gap-3">
-                        <button onClick={handleSubmit} disabled={createOrder.isPending} className="btn-primary flex-1">
-                            {createOrder.isPending ? 'Création...' : 'Créer la Commande'}
+                    <div className="flex gap-3 pt-4 border-t border-border">
+                        <button onClick={handleSubmit} disabled={createOrder.isPending} className="btn-primary flex-1 py-3 text-lg">
+                            {createOrder.isPending ? 'Création...' : 'Valider la Commande'}
                         </button>
-                        <button onClick={resetForm} className="btn-secondary">Annuler</button>
+                        <button onClick={resetForm} className="btn-secondary px-6">Annuler</button>
                     </div>
                 </div>
             )}
@@ -366,7 +486,13 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div>
                                             <p className="font-medium">{order.reference}</p>
-                                            <p className="text-sm text-muted">{order.supplier_name || `Fournisseur #${order.supplier}`}</p>
+                                            <div className="flex items-center gap-2 text-sm text-muted">
+                                                <span>{order.supplier_name || `Fournisseur #${order.supplier}`}</span>
+                                                <span>•</span>
+                                                <span className="flex items-center gap-1">
+                                                    <Calendar size={12} /> {new Date(order.created_at).toLocaleDateString('fr-FR')}
+                                                </span>
+                                            </div>
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-4">
@@ -380,13 +506,42 @@ export default function PurchaseOrders() {
 
                                 {expandedOrder === order.id && (
                                     <div className="mt-4 pl-14 space-y-3">
-                                        <div className="text-sm text-muted">
-                                            Créée le {new Date(order.created_at).toLocaleDateString('fr-FR')}
-                                            {order.expected_date && ` • Prévue le ${order.expected_date}`}
+                                        <div className="bg-tertiary/20 rounded-lg p-3">
+                                            {/* Order Items Detail */}
+                                            <h4 className="font-medium text-sm mb-2">Détails de la commande</h4>
+                                            {order.status === 'PARTIAL' && (
+                                                <div className="text-xs text-warning mb-2 flex items-center gap-1">
+                                                    <AlertTriangle size={12} />
+                                                    Cette commande est partiellement reçue. Les quantités affichées ci-dessous sont le total commandé.
+                                                </div>
+                                            )}
+                                            <div className="space-y-1">
+                                                {order.items?.map(item => (
+                                                    <div key={item.id} className="flex justify-between text-sm py-1 border-b border-border/50 last:border-0 items-center">
+                                                        <div>
+                                                            <span>{item.product_name}</span>
+                                                            {/* Show verification progress if received > 0 */}
+                                                            {(item.received_quantity > 0 || order.status === 'PARTIAL') && (
+                                                                <span className="text-xs text-muted ml-2">
+                                                                    (Reçu: <span className={item.received_quantity >= item.quantity ? 'text-success' : 'text-warning'}>
+                                                                        {item.received_quantity}/{item.quantity}
+                                                                    </span>)
+                                                                </span>
+                                                            )}
+                                                            {!(item.received_quantity > 0 || order.status === 'PARTIAL') && (
+                                                                <span className="text-xs text-muted ml-2">x {item.quantity}</span>
+                                                            )}
+                                                        </div>
+                                                        <span>{item.unit_cost} DH</span>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
+
                                         {order.notes && (
-                                            <p className="text-sm bg-tertiary/50 p-2 rounded">{order.notes}</p>
+                                            <p className="text-sm bg-tertiary/50 p-2 rounded italic">{order.notes}</p>
                                         )}
+
                                         <div className="flex gap-2 pt-2">
                                             {order.status === 'DRAFT' && (
                                                 <>
@@ -404,12 +559,14 @@ export default function PurchaseOrders() {
                                                     </button>
                                                 </>
                                             )}
-                                            {order.status === 'SENT' && (
+                                            {(order.status === 'SENT' || (order.status === 'PARTIAL' && !receiveOrder.isPending)) && (
                                                 <button
-                                                    onClick={() => receiveOrder.mutate(order.id)}
+                                                    onClick={() => handleReceiveClick(order)}
                                                     className="btn-success flex items-center gap-1 text-sm"
+                                                    disabled={receiveOrder.isPending}
                                                 >
-                                                    <Check size={16} /> Marquer Reçue
+                                                    <Check size={16} />
+                                                    {receiveOrder.isPending ? 'Mise à jour...' : 'Confirmer la Réception (Ajouter au Stock)'}
                                                 </button>
                                             )}
                                         </div>
@@ -420,6 +577,15 @@ export default function PurchaseOrders() {
                     )}
                 </div>
             </div>
+
+            {/* Product Creation Modal */}
+            {showCreateProduct && (
+                <ProductCreateModal
+                    onClose={() => setShowCreateProduct(false)}
+                    onSuccess={handleProductCreated}
+                    initialName={searchProduct}
+                />
+            )}
         </div>
     );
 }

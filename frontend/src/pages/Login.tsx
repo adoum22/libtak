@@ -21,6 +21,9 @@ export default function Login() {
         try {
             const response = await client.post('/auth/login/', { username, password });
             localStorage.setItem('token', response.data.access);
+            if (response.data.refresh) {
+                localStorage.setItem('refreshToken', response.data.refresh);
+            }
 
             // Récupérer les infos utilisateur
             try {
@@ -123,21 +126,6 @@ export default function Login() {
                             )}
                         </button>
                     </form>
-
-                    {/* Demo Credentials */}
-                    <div className="mt-8 p-4 bg-tertiary rounded-lg">
-                        <p className="text-sm text-muted mb-2 font-medium">Comptes de démo:</p>
-                        <div className="grid grid-cols-2 gap-3 text-sm">
-                            <div>
-                                <span className="badge badge-accent">Admin</span>
-                                <p className="mt-1 font-mono">admin / admin123</p>
-                            </div>
-                            <div>
-                                <span className="badge badge-success">Vendeur</span>
-                                <p className="mt-1 font-mono">vendeur / vendeur123</p>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>

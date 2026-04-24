@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
@@ -202,25 +202,32 @@ class StockMovement(models.Model):
         return f"{self.get_movement_type_display()} - {self.product.name} ({self.quantity})"
 
     def save(self, *args, **kwargs):
-        """Mise à jour automatique du stock produit"""
-        if not self.pk:  # Nouveau mouvement
-            self.stock_before = self.product.stock
-            
+        """Mise à jour atomique du stock produit"""
+        if self.pk:
+            super().save(*args, **kwargs)
+            return
+
+        with transaction.atomic():
+            product = (
+                Product.objects.select_for_update().get(pk=self.product_id)
+            )
+            self.stock_before = product.stock
+
             if self.movement_type == self.MovementType.IN:
-                self.product.stock += self.quantity
+                product.stock += self.quantity
             elif self.movement_type == self.MovementType.OUT:
-                self.product.stock -= self.quantity
+                product.stock -= self.quantity
             elif self.movement_type == self.MovementType.RETURN:
-                self.product.stock += self.quantity
+                product.stock += self.quantity
             elif self.movement_type == self.MovementType.ADJUST:
                 # Pour adjustment, quantity est la nouvelle valeur absolue
-                self.product.stock = self.quantity
-                self.quantity = self.quantity - self.stock_before
-            
-            self.stock_after = self.product.stock
-            self.product.save()
-        
-        super().save(*args, **kwargs)
+                new_total = self.quantity
+                self.quantity = new_total - self.stock_before
+                product.stock = new_total
+
+            self.stock_after = product.stock
+            product.save(update_fields=['stock', 'updated_at'])
+            super().save(*args, **kwargs)
 
 
 class PriceHistory(models.Model):
@@ -321,20 +328,10 @@ class PurchaseOrder(models.Model):
     
     def save(self, *args, **kwargs):
         if not self.reference:
-            # Auto-generate reference
+            import uuid
             from django.utils import timezone
             date_str = timezone.now().strftime('%Y%m%d')
-            last_po = PurchaseOrder.objects.filter(
-                reference__startswith=f'PO-{date_str}'
-            ).order_by('-reference').first()
-            if last_po:
-                try:
-                    last_num = int(last_po.reference.split('-')[-1])
-                    self.reference = f'PO-{date_str}-{last_num + 1:03d}'
-                except (ValueError, IndexError):
-                    self.reference = f'PO-{date_str}-001'
-            else:
-                self.reference = f'PO-{date_str}-001'
+            self.reference = f'PO-{date_str}-{uuid.uuid4().hex[:8].upper()}'
         super().save(*args, **kwargs)
     
     @property

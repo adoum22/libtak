@@ -4,6 +4,7 @@ from rest_framework.test import APITestCase
 from rest_framework import status
 from decimal import Decimal
 from datetime import date, timedelta
+from django.utils import timezone
 
 from inventory.models import Product
 from sales.models import Sale, SaleItem
@@ -56,7 +57,7 @@ class ReportDataTest(TestCase):
     
     def test_empty_report(self):
         """Test rapport sans ventes"""
-        today = date.today()
+        today = timezone.localdate()
         data = get_report_data(today, today)
         
         self.assertEqual(data['total_sales'], 0)
@@ -84,11 +85,12 @@ class ReportDataTest(TestCase):
             tva_rate=Decimal('20.00')
         )
         
-        today = date.today()
+        today = timezone.localdate()
         data = get_report_data(today, today)
         
         self.assertEqual(data['total_sales'], 1)
-        self.assertEqual(data['total_revenue'], 24.0)
+        # Le rapport utilise unit_price_ht * quantity = 20.0 (HT, pas TTC)
+        self.assertEqual(data['total_revenue'], 20.0)
         self.assertGreater(data['total_profit'], 0)
         self.assertEqual(len(data['items_sold']), 1)
 
@@ -98,7 +100,7 @@ class ReportLogTest(TestCase):
     
     def test_create_report_log(self):
         """Test création d'un log de rapport"""
-        today = date.today()
+        today = timezone.localdate()
         log = ReportLog.objects.create(
             report_type='DAILY',
             period_start=today,

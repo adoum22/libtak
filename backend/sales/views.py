@@ -2,6 +2,8 @@ from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import F
+from core.models import AuditLog
 from .models import Sale, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
@@ -11,7 +13,11 @@ from .serializers import (
 
 
 class SaleViewSet(viewsets.ModelViewSet):
-    queryset = Sale.objects.all().order_by('-created_at')
+    queryset = (
+        Sale.objects.select_related('user')
+        .prefetch_related('items__product')
+        .order_by('-created_at')
+    )
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get', 'post', 'head', 'options']
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -25,7 +31,13 @@ class SaleViewSet(viewsets.ModelViewSet):
         return SaleSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        sale = serializer.save(user=self.request.user)
+        AuditLog.log(
+            user=self.request.user, action=AuditLog.ActionType.SALE,
+            model_name='Sale', object_id=sale.id,
+            object_repr=f"Sale #{sale.id} - {sale.total_ttc}",
+            request=self.request,
+        )
 
 
 class DiscountViewSet(viewsets.ModelViewSet):
@@ -71,8 +83,8 @@ class DiscountViewSet(viewsets.ModelViewSet):
                 {'error': 'This discount is no longer valid.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        discount.uses_count += 1
-        discount.save()
+        Discount.objects.filter(pk=discount.pk).update(uses_count=F('uses_count') + 1)
+        discount.refresh_from_db()
         return Response(DiscountSerializer(discount).data)
 
 
@@ -97,6 +109,12 @@ class ReturnViewSet(viewsets.ModelViewSet):
             )
         return_order.status = Return.ReturnStatus.APPROVED
         return_order.save()
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=f"Return #{return_order.id} -> {return_order.status}",
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
     
     @action(detail=True, methods=['post'])
@@ -110,13 +128,19 @@ class ReturnViewSet(viewsets.ModelViewSet):
             )
         return_order.status = Return.ReturnStatus.REJECTED
         return_order.save()
-        
+
         # Restore stock was already done on create, so we need to reverse it
         for item in return_order.items.all():
             if item.sale_item.product:
                 item.sale_item.product.stock -= item.quantity
                 item.sale_item.product.save()
-        
+
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=f"Return #{return_order.id} -> {return_order.status}",
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
     
     @action(detail=True, methods=['post'])
@@ -130,5 +154,11 @@ class ReturnViewSet(viewsets.ModelViewSet):
             )
         return_order.status = Return.ReturnStatus.COMPLETED
         return_order.save()
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=f"Return #{return_order.id} -> {return_order.status}",
+            request=request,
+        )
         return Response(ReturnSerializer(return_order).data)
 

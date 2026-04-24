@@ -19,6 +19,7 @@ class ExpenseInline(admin.TabularInline):
 class MonthlyAccountingAdmin(admin.ModelAdmin):
     list_display = ('year', 'month', 'manager_withdrawal', 'updated_at')
     list_filter = ('year', 'month')
+    search_fields = ('year', 'month', 'notes')
     inlines = [ExpenseInline]
 
 

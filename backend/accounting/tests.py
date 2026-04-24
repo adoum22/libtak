@@ -46,7 +46,7 @@ class MonthlySummaryTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(self.admin)
-        self.cat = ExpenseCategory.objects.create(name='Internet')
+        self.cat, _ = ExpenseCategory.objects.get_or_create(name='Internet')
 
     def test_create_expense_by_period_and_summary(self):
         r = self.client.post('/api/accounting/expenses/', {

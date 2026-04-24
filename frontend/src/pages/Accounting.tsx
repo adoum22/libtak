@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -127,7 +127,7 @@ export default function Accounting() {
     const [newCatName, setNewCatName] = useState('');
 
     // sync local form when month data loads/changes
-    useMemo(() => {
+    useEffect(() => {
         if (monthData) {
             setWithdrawal(String(monthData.manager_withdrawal ?? ''));
             setNotes(monthData.notes ?? '');
@@ -324,7 +324,7 @@ export default function Accounting() {
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                 <XAxis dataKey="label" />
                                 <YAxis tickFormatter={(v) => `${v}`} />
-                                <Tooltip formatter={(v: number) => `${fmt(v)} DH`} />
+                                <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
                                 <Legend />
                                 <Bar dataKey="revenue" name="CA" fill="#10b981" />
                                 <Bar dataKey="expenses" name="Dépenses" fill="#ef4444" />
@@ -348,13 +348,13 @@ export default function Accounting() {
                                             data={summary.category_breakdown}
                                             dataKey="total" nameKey="category"
                                             cx="50%" cy="50%" outerRadius={110}
-                                            label={(e) => e.category}
+                                            label={(e: any) => e.category}
                                         >
-                                            {summary.category_breakdown.map((_, i) => (
-                                                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                                            {summary.category_breakdown.map((row: any, i: number) => (
+                                                <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                             ))}
                                         </Pie>
-                                        <Tooltip formatter={(v: number) => `${fmt(v)} DH`} />
+                                        <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
@@ -370,7 +370,7 @@ export default function Accounting() {
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                     <XAxis dataKey="label" />
                                     <YAxis />
-                                    <Tooltip formatter={(v: number) => `${fmt(v)} DH`} />
+                                    <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
                                     <Line type="monotone" dataKey="net_profit" stroke="#1e40af" strokeWidth={3} dot={{ r: 5 }} />
                                 </LineChart>
                             </ResponsiveContainer>

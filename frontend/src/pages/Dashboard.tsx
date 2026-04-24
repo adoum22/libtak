@@ -158,7 +158,7 @@ export default function Dashboard() {
                             <tbody>
                                 {stats?.top_products?.length ? (
                                     stats.top_products.map((p, i) => (
-                                        <tr key={i}>
+                                        <tr key={p.product__name ?? i}>
                                             <td className="flex items-center gap-3">
                                                 <span className="w-6 h-6 rounded-full bg-accent-light text-accent text-xs flex items-center justify-center font-semibold">
                                                     {i + 1}

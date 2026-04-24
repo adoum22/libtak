@@ -1,5 +1,5 @@
 from celery import shared_task
-from django.core.mail import send_mail, get_connection
+from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.db.models import Sum, F, Count
@@ -235,30 +235,15 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
     </html>
     """
     
-    # Envoi avec SMTP dynamique
+    # SMTP credentials come from Django settings (env-driven).
     try:
-        connection = None
-        from_email = settings.DEFAULT_FROM_EMAIL
-
-        # Si configuration SMTP personnalisée
-        if settings_obj.sender_email and settings_obj.sender_password:
-            connection = get_connection(
-                host=settings_obj.smtp_host,
-                port=settings_obj.smtp_port,
-                username=settings_obj.sender_email,
-                password=settings_obj.sender_password,
-                use_tls=True
-            )
-            from_email = settings_obj.sender_email
-        
         send_mail(
             subject=subject,
             message=f"Rapport {report_type} - CA: {data['total_revenue']:.2f} DH, Bénéfice: {data['total_profit']:.2f} DH",
-            from_email=from_email,
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=recipients,
             html_message=html_message,
             fail_silently=False,
-            connection=connection
         )
         return True, ""
     except Exception as e:
@@ -520,30 +505,15 @@ def send_low_stock_alert():
     </html>
     """
     
-    # Envoi
+    # SMTP credentials come from Django settings (env-driven).
     try:
-        settings_obj = ReportSettings.get_settings()
-        connection = None
-        from_email = settings.DEFAULT_FROM_EMAIL
-
-        if settings_obj.sender_email and settings_obj.sender_password:
-            connection = get_connection(
-                host=settings_obj.smtp_host,
-                port=settings_obj.smtp_port,
-                username=settings_obj.sender_email,
-                password=settings_obj.sender_password,
-                use_tls=True
-            )
-            from_email = settings_obj.sender_email
-        
         send_mail(
             subject=f"⚠️ [Librairie] Alerte Stock Bas - {low_stock_products.count()} produits",
             message=f"{low_stock_products.count()} produits sont en stock bas.",
-            from_email=from_email,
+            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=recipients,
             html_message=html_message,
             fail_silently=False,
-            connection=connection
         )
         return f"Low stock alert sent for {low_stock_products.count()} products"
     except Exception as e:

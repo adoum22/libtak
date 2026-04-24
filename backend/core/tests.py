@@ -121,7 +121,8 @@ class UserAPITest(APITestCase):
         response = self.client.post('/api/auth/users/', {
             'username': 'newuser',
             'email': 'new@test.com',
-            'password': 'newpass123',
+            'password': 'newpass123-strong',
+            'password_confirm': 'newpass123-strong',
             'first_name': 'New',
             'last_name': 'User',
             'role': 'CASHIER'

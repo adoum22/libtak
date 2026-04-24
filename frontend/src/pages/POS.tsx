@@ -120,8 +120,8 @@ export default function POS() {
                         change: changeAmount > 0 ? changeAmount : 0
                     });
                 });
-            } catch (e) {
-                console.log('Print service not available');
+            } catch {
+                // Print service not available; ignore.
             }
 
             // 5. Auto Reset after 2 seconds

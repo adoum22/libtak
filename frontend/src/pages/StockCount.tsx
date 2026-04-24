@@ -23,6 +23,7 @@ interface CountItem {
     id: number;
     product: number;
     product_name?: string;
+    product_barcode?: string;
     expected_quantity: number;
     counted_quantity: number | null;
     difference: number | null;
@@ -49,6 +50,8 @@ export default function StockCount() {
     const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
     const [searchProduct, setSearchProduct] = useState('');
     const [countedValues, setCountedValues] = useState<Record<number, number>>({});
+    const [countMode, setCountMode] = useState<'total' | 'add'>('total');
+    const [createQuantities, setCreateQuantities] = useState<Record<number, number>>({}); // Quantités lors de création
 
     // Fetch counts
     const { data: counts = [], isLoading } = useQuery<InventoryCount[]>({
@@ -78,16 +81,24 @@ export default function StockCount() {
             queryClient.invalidateQueries({ queryKey: ['inventoryCounts'] });
             resetForm();
         },
-        onError: () => toast.error('Erreur lors de la création')
+        onError: (error: any) => {
+            console.error('Create count error:', error.response?.data);
+            const msg = error.response?.data?.detail || JSON.stringify(error.response?.data) || 'Erreur lors de la création';
+            toast.error('Erreur: ' + msg);
+        }
     });
 
-    // Update count (save counted values)
+    // Update count (save counted values) - FIX: Use POST on /update_counts/ endpoint
     const updateCount = useMutation({
         mutationFn: ({ id, items }: { id: number; items: { id: number; counted_quantity: number }[] }) =>
-            client.patch(`/inventory/counts/${id}/`, { items }),
+            client.post(`/inventory/counts/${id}/update_counts/`, { items }),
         onSuccess: () => {
             toast.success('Comptage sauvegardé');
             queryClient.invalidateQueries({ queryKey: ['inventoryCounts'] });
+        },
+        onError: (error: any) => {
+            const msg = error.response?.data?.detail || 'Erreur lors de la sauvegarde';
+            toast.error(msg);
         }
     });
 
@@ -115,6 +126,7 @@ export default function StockCount() {
         setSelectedProducts([]);
         setShowForm(false);
         setSearchProduct('');
+        setCreateQuantities({});
     };
 
     const addProduct = (product: Product) => {
@@ -133,12 +145,31 @@ export default function StockCount() {
             toast.error('Donnez un nom et sélectionnez des produits');
             return;
         }
+
+        // Vérifier qu'au moins une quantité est saisie
+        const hasQuantities = selectedProducts.some(p => createQuantities[p.id] !== undefined);
+        if (!hasQuantities) {
+            toast.error('Entrez au moins une quantité');
+            return;
+        }
+
+        // Préparer les items avec les quantités calculées
+        const items = selectedProducts
+            .filter(p => createQuantities[p.id] !== undefined)
+            .map(p => {
+                const inputQty = createQuantities[p.id] || 0;
+                // Calculer la quantité comptée selon le mode
+                const counted = countMode === 'add' ? p.stock + inputQty : inputQty;
+                return {
+                    product: p.id,
+                    expected_quantity: p.stock,
+                    counted_quantity: counted
+                };
+            });
+
         createCount.mutate({
             name: countName,
-            items: selectedProducts.map(p => ({
-                product: p.id,
-                expected_quantity: p.stock
-            }))
+            items
         });
     };
 
@@ -225,18 +256,65 @@ export default function StockCount() {
                     </div>
 
                     {selectedProducts.length > 0 && (
-                        <div className="mb-4 max-h-48 overflow-auto">
-                            <p className="text-sm font-medium mb-2">{selectedProducts.length} produit(s) sélectionné(s)</p>
-                            <div className="space-y-1">
-                                {selectedProducts.slice(0, 20).map(p => (
-                                    <div key={p.id} className="flex justify-between items-center p-2 bg-tertiary rounded text-sm">
-                                        <span>{p.name}</span>
-                                        <span className="text-muted">Stock: {p.stock}</span>
+                        <div className="mb-4">
+                            {/* Mode selector */}
+                            <div className="flex items-center gap-4 mb-4 p-3 bg-accent-light/20 rounded-lg">
+                                <span className="text-sm font-medium">Mode :</span>
+                                <div className="flex bg-tertiary rounded-lg p-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setCountMode('total')}
+                                        className={`px-3 py-1 rounded text-sm transition ${countMode === 'total' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
+                                    >
+                                        Quantité totale comptée
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCountMode('add')}
+                                        className={`px-3 py-1 rounded text-sm transition ${countMode === 'add' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
+                                    >
+                                        Quantité à ajouter
+                                    </button>
+                                </div>
+                            </div>
+                            <p className="text-sm font-medium mb-2">
+                                {selectedProducts.length} produit(s) - {countMode === 'total' ? 'Entrez le stock TOTAL' : 'Entrez la quantité à AJOUTER'}
+                            </p>
+                            <div className="space-y-2 max-h-64 overflow-auto">
+                                {selectedProducts.map(p => (
+                                    <div key={p.id} className="flex items-center gap-4 p-3 bg-tertiary rounded">
+                                        <span className="flex-1 font-medium">{p.name}</span>
+                                        <span className="text-sm text-muted">Stock actuel: {p.stock}</span>
+                                        <input
+                                            type="number"
+                                            min={0}
+                                            placeholder={countMode === 'total' ? 'Total' : 'À ajouter'}
+                                            className="input w-24 text-center"
+                                            value={createQuantities[p.id] ?? ''}
+                                            onChange={(e) => {
+                                                const val = parseInt(e.target.value) || 0;
+                                                setCreateQuantities({ ...createQuantities, [p.id]: val });
+                                            }}
+                                        />
+                                        {countMode === 'add' && createQuantities[p.id] !== undefined && (
+                                            <span className="text-xs text-success font-bold w-16 text-right">
+                                                → {p.stock + (createQuantities[p.id] || 0)}
+                                            </span>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedProducts(selectedProducts.filter(x => x.id !== p.id));
+                                                const newQty = { ...createQuantities };
+                                                delete newQty[p.id];
+                                                setCreateQuantities(newQty);
+                                            }}
+                                            className="text-danger hover:bg-danger/20 rounded p-1"
+                                        >
+                                            ✕
+                                        </button>
                                     </div>
                                 ))}
-                                {selectedProducts.length > 20 && (
-                                    <p className="text-sm text-muted text-center">...et {selectedProducts.length - 20} autres</p>
-                                )}
                             </div>
                         </div>
                     )}
@@ -277,7 +355,7 @@ export default function StockCount() {
                                         <div>
                                             <p className="font-medium">{count.name}</p>
                                             <p className="text-sm text-muted">
-                                                {new Date(count.created_at).toLocaleDateString('fr-FR')}
+                                                {new Date(count.created_at).toLocaleDateString('fr-FR')} • {count.items?.length || 0} produit(s)
                                             </p>
                                         </div>
                                     </div>
@@ -289,27 +367,87 @@ export default function StockCount() {
                                     </div>
                                 </div>
 
+                                {/* Quick summary - always visible for VALIDATED */}
+                                {count.status === 'VALIDATED' && expandedCount !== count.id && count.items && count.items.length > 0 && (
+                                    <div className="mt-2 ml-14 text-sm">
+                                        <div className="flex flex-wrap gap-2">
+                                            {count.items.slice(0, 3).map((item) => (
+                                                <span key={item.id} className="bg-tertiary px-2 py-1 rounded text-xs">
+                                                    <span className="font-semibold text-muted mr-1">{item.product_barcode}</span>
+                                                    {item.product_name}: {item.expected_quantity} → <span className="font-bold">{item.counted_quantity}</span>
+                                                    {item.difference !== 0 && (
+                                                        <span className={item.difference && item.difference > 0 ? 'text-success' : 'text-danger'}>
+                                                            {' '}({item.difference && item.difference > 0 ? '+' : ''}{item.difference})
+                                                        </span>
+                                                    )}
+                                                </span>
+                                            ))}
+                                            {count.items.length > 3 && (
+                                                <span className="text-muted text-xs">+{count.items.length - 3} autres</span>
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-muted mt-1">Cliquez pour voir tous les détails</p>
+                                    </div>
+                                )}
+
                                 {expandedCount === count.id && (
                                     <div className="mt-4 pl-14 space-y-3">
                                         {/* Items to count */}
                                         {count.status === 'IN_PROGRESS' && (
                                             <div className="space-y-2">
-                                                <p className="text-sm font-medium">Saisissez les quantités comptées :</p>
+                                                {/* Mode selector */}
+                                                <div className="flex items-center gap-4 mb-4 p-3 bg-accent-light/20 rounded-lg">
+                                                    <span className="text-sm font-medium">Mode de saisie :</span>
+                                                    <div className="flex bg-tertiary rounded-lg p-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setCountMode('total')}
+                                                            className={`px-3 py-1 rounded text-sm transition ${countMode === 'total' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
+                                                        >
+                                                            Quantité totale
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setCountMode('add')}
+                                                            className={`px-3 py-1 rounded text-sm transition ${countMode === 'add' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
+                                                        >
+                                                            Ajouter au stock
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <p className="text-sm font-medium">
+                                                    {countMode === 'total'
+                                                        ? 'Saisissez le stock TOTAL compté :'
+                                                        : 'Saisissez la quantité à AJOUTER :'}
+                                                </p>
                                                 {count.items?.map((item) => (
                                                     <div key={item.id} className="flex items-center gap-4 p-2 bg-tertiary rounded">
                                                         <span className="flex-1">{item.product_name || `Produit #${item.product}`}</span>
-                                                        <span className="text-sm text-muted">Attendu: {item.expected_quantity}</span>
+                                                        <span className="text-sm text-muted">Stock actuel: {item.expected_quantity}</span>
                                                         <input
                                                             type="number"
                                                             min={0}
-                                                            placeholder="Compté"
-                                                            className="input w-24 text-center"
-                                                            value={countedValues[item.id] ?? item.counted_quantity ?? ''}
-                                                            onChange={(e) => setCountedValues({
-                                                                ...countedValues,
-                                                                [item.id]: parseInt(e.target.value) || 0
-                                                            })}
+                                                            placeholder={countMode === 'total' ? 'Total compté' : 'À ajouter'}
+                                                            className="input w-28 text-center"
+                                                            value={countedValues[item.id] ?? ''}
+                                                            onChange={(e) => {
+                                                                const inputVal = parseInt(e.target.value) || 0;
+                                                                let finalVal = inputVal;
+                                                                if (countMode === 'add') {
+                                                                    // Si mode ajout, on calcule le total
+                                                                    finalVal = item.expected_quantity + inputVal;
+                                                                }
+                                                                setCountedValues({
+                                                                    ...countedValues,
+                                                                    [item.id]: finalVal
+                                                                });
+                                                            }}
                                                         />
+                                                        {countMode === 'add' && countedValues[item.id] !== undefined && (
+                                                            <span className="text-xs text-success font-bold">
+                                                                → {countedValues[item.id]}
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 ))}
                                                 <div className="flex gap-2 pt-2">
@@ -342,7 +480,10 @@ export default function StockCount() {
                                                 <div className="space-y-1">
                                                     {count.items?.map((item) => (
                                                         <div key={item.id} className="flex items-center justify-between p-2 bg-tertiary rounded text-sm">
-                                                            <span>{item.product_name}</span>
+                                                            <div className="flex flex-col">
+                                                                <span>{item.product_name}</span>
+                                                                <span className="text-xs text-muted">{item.product_barcode}</span>
+                                                            </div>
                                                             <div className="flex items-center gap-4">
                                                                 <span>Attendu: {item.expected_quantity}</span>
                                                                 <span>Compté: {item.counted_quantity}</span>
@@ -364,9 +505,52 @@ export default function StockCount() {
                                             </div>
                                         )}
 
-                                        {/* Validated */}
+                                        {/* Validated - show summary with details */}
                                         {count.status === 'VALIDATED' && (
-                                            <p className="text-success text-sm">✓ Inventaire validé - Stock ajusté</p>
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-2 text-success">
+                                                    <Check size={18} />
+                                                    <span className="font-medium">Inventaire validé - Stock ajusté</span>
+                                                </div>
+                                                <div className="border border-success/30 rounded-lg overflow-hidden">
+                                                    <div className="bg-success/10 px-3 py-2 text-sm font-medium border-b border-success/30">
+                                                        Résumé des ajustements ({count.items?.length || 0} produit(s))
+                                                    </div>
+                                                    <div className="divide-y divide-border">
+                                                        {count.items?.map((item) => (
+                                                            <div key={item.id} className="flex items-center justify-between p-3 text-sm hover:bg-tertiary/50">
+                                                                <div className="flex-1">
+                                                                    <p className="font-medium">{item.product_name}</p>
+                                                                    <p className="text-xs text-muted">{item.product_barcode}</p>
+                                                                </div>
+                                                                <div className="flex items-center gap-6 text-right">
+                                                                    <div>
+                                                                        <span className="text-muted text-xs block">Avant</span>
+                                                                        <span>{item.expected_quantity}</span>
+                                                                    </div>
+                                                                    <div>
+                                                                        <span className="text-muted text-xs block">Après</span>
+                                                                        <span className="font-bold">{item.counted_quantity}</span>
+                                                                    </div>
+                                                                    <div className="w-16">
+                                                                        <span className="text-muted text-xs block">Écart</span>
+                                                                        <span className={`font-bold ${getDifferenceClass(item.difference)}`}>
+                                                                            {item.difference !== null && item.difference !== 0
+                                                                                ? (item.difference > 0 ? `+${item.difference}` : item.difference)
+                                                                                : '0'}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                {count.completed_at && (
+                                                    <p className="text-xs text-muted">
+                                                        Validé le {new Date(count.completed_at).toLocaleDateString('fr-FR')} à {new Date(count.completed_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                                                    </p>
+                                                )}
+                                            </div>
                                         )}
                                     </div>
                                 )}

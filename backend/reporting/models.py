@@ -16,12 +16,10 @@ class ReportSettings(models.Model):
         blank=True
     )
     
-    # Configuration SMTP Expéditeur
-    sender_email = models.EmailField(_('Sender Email'), blank=True, help_text=_('Email utilisé pour l\'envoi'))
-    sender_password = models.CharField(_('Sender Password'), max_length=255, blank=True, help_text=_('Mot de passe d\'application ou SMTP'))
-    smtp_host = models.CharField(_('SMTP Host'), max_length=255, default='smtp.gmail.com', blank=True)
-    smtp_port = models.IntegerField(_('SMTP Port'), default=587)
-    
+    # SMTP credentials are now configured via environment variables
+    # (EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, EMAIL_USE_TLS).
+    # Storing them in the database was a security risk (cleartext password).
+
     # Rapport Journalier
     daily_enabled = models.BooleanField(_('Daily Report Enabled'), default=True)
     daily_time = models.TimeField(_('Daily Report Time'), default='23:00')

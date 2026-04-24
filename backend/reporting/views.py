@@ -13,6 +13,9 @@ from inventory.models import Product
 from core.permissions import IsAdminRole, CanAccessReports
 from django.http import HttpResponse
 from .models import ReportSettings, ReportLog
+import logging
+
+logger = logging.getLogger(__name__)
 from .serializers import ReportSettingsSerializer, ReportLogSerializer
 from .tasks import get_report_data
 import logging
@@ -192,10 +195,12 @@ class ExportReportView(APIView):
             
             return response
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return Response({'detail': f"Erreur PDF: {str(e)}"}, status=500)
+        except Exception:
+            logger.exception("PDF report generation failed")
+            return Response(
+                {'detail': "Erreur lors de la génération du PDF."},
+                status=500,
+            )
 
 
 class DailyReportView(APIView):

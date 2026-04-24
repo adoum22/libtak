@@ -33,11 +33,11 @@ export default function Layout() {
     const { data: currentUser } = useQuery({
         queryKey: ['currentUser'],
         queryFn: () => client.get('/auth/me/').then(res => res.data),
-        retry: false
+        retry: false,
+        staleTime: 60_000,
     });
 
-    const userRole = localStorage.getItem('userRole') || 'CASHIER';
-    const isAdmin = userRole === 'ADMIN';
+    const isAdmin = currentUser?.role === 'ADMIN';
 
     // Charger le thème sauvegardé
     useEffect(() => {
@@ -53,8 +53,25 @@ export default function Layout() {
         document.documentElement.setAttribute('data-theme', newTheme);
     };
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        const refresh = localStorage.getItem('refreshToken');
+        if (refresh) {
+            try {
+                await client.post('/auth/logout/', { refresh });
+            } catch {
+                // ignore - still clear local state
+            }
+        }
+        if ('caches' in window) {
+            try {
+                const names = await caches.keys();
+                await Promise.all(names.map(n => caches.delete(n)));
+            } catch {
+                // ignore
+            }
+        }
         localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
         localStorage.removeItem('userRole');
         navigate('/login');
     };

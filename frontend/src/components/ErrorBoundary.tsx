@@ -51,7 +51,9 @@ class ErrorBoundary extends Component<Props, State> {
                         </button>
                         <button
                             onClick={() => {
-                                localStorage.clear();
+                                localStorage.removeItem('token');
+                                localStorage.removeItem('refreshToken');
+                                localStorage.removeItem('userRole');
                                 window.location.href = '/login';
                             }}
                             className="ml-4 text-gray-600 hover:text-gray-800 underline"

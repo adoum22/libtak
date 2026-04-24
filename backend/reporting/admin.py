@@ -8,7 +8,8 @@ class ReportSettingsAdmin(admin.ModelAdmin):
     
     fieldsets = (
         ('Destinataires', {
-            'fields': ('email_recipients',)
+            'fields': ('email_recipients',),
+            'description': 'La configuration SMTP (serveur, identifiants) est gérée via les variables d\'environnement EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, EMAIL_USE_TLS.',
         }),
         ('Rapport Journalier', {
             'fields': ('daily_enabled', 'daily_time')

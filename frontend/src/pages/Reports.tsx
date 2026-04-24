@@ -359,7 +359,7 @@ export default function Reports() {
                                 <tbody>
                                     {report.items_sold?.length ? (
                                         report.items_sold.map((item, i) => (
-                                            <tr key={i}>
+                                            <tr key={item.barcode ?? item.name ?? i}>
                                                 <td className="font-medium">{item.name}</td>
                                                 <td className="text-right">{item.unit_price?.toFixed(2) || '-'} DH</td>
                                                 <td className="text-center">

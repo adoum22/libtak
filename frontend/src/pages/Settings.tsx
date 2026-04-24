@@ -1,13 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download } from 'lucide-react';
 
 interface ReportSettings {
     email_recipients: string;
-    sender_email?: string;
-    smtp_host?: string;
-    smtp_port?: number;
     daily_enabled: boolean;
     daily_time: string;
     weekly_enabled: boolean;
@@ -39,6 +37,7 @@ interface AppSettings {
 
 export default function Settings() {
     const queryClient = useQueryClient();
+    const navigate = useNavigate();
     const [showSuccess, setShowSuccess] = useState(false);
     const [activeTab, setActiveTab] = useState<'store' | 'reports' | 'permissions' | 'backup'>('store');
     const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -55,7 +54,7 @@ export default function Settings() {
     });
 
     const [storeForm, setStoreForm] = useState<Partial<AppSettings>>({});
-    const [reportForm, setReportForm] = useState<Partial<ReportSettings> & { sender_password?: string }>({});
+    const [reportForm, setReportForm] = useState<Partial<ReportSettings>>({});
 
     // Initialize forms when data loads
     useEffect(() => {
@@ -96,7 +95,7 @@ export default function Settings() {
     });
 
     const updateReportSettings = useMutation({
-        mutationFn: (data: Partial<ReportSettings> & { sender_password?: string }) => client.patch('/reporting/settings/', data),
+        mutationFn: (data: Partial<ReportSettings>) => client.patch('/reporting/settings/', data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['reportSettings'] });
             setShowSuccess(true);
@@ -328,54 +327,22 @@ export default function Settings() {
                     </div>
                     <div className="card-body space-y-8">
 
-                        {/* SMTP Configuration */}
-                        <div className="space-y-4 border-b pb-6">
+                        {/* SMTP Configuration notice */}
+                        <div className="space-y-2 border-b pb-6">
                             <h3 className="font-medium text-primary flex items-center gap-2">
                                 <Mail size={18} />
                                 Configuration Serveur d'Envoi (SMTP)
                             </h3>
-                            <p className="text-sm text-muted">Configurez ici le compte email utilisé pour envoyer les rapports.</p>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Email Expéditeur</label>
-                                    <input
-                                        type="email"
-                                        placeholder="boutique@gmail.com"
-                                        value={reportForm.sender_email || ''}
-                                        onChange={(e) => setReportForm({ ...reportForm, sender_email: e.target.value })}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Mot de passe (App Password)</label>
-                                    <input
-                                        type="password"
-                                        placeholder="••••••••"
-                                        value={reportForm.sender_password || ''}
-                                        onChange={(e) => setReportForm({ ...reportForm, sender_password: e.target.value })}
-                                    />
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Serveur SMTP</label>
-                                    <input
-                                        type="text"
-                                        placeholder="smtp.gmail.com"
-                                        value={reportForm.smtp_host || 'smtp.gmail.com'}
-                                        onChange={(e) => setReportForm({ ...reportForm, smtp_host: e.target.value })}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">Port SMTP</label>
-                                    <input
-                                        type="number"
-                                        placeholder="587"
-                                        value={reportForm.smtp_port || 587}
-                                        onChange={(e) => setReportForm({ ...reportForm, smtp_port: parseInt(e.target.value) })}
-                                    />
-                                </div>
-                            </div>
+                            <p className="text-sm text-muted">
+                                La configuration SMTP (serveur, identifiants, mot de passe) est désormais gérée
+                                par les variables d'environnement du serveur :
+                                <code className="ml-1">EMAIL_HOST</code>,
+                                <code className="ml-1">EMAIL_PORT</code>,
+                                <code className="ml-1">EMAIL_HOST_USER</code>,
+                                <code className="ml-1">EMAIL_HOST_PASSWORD</code>,
+                                <code className="ml-1">EMAIL_USE_TLS</code>.
+                                Contactez votre administrateur pour les modifier.
+                            </p>
                         </div>
 
                         {/* Recipients */}
@@ -561,7 +528,7 @@ export default function Settings() {
 
                         <div className="pt-4">
                             <button
-                                onClick={() => window.location.href = '/users'}
+                                onClick={() => navigate('/users')}
                                 className="btn-primary inline-flex items-center gap-2"
                             >
                                 <Users size={18} />

@@ -78,7 +78,7 @@ export default function Inventory() {
         supplier: ''
     });
 
-    const { data: productsData } = useQuery({
+    const { data: productsData, isLoading, error } = useQuery({
         queryKey: ['products', search],
         queryFn: () => client.get(`/inventory/products/?search=${search}`).then(res => res.data)
     });
@@ -183,12 +183,12 @@ export default function Inventory() {
     const { data: currentUser } = useQuery({
         queryKey: ['currentUser'],
         queryFn: () => client.get('/auth/me/').then(res => res.data),
-        retry: false
+        retry: false,
+        staleTime: 60_000,
     });
 
-    // Check permissions
-    const userRole = localStorage.getItem('userRole') || 'CASHIER';
-    const isAdmin = userRole === 'ADMIN';
+    // Check permissions - source of truth is the server response, not localStorage
+    const isAdmin = currentUser?.role === 'ADMIN';
     const canManageStock = isAdmin || (currentUser?.can_manage_stock === true);
 
     const openCreateModal = () => {
@@ -327,111 +327,130 @@ export default function Inventory() {
             {/* Products Table */}
             <div className="card overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Produit</th>
-                                <th>Code-barres</th>
-                                <th>Catégorie</th>
-                                {isAdmin && <th className="text-right">Prix Achat</th>}
-                                <th className="text-right">Prix Vente TTC</th>
-                                {isAdmin && <th className="text-right">Marge</th>}
-                                <th className="text-center">Stock</th>
-                                <th className="text-center">Seuil</th>
-                                <th>Fournisseur</th>
-                                {canManageStock && <th>Actions</th>}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {products.map((product) => (
-                                <tr key={product.id}>
-                                    <td>
-                                        <div className="flex items-center gap-3">
-                                            <div
-                                                onClick={() => {
-                                                    if (product.image_url) {
-                                                        setViewingImageProduct(product);
-                                                    } else {
-                                                        handleListUploadClick(product.id);
-                                                    }
-                                                }}
-                                                className="w-10 h-10 bg-tertiary rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden cursor-pointer hover:ring-2 hover:ring-accent transition-all relative group"
-                                                title={product.image_url ? "Voir la photo" : "Ajouter une photo"}
-                                            >
-                                                {product.image_url ? (
-                                                    <>
-                                                        <img
-                                                            src={product.image_url}
-                                                            alt=""
-                                                            className="w-full h-full object-cover"
-                                                        />
-                                                        <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                                                            <Edit size={12} className="text-white" />
-                                                        </div>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Package size={20} className="text-muted group-hover:hidden" />
-                                                        <Plus size={20} className="text-accent hidden group-hover:block" />
-                                                    </>
-                                                )}
-                                            </div>
-                                            <div>
-                                                <p className="font-medium">{product.name}</p>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="font-mono text-sm">{product.barcode}</td>
-                                    <td>
-                                        {product.category_name && (
-                                            <span className="badge badge-accent">{product.category_name}</span>
-                                        )}
-                                    </td>
-                                    {isAdmin && <td className="text-right">{product.purchase_price?.toFixed(2)} DH</td>}
-                                    <td className="text-right font-semibold">{product.price_ttc?.toFixed(2)} DH</td>
-                                    {isAdmin && (
-                                        <td className="text-right">
-                                            <span className={product.profit_margin > 0 ? 'text-success' : 'text-danger'}>
-                                                {product.profit_margin?.toFixed(2)} DH
-                                            </span>
-                                        </td>
-                                    )}
-                                    <td className="text-center">
-                                        <span className={`badge ${product.stock === 0 ? 'badge-danger' :
-                                            product.is_low_stock ? 'badge-warning' : 'badge-success'
-                                            }`}>
-                                            {product.is_low_stock && <AlertTriangle size={12} className="mr-1" />}
-                                            {product.stock}
-                                        </span>
-                                    </td>
-                                    <td className="text-center text-muted font-mono">{product.min_stock}</td>
-                                    <td className="text-sm">{product.supplier_name || '-'}</td>
-                                    {canManageStock && (
+                    {isLoading ? (
+                        <div className="p-8 text-center">
+                            <div className="animate-spin inline-block w-8 h-8 border-4 border-accent border-t-transparent rounded-full mb-4"></div>
+                            <p className="text-muted">{t('Loading')}</p>
+                        </div>
+                    ) : error ? (
+                        <div className="p-8 text-center text-danger">
+                            <AlertTriangle size={48} className="mx-auto mb-4" />
+                            <p className="font-bold">Erreur de chargement</p>
+                            <p className="text-sm text-muted mt-2">Vérifiez votre connexion et réessayez</p>
+                        </div>
+                    ) : products.length === 0 ? (
+                        <div className="p-8 text-center">
+                            <Package size={48} className="mx-auto mb-4 text-muted" />
+                            <p className="font-bold">{t('NoProducts')}</p>
+                            <p className="text-sm text-muted mt-2">Cliquez sur "Ajouter un produit" pour commencer</p>
+                        </div>
+                    ) : (
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Produit</th>
+                                    <th>Code-barres</th>
+                                    <th>Catégorie</th>
+                                    {isAdmin && <th className="text-right">Prix Achat</th>}
+                                    <th className="text-right">Prix Vente TTC</th>
+                                    {isAdmin && <th className="text-right">Marge</th>}
+                                    <th className="text-center">Stock</th>
+                                    <th className="text-center">Seuil</th>
+                                    <th>Fournisseur</th>
+                                    {canManageStock && <th>Actions</th>}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {products.map((product) => (
+                                    <tr key={product.id}>
                                         <td>
-                                            <div className="flex items-center gap-1">
-                                                <button
-                                                    onClick={() => openEditModal(product)}
-                                                    className="btn-ghost p-2 text-accent hover:bg-accent-light"
-                                                >
-                                                    <Edit size={18} />
-                                                </button>
-                                                <button
+                                            <div className="flex items-center gap-3">
+                                                <div
                                                     onClick={() => {
-                                                        if (confirm('Supprimer ce produit?')) {
-                                                            deleteMutation.mutate(product.id);
+                                                        if (product.image_url) {
+                                                            setViewingImageProduct(product);
+                                                        } else {
+                                                            handleListUploadClick(product.id);
                                                         }
                                                     }}
-                                                    className="btn-ghost p-2 text-danger hover:bg-danger-light"
+                                                    className="w-10 h-10 bg-tertiary rounded-lg flex items-center justify-center flex-shrink-0 overflow-hidden cursor-pointer hover:ring-2 hover:ring-accent transition-all relative group"
+                                                    title={product.image_url ? "Voir la photo" : "Ajouter une photo"}
                                                 >
-                                                    <Trash2 size={18} />
-                                                </button>
+                                                    {product.image_url ? (
+                                                        <>
+                                                            <img
+                                                                src={product.image_url}
+                                                                alt={`Photo de ${product.name}`}
+                                                                className="w-full h-full object-cover"
+                                                            />
+                                                            <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                                                                <Edit size={12} className="text-white" />
+                                                            </div>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Package size={20} className="text-muted group-hover:hidden" />
+                                                            <Plus size={20} className="text-accent hidden group-hover:block" />
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <div>
+                                                    <p className="font-medium">{product.name}</p>
+                                                </div>
                                             </div>
                                         </td>
-                                    )}
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                                        <td className="font-mono text-sm">{product.barcode}</td>
+                                        <td>
+                                            {product.category_name && (
+                                                <span className="badge badge-accent">{product.category_name}</span>
+                                            )}
+                                        </td>
+                                        {isAdmin && <td className="text-right">{product.purchase_price?.toFixed(2)} DH</td>}
+                                        <td className="text-right font-semibold">{product.price_ttc?.toFixed(2)} DH</td>
+                                        {isAdmin && (
+                                            <td className="text-right">
+                                                <span className={product.profit_margin > 0 ? 'text-success' : 'text-danger'}>
+                                                    {product.profit_margin?.toFixed(2)} DH
+                                                </span>
+                                            </td>
+                                        )}
+                                        <td className="text-center">
+                                            <span className={`badge ${product.stock === 0 ? 'badge-danger' :
+                                                product.is_low_stock ? 'badge-warning' : 'badge-success'
+                                                }`}>
+                                                {product.is_low_stock && <AlertTriangle size={12} className="mr-1" />}
+                                                {product.stock}
+                                            </span>
+                                        </td>
+                                        <td className="text-center text-muted font-mono">{product.min_stock}</td>
+                                        <td className="text-sm">{product.supplier_name || '-'}</td>
+                                        {canManageStock && (
+                                            <td>
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        onClick={() => openEditModal(product)}
+                                                        className="btn-ghost p-2 text-accent hover:bg-accent-light"
+                                                    >
+                                                        <Edit size={18} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            if (confirm('Supprimer ce produit?')) {
+                                                                deleteMutation.mutate(product.id);
+                                                            }
+                                                        }}
+                                                        className="btn-ghost p-2 text-danger hover:bg-danger-light"
+                                                    >
+                                                        <Trash2 size={18} />
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        )}
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
                 </div>
             </div>
 

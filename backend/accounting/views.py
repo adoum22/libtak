@@ -1,6 +1,4 @@
-from decimal import Decimal
 from datetime import date
-from calendar import monthrange
 
 from django.db.models import Sum
 from django.utils import timezone
@@ -12,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsAdminRole
-from sales.models import Sale
+from sales.aggregates import revenue_for_month
 
 from .models import ExpenseCategory, MonthlyAccounting, Expense
 from .serializers import (
@@ -20,15 +18,6 @@ from .serializers import (
     ExpenseSerializer,
     MonthlyAccountingSerializer,
 )
-
-
-def _revenue_for(year: int, month: int) -> Decimal:
-    last_day = monthrange(year, month)[1]
-    qs = Sale.objects.filter(
-        created_at__date__gte=date(year, month, 1),
-        created_at__date__lte=date(year, month, last_day),
-    )
-    return qs.aggregate(total=Sum('total_ttc'))['total'] or Decimal('0')
 
 
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
@@ -67,7 +56,10 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         year, month = int(year), int(month)
         monthly, _ = MonthlyAccounting.objects.get_or_create(year=year, month=month)
         data = self.get_serializer(monthly).data
-        data['revenue'] = float(_revenue_for(year, month))
+        data['revenue'] = float(revenue_for_month(year, month))
+        # Accounting profit = gross revenue TTC - manager withdrawal - operating expenses.
+        # This intentionally differs from the Reporting "profit" (revenue - COGS),
+        # because accounting tracks owner cash flow while reporting tracks margin.
         data['net_profit'] = (
             data['revenue']
             - float(monthly.manager_withdrawal)
@@ -111,7 +103,7 @@ class YearSummaryView(APIView):
             expenses_total = (
                 float(sum(e.amount for e in entry.expenses.all())) if entry else 0.0
             )
-            revenue = float(_revenue_for(year, m))
+            revenue = float(revenue_for_month(year, m))
             months.append({
                 'month': m,
                 'label': date(year, m, 1).strftime('%b'),

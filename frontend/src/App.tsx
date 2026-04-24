@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ToastProvider } from './components/Toast';
 import Layout from './components/Layout';
+import AdminRoute from './components/AdminRoute';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
 import Login from './pages/Login';
 import POS from './pages/POS';
@@ -35,15 +36,15 @@ function App() {
             <Route index element={<Dashboard />} />
             <Route path="pos" element={<POS />} />
             <Route path="inventory" element={<Inventory />} />
-            <Route path="suppliers" element={<Suppliers />} />
-            <Route path="reports" element={<Reports />} />
-            <Route path="users" element={<Users />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="returns" element={<Returns />} />
-            <Route path="purchase-orders" element={<PurchaseOrders />} />
-            <Route path="stock-count" element={<StockCount />} />
-            <Route path="zakat" element={<Zakat />} />
-            <Route path="accounting" element={<Accounting />} />
+            <Route path="suppliers" element={<AdminRoute><Suppliers /></AdminRoute>} />
+            <Route path="reports" element={<AdminRoute><Reports /></AdminRoute>} />
+            <Route path="users" element={<AdminRoute><Users /></AdminRoute>} />
+            <Route path="settings" element={<AdminRoute><Settings /></AdminRoute>} />
+            <Route path="returns" element={<AdminRoute><Returns /></AdminRoute>} />
+            <Route path="purchase-orders" element={<AdminRoute><PurchaseOrders /></AdminRoute>} />
+            <Route path="stock-count" element={<AdminRoute><StockCount /></AdminRoute>} />
+            <Route path="zakat" element={<AdminRoute><Zakat /></AdminRoute>} />
+            <Route path="accounting" element={<AdminRoute><Accounting /></AdminRoute>} />
           </Route>
         </Routes>
         <PWAInstallPrompt />

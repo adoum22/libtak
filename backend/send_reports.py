@@ -207,40 +207,48 @@ def generate_pdf_report(data, report_type):
     return buffer
 
 
-def send_email(settings, subject, body, attachments=None):
-    """Envoie un email avec les pièces jointes."""
-    if not settings.sender_email or not settings.sender_password:
-        print("❌ Email expéditeur non configuré")
+def send_email(report_settings, subject, body, attachments=None):
+    """Envoie un email avec les pièces jointes via les variables d'environnement EMAIL_*."""
+    import os
+    from django.conf import settings as django_settings
+
+    smtp_host = os.environ.get('EMAIL_HOST') or getattr(django_settings, 'EMAIL_HOST', '')
+    smtp_port = int(os.environ.get('EMAIL_PORT', getattr(django_settings, 'EMAIL_PORT', 587)))
+    smtp_user = os.environ.get('EMAIL_HOST_USER') or getattr(django_settings, 'EMAIL_HOST_USER', '')
+    smtp_pass = os.environ.get('EMAIL_HOST_PASSWORD') or getattr(django_settings, 'EMAIL_HOST_PASSWORD', '')
+    from_email = os.environ.get('DEFAULT_FROM_EMAIL') or getattr(django_settings, 'DEFAULT_FROM_EMAIL', smtp_user)
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        print("❌ Configuration SMTP manquante (EMAIL_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD)")
         return False
-    
-    recipients = settings.get_recipients_list()
+
+    recipients = report_settings.get_recipients_list()
     if not recipients:
         print("❌ Aucun destinataire configuré")
         return False
-    
+
     try:
         msg = MIMEMultipart()
-        msg['From'] = settings.sender_email
+        msg['From'] = from_email
         msg['To'] = ', '.join(recipients)
         msg['Subject'] = subject
-        
+
         msg.attach(MIMEText(body, 'html'))
-        
+
         if attachments:
             for filename, content in attachments:
                 attachment = MIMEApplication(content.read() if hasattr(content, 'read') else content)
                 attachment.add_header('Content-Disposition', 'attachment', filename=filename)
                 msg.attach(attachment)
-        
-        # Connexion SMTP
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
             server.starttls()
-            server.login(settings.sender_email, settings.sender_password)
+            server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        
+
         print(f"✅ Email envoyé à: {', '.join(recipients)}")
         return True
-        
+
     except Exception as e:
         print(f"❌ Erreur d'envoi: {str(e)}")
         return False
@@ -342,8 +350,9 @@ def main():
     settings = ReportSettings.get_settings()
     today = timezone.now().date()
     
+    import os
     print(f"📬 Destinataires: {settings.get_recipients_list()}")
-    print(f"📤 Expéditeur: {settings.sender_email}")
+    print(f"📤 Expéditeur: {os.environ.get('EMAIL_HOST_USER', '(non configuré)')}")
     print()
     
     # Liste des rapports à envoyer
@@ -351,6 +360,17 @@ def main():
     
     for report_type in ['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']:
         if should_send_report(report_type, settings, today):
+            # Check if already sent
+            start_date, end_date = get_period_dates(report_type, today)
+            if ReportLog.objects.filter(
+                report_type=report_type,
+                period_start=start_date,
+                period_end=end_date,
+                success=True
+            ).exists():
+                print(f"ℹ️ Rapport {report_type} déjà envoyé pour la période du {start_date} au {end_date}. Ignoré.")
+                continue
+                
             reports_to_send.append(report_type)
     
     if not reports_to_send:

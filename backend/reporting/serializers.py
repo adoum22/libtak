@@ -9,7 +9,6 @@ class ReportSettingsSerializer(serializers.ModelSerializer):
         model = ReportSettings
         fields = [
             'email_recipients', 'recipients_list',
-            'sender_email', 'sender_password', 'smtp_host', 'smtp_port',
             'daily_enabled', 'daily_time',
             'weekly_enabled', 'weekly_time', 'weekly_day',
             'monthly_enabled', 'monthly_time',
@@ -18,9 +17,6 @@ class ReportSettingsSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = ['updated_at']
-        extra_kwargs = {
-            'sender_password': {'write_only': True}
-        }
     
     def get_recipients_list(self, obj):
         return obj.get_recipients_list()

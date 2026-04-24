@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from core.image_validators import validate_image_upload
 from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 
 
@@ -26,6 +27,9 @@ class SupplierSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.image.url)
             return obj.image.url
         return None
+
+    def validate_image(self, value):
+        return validate_image_upload(value)
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -71,6 +75,9 @@ class ProductSerializer(serializers.ModelSerializer):
             return obj.image.url
         return None
 
+    def validate_image(self, value):
+        return validate_image_upload(value)
+
 
 class ProductCreateSerializer(serializers.ModelSerializer):
     """Serializer pour la création de produit avec moins de champs requis"""
@@ -82,11 +89,14 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'stock', 'min_stock',
             'category', 'supplier', 'image', 'active'
         ]
-    
+
     def validate_barcode(self, value):
         if Product.objects.filter(barcode=value).exists():
             raise serializers.ValidationError("Un produit avec ce code-barres existe déjà.")
         return value
+
+    def validate_image(self, value):
+        return validate_image_upload(value)
 
 
 class StockMovementSerializer(serializers.ModelSerializer):
@@ -217,38 +227,80 @@ class InventoryCountItemSerializer(serializers.ModelSerializer):
 class InventoryCountSerializer(serializers.ModelSerializer):
     items = InventoryCountItemSerializer(many=True, read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
-    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+    created_by_name = serializers.CharField(source='counted_by.username', read_only=True)
     
     class Meta:
         model = InventoryCount
         fields = ['id', 'name', 'status', 'status_display', 'notes',
-                  'items', 'created_by', 'created_by_name', 
+                  'items', 'counted_by', 'created_by_name', 
                   'created_at', 'completed_at']
-        read_only_fields = ['created_by', 'created_at', 'completed_at']
+        read_only_fields = ['counted_by', 'created_at', 'completed_at']
     
     def create(self, validated_data):
-        validated_data['created_by'] = self.context['request'].user
+        validated_data['counted_by'] = self.context['request'].user
         return super().create(validated_data)
 
 
 class InventoryCountCreateSerializer(serializers.ModelSerializer):
     items = serializers.ListField(child=serializers.DictField(), write_only=True)
+    auto_validate = serializers.BooleanField(default=True, write_only=True)
     
     class Meta:
         model = InventoryCount
-        fields = ['name', 'notes', 'items']
+        fields = ['name', 'notes', 'items', 'auto_validate']
     
     def create(self, validated_data):
+        from .models import StockMovement
+        
         items_data = validated_data.pop('items', [])
-        validated_data['created_by'] = self.context['request'].user
+        auto_validate = validated_data.pop('auto_validate', True)
+        validated_data['counted_by'] = self.context['request'].user
         count = InventoryCount.objects.create(**validated_data)
         
+        has_counted_quantities = False
+        
         for item in items_data:
+            counted_qty = item.get('counted_quantity')
+            if counted_qty is not None:
+                has_counted_quantities = True
+            
             InventoryCountItem.objects.create(
                 count=count,
                 product_id=item['product'],
-                expected_quantity=item.get('expected_quantity', 0)
+                expected_quantity=item.get('expected_quantity', 0),
+                counted_quantity=counted_qty
             )
+        
+        # Si des quantités comptées sont fournies et auto_validate est True,
+        # on valide automatiquement et on met à jour le stock
+        if has_counted_quantities and auto_validate:
+            count.status = 'COMPLETED'
+            count.save()
+            
+            # Ajuster le stock pour chaque item
+            for count_item in count.items.all():
+                if count_item.counted_quantity is not None and count_item.difference != 0:
+                    # Mettre à jour le stock du produit
+                    product = count_item.product
+                    old_stock = product.stock
+                    product.stock = count_item.counted_quantity
+                    product.save()
+                    
+                    # Créer un mouvement de stock pour tracer l'ajustement
+                    diff = count_item.difference
+                    StockMovement.objects.create(
+                        product=product,
+                        movement_type='ADJUSTMENT',
+                        quantity=abs(diff),
+                        stock_before=old_stock,
+                        stock_after=count_item.counted_quantity,
+                        notes=f"Ajustement inventaire #{count.id}: {diff:+d}",
+                        created_by=self.context['request'].user
+                    )
+            
+            count.status = 'VALIDATED'
+            count.completed_at = count.created_at
+            count.save()
         
         return count
 
