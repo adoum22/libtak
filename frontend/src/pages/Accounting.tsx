@@ -26,7 +26,10 @@ interface MonthData {
     id: number; year: number; month: number;
     manager_withdrawal: string | number; notes: string;
     expenses: Expense[]; total_expenses: number;
-    revenue: number; net_profit: number;
+    revenue: number;
+    gross_margin?: number;
+    net_profit: number;
+    cash_after_withdrawal?: number;
 }
 interface YearSummary {
     year: number;
@@ -143,19 +146,44 @@ export default function Accounting() {
         const revenue = monthData.revenue ?? 0;
         const totalExp = monthData.total_expenses ?? 0;
         const wd = Number(monthData.manager_withdrawal) || 0;
-        const net = revenue - wd - totalExp;
+        // Source de vérité = backend (gross_margin = vente HT - achat).
+        // Fallback safe si l'API ancienne ne renvoie pas le champ.
+        const grossMargin = monthData.gross_margin ?? (monthData.net_profit + totalExp);
+        const cogs = Math.max(0, revenue - grossMargin);
+        const net = monthData.net_profit ?? (grossMargin - totalExp);
+        const cashAfter = monthData.cash_after_withdrawal ?? (net - wd);
+
+        // Données de waterfall pour visualiser : CA -> -achat -> -dépenses -> bénéfice
+        const waterfall = [
+            { name: 'CA', value: revenue, fill: '#10b981' },
+            { name: 'Coût achat', value: cogs, fill: '#f59e0b' },
+            { name: 'Marge brute', value: grossMargin, fill: '#3b82f6' },
+            { name: 'Dépenses', value: totalExp, fill: '#ef4444' },
+            { name: 'Bénéfice net', value: Math.max(0, net), fill: '#1e40af' },
+        ];
+
+        // Catégories de dépenses du mois (pour pie)
+        const byCat: Record<string, number> = {};
+        monthData.expenses.forEach(e => {
+            byCat[e.category_name] = (byCat[e.category_name] || 0) + Number(e.amount);
+        });
+        const catData = Object.entries(byCat).map(([category, total]) => ({ category, total }));
 
         return (
             <div className="space-y-6">
                 {/* KPI cards */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                     <div className="stat-card">
                         <div className="stat-icon bg-success-light"><DollarSign size={24} className="text-success" /></div>
                         <div><p className="stat-label">Chiffre d'affaires</p><p className="stat-value">{fmt(revenue)} DH</p></div>
                     </div>
                     <div className="stat-card">
-                        <div className="stat-icon bg-warning-light"><TrendingDown size={24} className="text-warning" /></div>
-                        <div><p className="stat-label">Retrait gérant</p><p className="stat-value">{fmt(wd)} DH</p></div>
+                        <div className="stat-icon bg-blue-100"><TrendingUp size={24} className="text-blue-600" /></div>
+                        <div>
+                            <p className="stat-label">Marge brute</p>
+                            <p className="stat-value">{fmt(grossMargin)} DH</p>
+                            <p className="text-xs text-muted">Vente − Achat</p>
+                        </div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-red-100"><TrendingDown size={24} className="text-red-500" /></div>
@@ -166,6 +194,65 @@ export default function Accounting() {
                         <div>
                             <p className="stat-label">Bénéfice net</p>
                             <p className={`stat-value ${net >= 0 ? 'text-success' : 'text-red-500'}`}>{fmt(net)} DH</p>
+                            <p className="text-xs text-muted">Marge − Dépenses</p>
+                        </div>
+                    </div>
+                    <div className="stat-card">
+                        <div className="stat-icon bg-warning-light"><TrendingDown size={24} className="text-warning" /></div>
+                        <div>
+                            <p className="stat-label">Retrait gérant</p>
+                            <p className="stat-value">{fmt(wd)} DH</p>
+                            <p className="text-xs text-muted">Reste : {fmt(cashAfter)} DH</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Charts row */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Décomposition CA -> Bénéfice */}
+                    <div className="card p-6 lg:col-span-2">
+                        <h2 className="text-lg font-semibold mb-4">Décomposition du résultat</h2>
+                        <div className="h-[280px] w-full">
+                            <ResponsiveContainer>
+                                <BarChart data={waterfall}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                                        {waterfall.map((d, i) => (
+                                            <Cell key={i} fill={d.fill} />
+                                        ))}
+                                    </Bar>
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+
+                    {/* Pie dépenses */}
+                    <div className="card p-6">
+                        <h2 className="text-lg font-semibold mb-4">Dépenses par catégorie</h2>
+                        <div className="h-[280px] w-full">
+                            {catData.length === 0 ? (
+                                <div className="flex items-center justify-center h-full text-muted text-sm">
+                                    Aucune dépense ce mois
+                                </div>
+                            ) : (
+                                <ResponsiveContainer>
+                                    <PieChart>
+                                        <Pie
+                                            data={catData} dataKey="total" nameKey="category"
+                                            cx="50%" cy="50%" outerRadius={90}
+                                            label={(e: any) => e.category}
+                                        >
+                                            {catData.map((row, i) => (
+                                                <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                                            ))}
+                                        </Pie>
+                                        <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                    </PieChart>
+                                </ResponsiveContainer>
+                            )}
                         </div>
                     </div>
                 </div>

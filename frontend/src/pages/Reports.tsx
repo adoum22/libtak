@@ -83,10 +83,15 @@ export default function Reports() {
                 { responseType: 'blob' }
             );
 
-            // Détecter le type réel renvoyé (le serveur peut servir Excel
-            // en fallback si reportlab n'est pas installé).
-            const contentType: string = response.headers?.['content-type'] || '';
-            const isExcel = contentType.includes('spreadsheetml');
+            // Détecter le type réel renvoyé. CORS expose pas toujours
+            // le header content-type via axios -> on lit aussi blob.type
+            // qui est posé par le navigateur depuis la réponse.
+            const blobType: string = (response.data as Blob)?.type || '';
+            const headerType: string = response.headers?.['content-type'] || '';
+            const contentType = blobType || headerType;
+            const isExcel = contentType.includes('spreadsheetml')
+                || contentType.includes('officedocument')
+                || format === 'xlsx';
             const ext = isExcel ? 'xlsx' : 'pdf';
             const blob = new Blob([response.data], { type: contentType || undefined });
 
