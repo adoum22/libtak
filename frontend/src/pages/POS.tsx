@@ -54,6 +54,10 @@ export default function POS() {
 
     const searchInputRef = useRef<HTMLInputElement>(null);
 
+    const parseMoneyInput = (value: string) => (
+        Number.parseFloat(value.replace(',', '.')) || 0
+    );
+
     // Fetch products
     const { data: products = [] } = useQuery<Product[]>({
         queryKey: ['products', searchTerm],
@@ -126,7 +130,7 @@ export default function POS() {
                         discount: discountAmount > 0 ? { name: 'Reduction', amount: discountAmount } : undefined,
                         total: total,
                         paymentMethod: 'CASH',
-                        amountGiven: parseFloat(amountGiven) || total,
+                        amountGiven: parseMoneyInput(amountGiven) || total,
                         change: changeAmount > 0 ? changeAmount : 0
                     });
                 });
@@ -180,11 +184,12 @@ export default function POS() {
     }, [resetSale]);
 
     const subtotal = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
-    const parsedDiscount = Number.parseFloat(discountInput.replace(',', '.')) || 0;
+    const parsedDiscount = parseMoneyInput(discountInput);
     const discountAmount = Math.min(Math.max(parsedDiscount, 0), subtotal);
     const total = Math.max(0, subtotal - discountAmount);
     const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
-    const changeAmount = parseFloat(amountGiven) ? parseFloat(amountGiven) - total : 0;
+    const amountReceived = parseMoneyInput(amountGiven);
+    const changeAmount = amountReceived ? amountReceived - total : 0;
     const discountTooHigh = parsedDiscount > subtotal && subtotal > 0;
 
     // Focus search on mount
@@ -286,9 +291,10 @@ export default function POS() {
                                 <label className="block text-sm font-medium">Montant Perçu</label>
                                 <div className="relative">
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         autoFocus
-                                        className="text-2xl font-bold py-3 pl-4 pr-12 w-full border-2 focus:border-accent rounded-xl"
+                                        className="text-2xl font-bold py-3 pl-4 pr-16 w-full border-2 focus:border-accent rounded-xl"
                                         placeholder="0.00"
                                         value={amountGiven}
                                         onChange={e => setAmountGiven(e.target.value)}
@@ -535,13 +541,11 @@ export default function POS() {
                                         <p className="text-xs text-muted">Montant deduit en dirhams</p>
                                     </div>
                                 </div>
-                                <div className="relative w-32 shrink-0">
+                                <div className="relative w-40 shrink-0">
                                     <input
-                                        type="number"
-                                        min="0"
-                                        step="0.01"
+                                        type="text"
                                         inputMode="decimal"
-                                        className="input-sm w-full pr-9 text-right font-bold"
+                                        className="input-sm w-full pr-12 text-right font-bold"
                                         placeholder="0.00"
                                         value={discountInput}
                                         onChange={(e) => setDiscountInput(e.target.value)}
