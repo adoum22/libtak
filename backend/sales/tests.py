@@ -1,11 +1,12 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
-from rest_framework import status
+from rest_framework import serializers, status
 from decimal import Decimal
 
 from inventory.models import Product
 from .models import Sale, SaleItem, Discount, Return, ReturnItem
+from .serializers import SaleSerializer
 
 User = get_user_model()
 
@@ -178,6 +179,17 @@ class SalesAPITest(APITestCase):
         }
         response = self.client.post('/api/sales/sales/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_stock_decrement_rechecks_stale_stock_atomically(self):
+        stale_product = Product.objects.get(pk=self.product.pk)
+        Product.objects.filter(pk=self.product.pk).update(stock=1)
+
+        serializer = SaleSerializer()
+        with self.assertRaises(serializers.ValidationError):
+            serializer._decrement_product_stock(stale_product, 2)
+
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 1)
     
     def test_list_sales(self):
         """Test liste des ventes"""

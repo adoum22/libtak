@@ -1,5 +1,6 @@
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
+from django.utils import timezone
 from rest_framework import serializers
 
 from inventory.models import Product
@@ -72,6 +73,34 @@ class SaleSerializer(serializers.ModelSerializer):
             except Exception:
                 pass
 
+    def _decrement_product_stock(self, product, quantity):
+        updated = Product.objects.filter(
+            id=product.id,
+            active=True,
+            stock__gte=quantity,
+        ).update(
+            stock=F('stock') - quantity,
+            updated_at=timezone.now(),
+        )
+
+        if updated != 1:
+            current = Product.objects.filter(id=product.id).only(
+                'name', 'active', 'stock',
+            ).first()
+            if not current:
+                raise serializers.ValidationError("Produit introuvable.")
+            if not current.active:
+                raise serializers.ValidationError(
+                    f"Produit inactif: {current.name}."
+                )
+            raise serializers.ValidationError(
+                f"Stock insuffisant pour {current.name}. "
+                f"Disponible: {current.stock}"
+            )
+
+        product.refresh_from_db(fields=['stock'])
+        return product.stock
+
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         user = validated_data.pop('user', None) or self.context['request'].user
@@ -96,7 +125,8 @@ class SaleSerializer(serializers.ModelSerializer):
             total_tva = 0
             prepared_items = []
 
-            for product_id, quantity in product_quantities.items():
+            for product_id in sorted(product_quantities):
+                quantity = product_quantities[product_id]
                 product = locked_products.get(product_id)
                 if not product:
                     raise serializers.ValidationError("Produit introuvable.")
@@ -137,9 +167,11 @@ class SaleSerializer(serializers.ModelSerializer):
             for item in prepared_items:
                 SaleItem.objects.create(sale=sale, **item)
                 product = item['product']
-                product.stock -= item['quantity']
-                product.save(update_fields=['stock', 'updated_at'])
-                stock_updates.append((product.id, product.stock))
+                new_stock = self._decrement_product_stock(
+                    product,
+                    item['quantity'],
+                )
+                stock_updates.append((product.id, new_stock))
 
         self._send_stock_updates(stock_updates)
         return sale
@@ -299,7 +331,10 @@ class ReturnSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
 
         with transaction.atomic():
-            sale_item_ids = [item['sale_item'].id for item in items_data]
+            sale_item_ids = sorted(item['sale_item'].id for item in items_data)
+            SaleItem.objects.filter(id__in=sale_item_ids).update(
+                quantity=F('quantity'),
+            )
             locked_sale_items = {
                 sale_item.id: sale_item
                 for sale_item in SaleItem.objects.select_for_update()
