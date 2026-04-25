@@ -277,7 +277,7 @@ if not SYNC_TOKEN and not DEBUG:
 IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
 
 # ===== SECURITY HEADERS (production only) =====
-if not DEBUG:
+if not DEBUG and not TESTING:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
