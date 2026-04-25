@@ -184,6 +184,17 @@ class SalesAPITest(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_inactive_product_can_still_be_sold_if_in_cart(self):
+        self.product.active = False
+        self.product.save(update_fields=['active'])
+
+        response = self.client.post('/api/sales/sales/', {
+            'items': [{'product_id': self.product.id, 'quantity': 1}],
+            'payment_method': 'CASH',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
     def test_duplicate_sale_items_are_aggregated_for_stock_check(self):
         data = {
             'items': [

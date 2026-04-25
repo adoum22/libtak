@@ -85,7 +85,6 @@ class SaleSerializer(serializers.ModelSerializer):
     def _decrement_product_stock(self, product, quantity):
         updated = Product.objects.filter(
             id=product.id,
-            active=True,
             stock__gte=quantity,
         ).update(
             stock=F('stock') - quantity,
@@ -94,14 +93,10 @@ class SaleSerializer(serializers.ModelSerializer):
 
         if updated != 1:
             current = Product.objects.filter(id=product.id).only(
-                'name', 'active', 'stock',
+                'name', 'stock',
             ).first()
             if not current:
                 raise serializers.ValidationError("Produit introuvable.")
-            if not current.active:
-                raise serializers.ValidationError(
-                    f"Produit inactif: {current.name}."
-                )
             raise serializers.ValidationError(
                 f"Stock insuffisant pour {current.name}. "
                 f"Disponible: {current.stock}"
@@ -140,10 +135,6 @@ class SaleSerializer(serializers.ModelSerializer):
                 product = locked_products.get(product_id)
                 if not product:
                     raise serializers.ValidationError("Produit introuvable.")
-                if not product.active:
-                    raise serializers.ValidationError(
-                        f"Produit inactif: {product.name}."
-                    )
                 if product.stock < quantity:
                     raise serializers.ValidationError(
                         f"Stock insuffisant pour {product.name}. "
