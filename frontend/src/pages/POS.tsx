@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
@@ -134,11 +134,6 @@ export default function POS() {
                 // Print service not available; ignore.
             }
 
-            // 5. Auto Reset after 2 seconds
-            setTimeout(() => {
-                resetSale();
-                setShowSuccessOverlay(false);
-            }, 2000);
         }
     });
 
@@ -171,13 +166,18 @@ export default function POS() {
         checkoutMutation.mutate(payload);
     };
 
-    const resetSale = () => {
+    const resetSale = useCallback(() => {
         setCart([]);
         setAmountGiven('');
         setSearchTerm('');
         setDiscountInput('');
         searchInputRef.current?.focus();
-    };
+    }, []);
+
+    const closeSuccessOverlay = useCallback(() => {
+        resetSale();
+        setShowSuccessOverlay(false);
+    }, [resetSale]);
 
     const subtotal = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
     const parsedDiscount = Number.parseFloat(discountInput.replace(',', '.')) || 0;
@@ -192,18 +192,31 @@ export default function POS() {
         searchInputRef.current?.focus();
     }, []);
 
+    useEffect(() => {
+        if (!showSuccessOverlay) return;
+
+        const timer = window.setTimeout(closeSuccessOverlay, 5000);
+        return () => window.clearTimeout(timer);
+    }, [closeSuccessOverlay, showSuccessOverlay]);
+
     return (
         <div className="flex gap-6 h-[calc(100vh-120px)] animate-fadeIn relative">
 
             {/* Success Overlay (Auto-dismiss) */}
             {showSuccessOverlay && (
                 <div className="absolute inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-md animate-fadeIn">
-                    <div className="text-center p-12 bg-secondary rounded-3xl shadow-2xl animate-bounce-short">
+                    <div className="text-center w-full max-w-xl mx-4 px-8 py-10 bg-secondary rounded-2xl shadow-2xl animate-bounce-short">
                         <div className="w-24 h-24 bg-success rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-success/30">
                             <Check size={64} className="text-white" strokeWidth={4} />
                         </div>
-                        <h2 className="text-4xl font-bold text-success mb-2">Vente Validée !</h2>
-                        <p className="text-muted text-lg">Retour à la caisse...</p>
+                        <h2 className="text-4xl font-bold text-success mb-2 whitespace-normal">Vente Validée !</h2>
+                        <p className="text-muted text-lg mb-6">Retour à la caisse dans 5 secondes...</p>
+                        <button
+                            onClick={closeSuccessOverlay}
+                            className="btn-primary px-6 py-3 font-bold"
+                        >
+                            Nouvelle vente
+                        </button>
                     </div>
                 </div>
             )}
