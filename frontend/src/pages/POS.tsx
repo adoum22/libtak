@@ -14,7 +14,6 @@ import {
     X,
     Check,
     ScanLine,
-    Tag,
     Percent
 } from 'lucide-react';
 
@@ -50,16 +49,8 @@ export default function POS() {
     // Price Check State
     const [checkedProduct, setCheckedProduct] = useState<Product | null>(null);
 
-    // Discount State
-    const [discountCode, setDiscountCode] = useState('');
-    const [appliedDiscount, setAppliedDiscount] = useState<{
-        id: number;
-        name: string;
-        discount_type: string;
-        value: number;
-        discount_amount: number;
-    } | null>(null);
-    const [discountError, setDiscountError] = useState('');
+    // Direct discount in DH
+    const [discountInput, setDiscountInput] = useState('');
 
     const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -104,7 +95,11 @@ export default function POS() {
 
     // Checkout mutation
     const checkoutMutation = useMutation({
-        mutationFn: (data: { items: Array<{ product_id: number; quantity: number }>; payment_method: string }) =>
+        mutationFn: (data: {
+            items: Array<{ product_id: number; quantity: number }>;
+            payment_method: string;
+            discount_amount: number;
+        }) =>
             client.post('/sales/sales/', data),
         onError: (error: unknown) => {
             console.error("Erreur Checkout:", error);
@@ -128,7 +123,7 @@ export default function POS() {
                         saleId: response.data?.id || Date.now(),
                         items: cart,
                         subtotal: subtotal,
-                        discount: appliedDiscount ? { name: appliedDiscount.name, amount: appliedDiscount.discount_amount } : undefined,
+                        discount: discountAmount > 0 ? { name: 'Reduction', amount: discountAmount } : undefined,
                         total: total,
                         paymentMethod: 'CASH',
                         amountGiven: parseFloat(amountGiven) || total,
@@ -169,6 +164,7 @@ export default function POS() {
                 product_id: item.product.id,
                 quantity: item.quantity
             })),
+            discount_amount: discountAmount,
             payment_method: 'CASH'
         };
 
@@ -179,46 +175,17 @@ export default function POS() {
         setCart([]);
         setAmountGiven('');
         setSearchTerm('');
-        setDiscountCode('');
-        setAppliedDiscount(null);
-        setDiscountError('');
+        setDiscountInput('');
         searchInputRef.current?.focus();
     };
 
     const subtotal = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
-    const discountAmount = appliedDiscount?.discount_amount || 0;
-    const total = subtotal - discountAmount;
+    const parsedDiscount = Number.parseFloat(discountInput.replace(',', '.')) || 0;
+    const discountAmount = Math.min(Math.max(parsedDiscount, 0), subtotal);
+    const total = Math.max(0, subtotal - discountAmount);
     const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
     const changeAmount = parseFloat(amountGiven) ? parseFloat(amountGiven) - total : 0;
-
-    // Apply discount code
-    const applyDiscountCode = async () => {
-        if (!discountCode.trim()) return;
-        setDiscountError('');
-
-        try {
-            const response = await client.post('/sales/discounts/apply/', {
-                code: discountCode,
-                subtotal: subtotal
-            });
-            setAppliedDiscount({
-                ...response.data.discount,
-                discount_amount: response.data.discount_amount
-            });
-            toast.success(`Remise "${response.data.discount.name}" appliquée!`);
-        } catch (error: unknown) {
-            const errorMsg = getApiErrorMessage(error, 'Code invalide', 'code');
-            setDiscountError(errorMsg);
-            setAppliedDiscount(null);
-        }
-    };
-
-    // Remove discount
-    const removeDiscount = () => {
-        setAppliedDiscount(null);
-        setDiscountCode('');
-        setDiscountError('');
-    };
+    const discountTooHigh = parsedDiscount > subtotal && subtotal > 0;
 
     // Focus search on mount
     useEffect(() => {
@@ -543,60 +510,50 @@ export default function POS() {
 
                 {/* Cart Footer */}
                 <div className="border-t p-6 bg-tertiary/10 space-y-4">
-                    {/* Discount Code Section */}
                     {cart.length > 0 && (
-                        <div className="space-y-2">
-                            {!appliedDiscount ? (
-                                <>
-                                    <div className="flex gap-2">
-                                        <div className="flex-1 relative">
-                                            <Tag className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
-                                            <input
-                                                type="text"
-                                                placeholder="Code promo..."
-                                                className="input-sm w-full pl-9 pr-3 py-2 text-sm"
-                                                value={discountCode}
-                                                onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
-                                                onKeyDown={(e) => e.key === 'Enter' && applyDiscountCode()}
-                                            />
-                                        </div>
-                                        <button
-                                            onClick={applyDiscountCode}
-                                            disabled={!discountCode.trim()}
-                                            className="btn-secondary px-4 py-2 text-sm font-medium"
-                                        >
-                                            Appliquer
-                                        </button>
-                                    </div>
-                                    {discountError && (
-                                        <p className="text-danger text-xs">{discountError}</p>
-                                    )}
-                                </>
-                            ) : (
-                                <div className="flex items-center justify-between p-3 bg-success-light rounded-lg border border-success/20">
-                                    <div className="flex items-center gap-2">
-                                        <Percent size={16} className="text-success" />
-                                        <span className="font-medium text-success-dark">{appliedDiscount.name}</span>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <span className="font-bold text-success">-{appliedDiscount.discount_amount.toFixed(2)} DH</span>
-                                        <button
-                                            onClick={removeDiscount}
-                                            className="p-1 text-danger hover:bg-danger-light rounded"
-                                        >
-                                            <X size={14} />
-                                        </button>
+                        <div className="rounded-xl border border-accent/20 bg-accent-light/40 p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span className="w-9 h-9 rounded-lg bg-accent text-white flex items-center justify-center shrink-0">
+                                        <Percent size={18} />
+                                    </span>
+                                    <div className="min-w-0">
+                                        <p className="font-semibold leading-tight">Reduction directe</p>
+                                        <p className="text-xs text-muted">Montant deduit en dirhams</p>
                                     </div>
                                 </div>
+                                <div className="relative w-32 shrink-0">
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        inputMode="decimal"
+                                        className="input-sm w-full pr-9 text-right font-bold"
+                                        placeholder="0.00"
+                                        value={discountInput}
+                                        onChange={(e) => setDiscountInput(e.target.value)}
+                                    />
+                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted">DH</span>
+                                </div>
+                            </div>
+                            {discountTooHigh && (
+                                <p className="text-xs font-medium text-warning">
+                                    Reduction limitee au total du panier.
+                                </p>
                             )}
                         </div>
                     )}
 
-                    {/* Totals */}
-                    {appliedDiscount && (
-                        <div className="flex items-baseline justify-between text-muted">
-                            <span className="text-sm">Sous-total</span>
-                            <span className="text-lg">{subtotal.toFixed(2)} DH</span>
+                    {discountAmount > 0 && (
+                        <div className="space-y-2">
+                            <div className="flex items-baseline justify-between text-muted">
+                                <span className="text-sm">Sous-total</span>
+                                <span className="text-lg">{subtotal.toFixed(2)} DH</span>
+                            </div>
+                            <div className="flex items-baseline justify-between text-success">
+                                <span className="text-sm font-medium">Reduction</span>
+                                <span className="text-lg font-bold">-{discountAmount.toFixed(2)} DH</span>
+                            </div>
                         </div>
                     )}
 

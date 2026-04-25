@@ -66,6 +66,7 @@ class SyncService:
         return {
             'local_id': sale.id,
             'total_ht': str(sale.total_ht),
+            'discount_amount': str(sale.discount_amount),
             'total_ttc': str(sale.total_ttc),
             'payment_method': sale.payment_method,
             'created_at': sale.created_at.isoformat(),

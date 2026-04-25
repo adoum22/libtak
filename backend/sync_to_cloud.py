@@ -61,6 +61,7 @@ def serialize_sale(sale):
         'total_ht': str(sale.total_ht),
         'total_tva': str(sale.total_tva),
         'total_ttc': str(sale.total_ttc),
+        'discount_amount': str(sale.discount_amount),
         'items': items,
     }
 

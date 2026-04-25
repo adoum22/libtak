@@ -152,6 +152,38 @@ class SalesAPITest(APITestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 98)  # 100 - 2
 
+    def test_create_sale_with_direct_discount(self):
+        data = {
+            'items': [
+                {'product_id': self.product.id, 'quantity': 2}
+            ],
+            'discount_amount': '5.00',
+            'payment_method': 'CASH'
+        }
+        response = self.client.post('/api/sales/sales/', data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Decimal(str(response.data['discount_amount'])),
+            Decimal('5.00'),
+        )
+        self.assertEqual(
+            Decimal(str(response.data['total_ttc'])),
+            Decimal('19.00'),
+        )
+
+    def test_discount_cannot_exceed_sale_total(self):
+        data = {
+            'items': [
+                {'product_id': self.product.id, 'quantity': 1}
+            ],
+            'discount_amount': '99.00',
+            'payment_method': 'CASH'
+        }
+        response = self.client.post('/api/sales/sales/', data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_duplicate_sale_items_are_aggregated_for_stock_check(self):
         data = {
             'items': [
@@ -320,6 +352,27 @@ class ReturnAPITest(APITestCase):
         # Vérifier que le stock a été restauré
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, stock_before + 2)
+
+    def test_return_refund_uses_discounted_sale_price(self):
+        sale_response = self.client.post('/api/sales/sales/', {
+            'items': [{'product_id': self.product.id, 'quantity': 2}],
+            'discount_amount': '4.00',
+            'payment_method': 'CASH'
+        }, format='json')
+        discounted_sale = Sale.objects.get(id=sale_response.data['id'])
+        discounted_item = discounted_sale.items.first()
+
+        response = self.client.post('/api/sales/returns/', {
+            'sale': discounted_sale.id,
+            'reason': 'Retour avec reduction',
+            'items': [{'sale_item': discounted_item.id, 'quantity': 1}]
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Decimal(str(response.data['refund_amount'])),
+            Decimal('10.00'),
+        )
 
     def test_return_item_must_belong_to_sale(self):
         other_product = Product.objects.create(

@@ -1,3 +1,5 @@
+from decimal import Decimal, ROUND_HALF_UP
+
 from django.db import transaction
 from django.db.models import F, Sum
 from django.utils import timezone
@@ -40,12 +42,19 @@ class SaleItemDetailSerializer(serializers.ModelSerializer):
 class SaleSerializer(serializers.ModelSerializer):
     items = SaleItemSerializer(many=True)
     user = serializers.StringRelatedField(read_only=True)
+    discount_amount = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal('0.00'),
+        required=False,
+        default=Decimal('0.00'),
+    )
 
     class Meta:
         model = Sale
         fields = (
             'id', 'user', 'items',
-            'total_ht', 'total_tva', 'total_ttc',
+            'total_ht', 'total_tva', 'total_ttc', 'discount_amount',
             'payment_method', 'created_at',
         )
         read_only_fields = (
@@ -104,6 +113,7 @@ class SaleSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         user = validated_data.pop('user', None) or self.context['request'].user
+        discount_amount = validated_data.pop('discount_amount', Decimal('0.00'))
 
         product_quantities = {}
         for item_data in items_data:
@@ -156,11 +166,32 @@ class SaleSerializer(serializers.ModelSerializer):
                     'product_name': product.name,
                 })
 
+            total_ttc_before_discount = total_ht + total_tva
+            if discount_amount > total_ttc_before_discount:
+                raise serializers.ValidationError({
+                    'discount_amount': (
+                        "La reduction ne peut pas depasser le total a payer."
+                    ),
+                })
+
+            total_ttc = total_ttc_before_discount - discount_amount
+            if total_ttc_before_discount > 0:
+                discount_ratio = total_ttc / total_ttc_before_discount
+                total_ht = (total_ht * discount_ratio).quantize(
+                    Decimal('0.01'),
+                    rounding=ROUND_HALF_UP,
+                )
+                total_tva = (total_ttc - total_ht).quantize(
+                    Decimal('0.01'),
+                    rounding=ROUND_HALF_UP,
+                )
+
             sale = Sale.objects.create(
                 user=user,
                 total_ht=total_ht,
                 total_tva=total_tva,
-                total_ttc=total_ht + total_tva,
+                total_ttc=total_ttc,
+                discount_amount=discount_amount,
                 **validated_data,
             )
 
@@ -190,7 +221,7 @@ class SaleDetailSerializer(serializers.ModelSerializer):
         model = Sale
         fields = (
             'id', 'user_name', 'items',
-            'total_ht', 'total_tva', 'total_ttc',
+            'total_ht', 'total_tva', 'total_ttc', 'discount_amount',
             'payment_method', 'payment_method_display',
             'created_at',
         )
@@ -362,13 +393,26 @@ class ReturnSerializer(serializers.ModelSerializer):
             }
 
             refund_amount = 0
+            sale_gross_ttc = sum(
+                item.unit_price_ht
+                * (1 + item.tva_rate / 100)
+                * item.quantity
+                for item in SaleItem.objects.filter(sale=validated_data['sale'])
+            )
+            refund_ratio = Decimal('1.00')
+            if sale_gross_ttc > 0 and validated_data['sale'].total_ttc < sale_gross_ttc:
+                refund_ratio = validated_data['sale'].total_ttc / sale_gross_ttc
+
             for item_data in items_data:
                 sale_item = item_data['sale_item']
                 qty = item_data['quantity']
                 unit_ttc = sale_item.unit_price_ht * (1 + sale_item.tva_rate / 100)
-                refund_amount += unit_ttc * qty
+                refund_amount += unit_ttc * qty * refund_ratio
 
-            validated_data['refund_amount'] = refund_amount
+            validated_data['refund_amount'] = refund_amount.quantize(
+                Decimal('0.01'),
+                rounding=ROUND_HALF_UP,
+            )
             validated_data['processed_by'] = user
             return_order = Return.objects.create(**validated_data)
 

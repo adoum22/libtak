@@ -40,6 +40,9 @@ def get_report_data(start_date, end_date):
     items_sold = []
     total_revenue = Decimal('0')
     total_profit = Decimal('0')
+    total_discounts = sales.aggregate(
+        total=Sum('discount_amount'),
+    )['total'] or Decimal('0')
     
     for item in items:
         cost = item['total_cost'] or Decimal('0')
@@ -78,8 +81,8 @@ def get_report_data(start_date, end_date):
     operating_expenses = operating_expenses_for_period(start_date, end_date)
 
     # Bénéfice net = (prix_vente - prix_achat) - retours - dépenses
-    net_revenue = float(total_revenue) - float(total_returns)
-    gross_margin = float(total_profit) - float(total_returns)
+    net_revenue = float(total_revenue) - float(total_discounts) - float(total_returns)
+    gross_margin = float(total_profit) - float(total_discounts) - float(total_returns)
     net_profit = gross_margin - float(operating_expenses)
     
     # Données pour le graphique

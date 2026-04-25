@@ -13,6 +13,12 @@ class Sale(models.Model):
     total_ht = models.DecimalField(_('Total HT'), max_digits=10, decimal_places=2)
     total_tva = models.DecimalField(_('Total VAT'), max_digits=10, decimal_places=2)
     total_ttc = models.DecimalField(_('Total TTC'), max_digits=10, decimal_places=2)
+    discount_amount = models.DecimalField(
+        _('Discount Amount'),
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+    )
     payment_method = models.CharField(max_length=10, choices=PaymentMethod.choices, default=PaymentMethod.CASH)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

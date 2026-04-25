@@ -97,6 +97,7 @@ def get_sales_to_sync(last_sync_time):
             'total_ht': str(sale.total_ht),
             'total_tva': str(sale.total_tva),
             'total_ttc': str(sale.total_ttc),
+            'discount_amount': str(sale.discount_amount),
             'payment_method': sale.payment_method,
             'created_at': sale.created_at.isoformat(),
             'items': items_data

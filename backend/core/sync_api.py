@@ -99,6 +99,7 @@ def _import_sale(sale_data: dict) -> bool:
         total_ht=sale_data['total_ht'],
         total_tva=0,  # Will be calculated
         total_ttc=sale_data['total_ttc'],
+        discount_amount=sale_data.get('discount_amount', 0),
         payment_method=sale_data.get('payment_method', 'CASH'),
         synced=True,
         local_sync_id=local_id,

@@ -37,7 +37,15 @@ def gross_margin_for_period(start_date, end_date) -> Decimal:
         revenue=Sum(F('unit_price_ht') * F('quantity')),
         cost=Sum(F('quantity') * F('product__purchase_price')),
     )
-    return (agg['revenue'] or Decimal('0')) - (agg['cost'] or Decimal('0'))
+    discounts = Sale.objects.filter(
+        created_at__date__gte=start_date,
+        created_at__date__lte=end_date,
+    ).aggregate(total=Sum('discount_amount'))['total'] or Decimal('0')
+    return (
+        (agg['revenue'] or Decimal('0'))
+        - (agg['cost'] or Decimal('0'))
+        - discounts
+    )
 
 
 def operating_expenses_for_period(start_date, end_date) -> Decimal:
