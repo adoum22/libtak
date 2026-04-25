@@ -150,6 +150,23 @@ class SalesAPITest(APITestCase):
         # Vérifier décrémentation stock
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 98)  # 100 - 2
+
+    def test_duplicate_sale_items_are_aggregated_for_stock_check(self):
+        data = {
+            'items': [
+                {'product_id': self.product.id, 'quantity': 2},
+                {'product_id': self.product.id, 'quantity': 3},
+            ],
+            'payment_method': 'CASH'
+        }
+        response = self.client.post('/api/sales/sales/', data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.stock, 95)
+        sale = Sale.objects.get(id=response.data['id'])
+        self.assertEqual(sale.items.count(), 1)
+        self.assertEqual(sale.items.first().quantity, 5)
     
     def test_insufficient_stock(self):
         """Test vente avec stock insuffisant"""
@@ -222,6 +239,23 @@ class DiscountAPITest(APITestCase):
         response = self.client.post('/api/sales/discounts/apply/', data)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_cashier_cannot_create_discount(self):
+        cashier = User.objects.create_user(
+            username='cashier-discount',
+            password='cashier123',
+            role='CASHIER',
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.post('/api/sales/discounts/', {
+            'name': 'Interdit',
+            'discount_type': 'PERCENTAGE',
+            'value': '10.00',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
 
 class ReturnAPITest(APITestCase):
     """Tests API pour les retours"""
@@ -274,3 +308,67 @@ class ReturnAPITest(APITestCase):
         # Vérifier que le stock a été restauré
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, stock_before + 2)
+
+    def test_return_item_must_belong_to_sale(self):
+        other_product = Product.objects.create(
+            name='Other Product',
+            barcode='9999999999999',
+            sale_price_ht=Decimal('5.00'),
+            tva=Decimal('20.00'),
+            stock=20
+        )
+        other_sale_response = self.client.post('/api/sales/sales/', {
+            'items': [{'product_id': other_product.id, 'quantity': 1}],
+            'payment_method': 'CASH'
+        }, format='json')
+        other_sale_item = Sale.objects.get(id=other_sale_response.data['id']).items.first()
+
+        response = self.client.post('/api/sales/returns/', {
+            'sale': self.sale.id,
+            'reason': 'Mauvaise vente',
+            'items': [{'sale_item': other_sale_item.id, 'quantity': 1}]
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_return_quantity_cannot_exceed_remaining_sold_quantity(self):
+        response = self.client.post('/api/sales/returns/', {
+            'sale': self.sale.id,
+            'reason': 'Trop',
+            'items': [{'sale_item': self.sale_item.id, 'quantity': 6}]
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_return_quantity_accounts_for_previous_returns(self):
+        first = self.client.post('/api/sales/returns/', {
+            'sale': self.sale.id,
+            'reason': 'Premier retour',
+            'items': [{'sale_item': self.sale_item.id, 'quantity': 4}]
+        }, format='json')
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+
+        second = self.client.post('/api/sales/returns/', {
+            'sale': self.sale.id,
+            'reason': 'Deuxieme retour',
+            'items': [{'sale_item': self.sale_item.id, 'quantity': 2}]
+        }, format='json')
+
+        self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cashier_cannot_create_return(self):
+        cashier = User.objects.create_user(
+            username='cashier-return',
+            password='cashier123',
+            role='CASHIER',
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.post('/api/sales/returns/', {
+            'sale': self.sale.id,
+            'reason': 'Interdit',
+            'items': [{'sale_item': self.sale_item.id, 'quantity': 1}]
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

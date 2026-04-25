@@ -12,6 +12,7 @@ from .views import (
     CustomTokenObtainPairView,
     DatabaseExportView,
     LogoutView,
+    ChangePasswordView,
 )
 from .sync_api import receive_sync_data, get_master_data, sync_status, trigger_sync
 
@@ -28,6 +29,7 @@ urlpatterns = [
 
     # Current user
     path('me/', UserMeView.as_view(), name='user_me'),
+    path('me/change-password/', ChangePasswordView.as_view(), name='change_password'),
 
     # Settings
     path('settings/', AppSettingsView.as_view(), name='app_settings'),

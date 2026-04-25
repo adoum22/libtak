@@ -4,7 +4,7 @@ export default function useBarcodeScanner(onScan: (barcode: string) => void) {
     const [barcode, setBarcode] = useState('');
 
     useEffect(() => {
-        let timeout: any;
+        let timeout: ReturnType<typeof setTimeout>;
 
         const handleKeyDown = (e: KeyboardEvent) => {
             // If the event is from an input field, ignore it (unless it's the scanner acting as keyboard)

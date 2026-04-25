@@ -27,7 +27,9 @@ export default function Layout() {
     const { t, i18n } = useTranslation();
     const location = useLocation();
     const navigate = useNavigate();
-    const [theme, setTheme] = useState<'light' | 'dark'>('light');
+    const [theme, setTheme] = useState<'light' | 'dark'>(() =>
+        localStorage.getItem('theme') === 'dark' ? 'dark' : 'light'
+    );
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
     // Récupérer le profil utilisateur complet pour les permissions granulaires
@@ -42,16 +44,12 @@ export default function Layout() {
 
     // Charger le thème sauvegardé
     useEffect(() => {
-        const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' || 'light';
-        setTheme(savedTheme);
-        document.documentElement.setAttribute('data-theme', savedTheme);
-    }, []);
+        localStorage.setItem('theme', theme);
+        document.documentElement.setAttribute('data-theme', theme);
+    }, [theme]);
 
     const toggleTheme = () => {
-        const newTheme = theme === 'light' ? 'dark' : 'light';
-        setTheme(newTheme);
-        localStorage.setItem('theme', newTheme);
-        document.documentElement.setAttribute('data-theme', newTheme);
+        setTheme(current => current === 'light' ? 'dark' : 'light');
     };
 
     const handleLogout = async () => {

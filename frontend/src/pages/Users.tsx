@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
 import {
     Users as UsersIcon,
@@ -26,6 +26,10 @@ interface User {
     can_view_stock: boolean;
     can_manage_stock: boolean;
 }
+
+type UserUpdatePayload = Partial<Omit<User, 'id' | 'avatar'>> & {
+    avatar?: File | null;
+};
 
 export default function Users() {
     const queryClient = useQueryClient();
@@ -71,21 +75,21 @@ export default function Users() {
             queryClient.invalidateQueries({ queryKey: ['users'] });
             closeModal();
         },
-        onError: (error: any) => {
-            toast.error('Erreur: ' + (error.response?.data?.detail || JSON.stringify(error.response?.data)));
+        onError: (error: unknown) => {
+            toast.error('Erreur: ' + getApiErrorMessage(error));
         }
     });
 
     const updateMutation = useMutation({
-        mutationFn: ({ id, data }: { id: number; data: any }) =>
+        mutationFn: ({ id, data }: { id: number; data: UserUpdatePayload }) =>
             client.patch(`/auth/users/${id}/`, data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
             closeModal();
             toast.success('Utilisateur mis à jour avec succès !');
         },
-        onError: (error: any) => {
-            toast.error('Erreur: ' + (error.response?.data?.detail || JSON.stringify(error.response?.data)));
+        onError: (error: unknown) => {
+            toast.error('Erreur: ' + getApiErrorMessage(error));
         }
     });
 
@@ -103,8 +107,8 @@ export default function Users() {
             toast.success('Mot de passe réinitialisé avec succès.');
             closePasswordModal();
         },
-        onError: (error: any) => {
-            toast.error('Erreur: ' + (error.response?.data?.detail || 'Impossible de changer le mot de passe'));
+        onError: (error: unknown) => {
+            toast.error('Erreur: ' + getApiErrorMessage(error, 'Impossible de changer le mot de passe'));
         }
     });
 

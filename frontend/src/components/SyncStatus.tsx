@@ -28,7 +28,7 @@ export default function SyncStatus() {
 
         try {
             // Check if local server is running
-            const localResponse = await fetch('http://localhost:8001/api/', {
+            const localResponse = await fetch(`${getApiUrl()}/health/`, {
                 method: 'GET',
                 mode: 'cors'
             });
@@ -50,10 +50,13 @@ export default function SyncStatus() {
     };
 
     useEffect(() => {
-        checkCloudStatus();
+        const initialCheck = window.setTimeout(checkCloudStatus, 0);
         // Check every 30 seconds
         const interval = setInterval(checkCloudStatus, 30000);
-        return () => clearInterval(interval);
+        return () => {
+            window.clearTimeout(initialCheck);
+            clearInterval(interval);
+        };
     }, []);
 
     const getStatusIcon = () => {

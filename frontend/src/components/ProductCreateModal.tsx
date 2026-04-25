@@ -1,15 +1,36 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import client from '../api/client';
+import client, { getApiErrorMessage } from '../api/client';
 import { X, Upload, Save } from 'lucide-react';
-import { useToast } from './Toast';
+import { useToast } from './ToastContext';
 
 interface ProductCreateModalProps {
     onClose: () => void;
-    onSuccess: (product: any) => void;
+    onSuccess: (product: Product) => void;
     initialBarcode?: string;
     initialName?: string;
 }
+
+interface Product {
+    id: number;
+    name: string;
+    barcode: string;
+    purchase_price: string | number;
+}
+
+type ProductFormData = {
+    name: string;
+    barcode: string;
+    description: string;
+    purchase_price: number;
+    sale_price_ht: number;
+    tva: number;
+    stock: number;
+    min_stock: number;
+    category: string;
+    supplier: string;
+    active: boolean;
+};
 
 interface Category {
     id: number;
@@ -58,11 +79,11 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
         : '0.0';
 
     const createProduct = useMutation({
-        mutationFn: async (data: any) => {
+        mutationFn: async (data: ProductFormData) => {
             const formDataObj = new FormData();
-            Object.keys(data).forEach(key => {
-                if (data[key] !== undefined && data[key] !== '') {
-                    formDataObj.append(key, data[key]);
+            Object.entries(data).forEach(([key, value]) => {
+                if (value !== undefined && value !== '') {
+                    formDataObj.append(key, String(value));
                 }
             });
             if (image) {
@@ -77,9 +98,9 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
             onSuccess(res.data);
             onClose();
         },
-        onError: (err: any) => {
+        onError: (err: unknown) => {
             console.error(err);
-            const msg = err.response?.data?.barcode
+            const msg = getApiErrorMessage(err, '', 'barcode')
                 ? 'Ce code-barres existe déjà'
                 : 'Erreur lors de la création';
             toast.error(msg);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import {
     RotateCcw,
     Search,
@@ -108,8 +108,8 @@ export default function Returns() {
             queryClient.invalidateQueries({ queryKey: ['recentSales'] });
             resetForm();
         },
-        onError: (error: any) => {
-            toast.error(error.response?.data?.detail || 'Erreur lors de la création du retour');
+        onError: (error: unknown) => {
+            toast.error(getApiErrorMessage(error, 'Erreur lors de la creation du retour'));
         }
     });
 

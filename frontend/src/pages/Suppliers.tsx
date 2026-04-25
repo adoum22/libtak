@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
 import {
     Truck,
@@ -88,8 +88,8 @@ export default function Suppliers() {
             queryClient.invalidateQueries({ queryKey: ['suppliers'] });
             closeModal();
         },
-        onError: (error: any) => {
-            toast.error('Erreur lors de la création : ' + (error.response?.data?.detail || JSON.stringify(error.response?.data)));
+        onError: (error: unknown) => {
+            toast.error('Erreur lors de la creation : ' + getApiErrorMessage(error));
         }
     });
 
@@ -102,8 +102,8 @@ export default function Suppliers() {
             queryClient.invalidateQueries({ queryKey: ['suppliers'] });
             closeModal();
         },
-        onError: (error: any) => {
-            toast.error('Erreur lors de la modification : ' + (error.response?.data?.detail || JSON.stringify(error.response?.data)));
+        onError: (error: unknown) => {
+            toast.error('Erreur lors de la modification : ' + getApiErrorMessage(error));
         }
     });
 

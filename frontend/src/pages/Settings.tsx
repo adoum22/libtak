@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download } from 'lucide-react';
 
@@ -53,24 +53,13 @@ export default function Settings() {
         queryFn: () => client.get('/reporting/settings/').then(res => res.data)
     });
 
-    const [storeForm, setStoreForm] = useState<Partial<AppSettings>>({});
-    const [reportForm, setReportForm] = useState<Partial<ReportSettings>>({});
-
-    // Initialize forms when data loads
-    useEffect(() => {
-        if (appSettings) {
-            setStoreForm(appSettings);
-            if (appSettings.logo_url) {
-                setLogoPreview(appSettings.logo_url);
-            }
-        }
-    }, [appSettings]);
-
-    useEffect(() => {
-        if (reportSettings) {
-            setReportForm(reportSettings);
-        }
-    }, [reportSettings]);
+    const [storeDraft, setStoreDraft] = useState<Partial<AppSettings>>({});
+    const [reportDraft, setReportDraft] = useState<Partial<ReportSettings>>({});
+    const storeForm = Object.keys(storeDraft).length > 0 ? storeDraft : (appSettings ?? {});
+    const reportForm = Object.keys(reportDraft).length > 0 ? reportDraft : (reportSettings ?? {});
+    const currentLogoPreview = logoPreview ?? appSettings?.logo_url ?? null;
+    const setStoreForm = (value: Partial<AppSettings>) => setStoreDraft(value);
+    const setReportForm = (value: Partial<ReportSettings>) => setReportDraft(value);
 
     const updateAppSettings = useMutation({
         mutationFn: (data: Partial<AppSettings>) => {
@@ -188,8 +177,8 @@ export default function Settings() {
                             <div className="flex justify-center mb-6">
                                 <div className="relative group cursor-pointer w-32 h-32">
                                     <div className="w-32 h-32 rounded-lg overflow-hidden border-2 border-dashed border-muted flex items-center justify-center bg-tertiary">
-                                        {logoPreview ? (
-                                            <img src={logoPreview} alt="Logo" className="w-full h-full object-contain" />
+                                        {currentLogoPreview ? (
+                                            <img src={currentLogoPreview} alt="Logo" className="w-full h-full object-contain" />
                                         ) : (
                                             <div className="text-center p-2">
                                                 <Upload className="mx-auto text-muted mb-1" size={24} />

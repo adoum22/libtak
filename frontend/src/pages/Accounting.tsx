@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -8,14 +8,21 @@ import {
     Calculator, DollarSign, TrendingUp, TrendingDown,
     Plus, Trash2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 
 const MONTHS_FR = [
     'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
 ];
 const PIE_COLORS = ['#1e40af', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+
+const categoryLabel = (entry: unknown) => {
+    if (typeof entry === 'object' && entry !== null && 'category' in entry) {
+        return String(entry.category);
+    }
+    return '';
+};
 
 interface Category { id: number; name: string; is_default: boolean; }
 interface Expense {
@@ -86,7 +93,7 @@ export default function Accounting() {
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
         },
-        onError: (e: any) => toast.error(e.response?.data?.detail || 'Erreur sauvegarde'),
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur sauvegarde')),
     });
 
     const addExpense = useMutation({
@@ -97,7 +104,7 @@ export default function Accounting() {
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
         },
-        onError: (e: any) => toast.error(e.response?.data?.detail || 'Erreur ajout dépense'),
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
     });
 
     const deleteExpense = useMutation({
@@ -114,28 +121,37 @@ export default function Accounting() {
             toast.success('Catégorie créée');
             qc.invalidateQueries({ queryKey: ['acc-categories'] });
         },
-        onError: (e: any) => toast.error(e.response?.data?.name?.[0] || 'Erreur création catégorie'),
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur creation categorie', 'name')),
     });
 
     const deleteCategory = useMutation({
         mutationFn: (id: number) => client.delete(`/accounting/categories/${id}/`),
         onSuccess: () => qc.invalidateQueries({ queryKey: ['acc-categories'] }),
-        onError: (e: any) => toast.error(e.response?.data?.detail || 'Suppression impossible'),
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Suppression impossible')),
     });
 
     // ---------- Local form state ----------
-    const [withdrawal, setWithdrawal] = useState<string>('');
-    const [notes, setNotes] = useState<string>('');
+    const [monthDraft, setMonthDraft] = useState({
+        id: null as number | null,
+        withdrawal: '',
+        notes: '',
+    });
     const [newExp, setNewExp] = useState({ category: '', amount: '', description: '' });
     const [newCatName, setNewCatName] = useState('');
 
-    // sync local form when month data loads/changes
-    useEffect(() => {
-        if (monthData) {
-            setWithdrawal(String(monthData.manager_withdrawal ?? ''));
-            setNotes(monthData.notes ?? '');
-        }
-    }, [monthData?.id]);
+    const currentMonthId = monthData?.id ?? null;
+    const withdrawal = monthData && monthDraft.id === monthData.id
+        ? monthDraft.withdrawal
+        : String(monthData?.manager_withdrawal ?? '');
+    const notes = monthData && monthDraft.id === monthData.id
+        ? monthDraft.notes
+        : (monthData?.notes ?? '');
+    const setWithdrawal = (value: string) => {
+        setMonthDraft({ id: currentMonthId, withdrawal: value, notes });
+    };
+    const setNotes = (value: string) => {
+        setMonthDraft({ id: currentMonthId, withdrawal, notes: value });
+    };
 
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -216,7 +232,7 @@ export default function Accounting() {
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                     <XAxis dataKey="name" tick={{ fontSize: 12 }} />
                                     <YAxis tick={{ fontSize: 11 }} />
-                                    <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                    <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
                                     <Bar dataKey="value" radius={[6, 6, 0, 0]}>
                                         {waterfall.map((d, i) => (
                                             <Cell key={i} fill={d.fill} />
@@ -241,13 +257,13 @@ export default function Accounting() {
                                         <Pie
                                             data={catData} dataKey="total" nameKey="category"
                                             cx="50%" cy="50%" outerRadius={90}
-                                            label={(e: any) => e.category}
+                                            label={categoryLabel}
                                         >
                                             {catData.map((row, i) => (
                                                 <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                             ))}
                                         </Pie>
-                                        <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                        <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
@@ -416,7 +432,7 @@ export default function Accounting() {
                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                 <XAxis dataKey="label" />
                                 <YAxis tickFormatter={(v) => `${v}`} />
-                                <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
                                 <Legend />
                                 <Bar dataKey="revenue" name="CA" fill="#10b981" />
                                 <Bar dataKey="expenses" name="Dépenses" fill="#ef4444" />
@@ -440,13 +456,13 @@ export default function Accounting() {
                                             data={summary.category_breakdown}
                                             dataKey="total" nameKey="category"
                                             cx="50%" cy="50%" outerRadius={110}
-                                            label={(e: any) => e.category}
+                                            label={categoryLabel}
                                         >
-                                            {summary.category_breakdown.map((row: any, i: number) => (
+                                            {summary.category_breakdown.map((row, i: number) => (
                                                 <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                             ))}
                                         </Pie>
-                                        <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                        <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
@@ -462,7 +478,7 @@ export default function Accounting() {
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                     <XAxis dataKey="label" />
                                     <YAxis />
-                                    <Tooltip formatter={(v: any) => `${fmt(Number(v) || 0)} DH`} />
+                                    <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
                                     <Line type="monotone" dataKey="net_profit" stroke="#1e40af" strokeWidth={3} dot={{ r: 5 }} />
                                 </LineChart>
                             </ResponsiveContainer>

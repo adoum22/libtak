@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Eye, EyeOff, LogIn } from 'lucide-react';
-import client from '../api/client';
+import client, { getApiErrorMessage } from '../api/client';
 
 export default function Login() {
     const { t } = useTranslation();
@@ -34,9 +34,9 @@ export default function Login() {
             }
 
             navigate('/');
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
-            const errorMessage = err.response?.data?.detail || 'Identifiants incorrects';
+            const errorMessage = getApiErrorMessage(err, 'Identifiants incorrects');
             setError(errorMessage);
         } finally {
             setLoading(false);

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import {
     ClipboardCheck,
     Plus,
@@ -81,9 +81,9 @@ export default function StockCount() {
             queryClient.invalidateQueries({ queryKey: ['inventoryCounts'] });
             resetForm();
         },
-        onError: (error: any) => {
-            console.error('Create count error:', error.response?.data);
-            const msg = error.response?.data?.detail || JSON.stringify(error.response?.data) || 'Erreur lors de la création';
+        onError: (error: unknown) => {
+            console.error('Create count error:', error);
+            const msg = getApiErrorMessage(error, 'Erreur lors de la creation');
             toast.error('Erreur: ' + msg);
         }
     });
@@ -96,8 +96,8 @@ export default function StockCount() {
             toast.success('Comptage sauvegardé');
             queryClient.invalidateQueries({ queryKey: ['inventoryCounts'] });
         },
-        onError: (error: any) => {
-            const msg = error.response?.data?.detail || 'Erreur lors de la sauvegarde';
+        onError: (error: unknown) => {
+            const msg = getApiErrorMessage(error, 'Erreur lors de la sauvegarde');
             toast.error(msg);
         }
     });

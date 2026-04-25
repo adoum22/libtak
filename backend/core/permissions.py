@@ -140,7 +140,7 @@ class CanManageInventory(permissions.BasePermission):
         
         # Lecture (SAFE_METHODS) est gérée par CanViewInventory ou IsAuthenticated
         if request.method in permissions.SAFE_METHODS:
-            return True
+            return request.user.is_admin_role or request.user.can_view_stock
             
         # Écriture
         if request.user.is_admin_role:

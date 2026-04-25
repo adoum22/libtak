@@ -93,6 +93,47 @@ class AuthenticationAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['username'], 'testuser')
 
+    def test_me_patch_cannot_escalate_role_or_permissions(self):
+        """Un utilisateur ne peut pas modifier ses propres droits via /me/."""
+        cashier = User.objects.create_user(
+            username='cashier',
+            password='cashier123',
+            role='CASHIER',
+            can_view_stock=False,
+            can_manage_stock=False,
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.patch('/api/auth/me/', {
+            'role': 'ADMIN',
+            'can_view_stock': True,
+            'can_manage_stock': True,
+            'is_active': False,
+            'first_name': 'Updated',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        cashier.refresh_from_db()
+        self.assertEqual(cashier.role, 'CASHIER')
+        self.assertFalse(cashier.can_view_stock)
+        self.assertFalse(cashier.can_manage_stock)
+        self.assertTrue(cashier.is_active)
+        self.assertEqual(cashier.first_name, 'Updated')
+
+    def test_change_password_route(self):
+        self.client.credentials()
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post('/api/auth/me/change-password/', {
+            'old_password': 'testpass123',
+            'new_password': 'newpass123-strong',
+            'new_password_confirm': 'newpass123-strong',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('newpass123-strong'))
+
 
 class UserAPITest(APITestCase):
     """Tests pour l'API de gestion des utilisateurs"""

@@ -72,6 +72,21 @@ class UserSerializer(serializers.ModelSerializer):
         return None
 
 
+class MeSerializer(UserSerializer):
+    """Serializer for the current user's own profile.
+
+    A user may edit personal profile fields, but role/security flags must
+    remain controlled by admin-only endpoints.
+    """
+
+    class Meta(UserSerializer.Meta):
+        read_only_fields = [
+            'role', 'role_display', 'is_admin_role',
+            'can_view_stock', 'can_manage_stock',
+            'is_active', 'date_joined', 'last_login',
+        ]
+
+
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=12)
     password_confirm = serializers.CharField(write_only=True)

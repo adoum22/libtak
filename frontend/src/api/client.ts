@@ -56,5 +56,46 @@ client.interceptors.response.use(
 export const getApiUrl = () => API_URL;
 export const isUsingLocalServer = () => isDevelopment;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null;
+
+const firstString = (value: unknown): string | null => {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+    return null;
+};
+
+export const getApiErrorMessage = (
+    error: unknown,
+    fallback = 'Erreur inconnue',
+    field?: string,
+) => {
+    if (!isRecord(error)) return fallback;
+
+    const response = isRecord(error.response) ? error.response : null;
+    const data = response && isRecord(response.data) ? response.data : null;
+
+    if (field && data) {
+        const fieldMessage = firstString(data[field]);
+        if (fieldMessage) return fieldMessage;
+    }
+
+    const detail = data ? firstString(data.detail) : null;
+    if (detail) return detail;
+
+    if (data) return JSON.stringify(data);
+
+    const statusText = response ? firstString(response.statusText) : null;
+    if (statusText) return statusText;
+
+    const message = firstString(error.message);
+    return message || fallback;
+};
+
+export const getApiErrorStatus = (error: unknown): number | null => {
+    if (!isRecord(error) || !isRecord(error.response)) return null;
+    return typeof error.response.status === 'number' ? error.response.status : null;
+};
+
 export default client;
 

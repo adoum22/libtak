@@ -1,8 +1,11 @@
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 from rest_framework import status
 from decimal import Decimal
+from io import BytesIO
+import zipfile
 
 from .models import Category, Product, Supplier, StockMovement, PriceHistory
 
@@ -188,6 +191,81 @@ class InventoryAPITest(APITestCase):
         response = self.client.get('/api/inventory/products/stats/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
+    def test_import_products_from_csv_without_pandas(self):
+        upload = SimpleUploadedFile(
+            'products.csv',
+            b'nom,ean,prix vente,quantite\nCahier import,4444444444444,12.50,7\n',
+            content_type='text/csv',
+        )
+
+        response = self.client.post(
+            '/api/inventory/products/import_excel/',
+            {'file': upload},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['created'], 1)
+        product = Product.objects.get(barcode='4444444444444')
+        self.assertEqual(product.name, 'Cahier import')
+        self.assertEqual(product.stock, 7)
+
+    def test_import_products_from_zip_with_image(self):
+        zip_buffer = BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w') as archive:
+            archive.writestr(
+                'products.csv',
+                'name,barcode,sale_price,stock\nProduit image,5555555555555,9.90,3\n',
+            )
+            archive.writestr('5555555555555.png', b'fake-image-content')
+
+        upload = SimpleUploadedFile(
+            'products.zip',
+            zip_buffer.getvalue(),
+            content_type='application/zip',
+        )
+
+        response = self.client.post(
+            '/api/inventory/products/import_excel/',
+            {'file': upload},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['errors'], [])
+        self.assertEqual(response.data['created'], 1)
+        product = Product.objects.get(barcode='5555555555555')
+        self.addCleanup(product.image.delete, False)
+        self.assertTrue(product.image.name.endswith('.png'))
+
+    def test_cashier_without_stock_permission_cannot_read_products(self):
+        cashier = User.objects.create_user(
+            username='cashier-no-stock',
+            password='cashier123',
+            role='CASHIER',
+            can_view_stock=False,
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.get('/api/inventory/products/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cashier_with_stock_permission_can_read_products(self):
+        cashier = User.objects.create_user(
+            username='cashier-stock',
+            password='cashier123',
+            role='CASHIER',
+            can_view_stock=True,
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.get('/api/inventory/products/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
 
 class SupplierAPITest(APITestCase):
     """Tests API pour les fournisseurs"""
@@ -222,3 +300,33 @@ class SupplierAPITest(APITestCase):
         Supplier.objects.create(name='Fournisseur B')
         response = self.client.get('/api/inventory/suppliers/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_cashier_cannot_create_supplier(self):
+        cashier = User.objects.create_user(
+            username='cashier',
+            password='cashier123',
+            role='CASHIER',
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.post('/api/inventory/suppliers/', {
+            'name': 'Fournisseur interdit',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cashier_cannot_create_category(self):
+        cashier = User.objects.create_user(
+            username='cashier-category',
+            password='cashier123',
+            role='CASHIER',
+        )
+        self.client.credentials()
+        self.client.force_authenticate(user=cashier)
+
+        response = self.client.post('/api/inventory/categories/', {
+            'name': 'Categorie interdite',
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

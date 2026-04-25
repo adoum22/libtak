@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import F
 from core.models import AuditLog
+from core.permissions import IsAdminRole
 from .models import Sale, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
@@ -44,7 +45,7 @@ class DiscountViewSet(viewsets.ModelViewSet):
     """API for managing discounts and promotions"""
     queryset = Discount.objects.all()
     serializer_class = DiscountSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'code']
     ordering_fields = ['created_at', 'value', 'end_date']
@@ -57,6 +58,11 @@ class DiscountViewSet(viewsets.ModelViewSet):
         if active_only and active_only.lower() == 'true':
             queryset = queryset.filter(active=True)
         return queryset
+
+    def get_permissions(self):
+        if self.action == 'apply':
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
     
     @action(detail=False, methods=['post'])
     def apply(self, request):
@@ -92,7 +98,7 @@ class ReturnViewSet(viewsets.ModelViewSet):
     """API for managing product returns"""
     queryset = Return.objects.all().select_related('sale', 'processed_by')
     serializer_class = ReturnSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['status', 'sale']
     ordering_fields = ['created_at', 'refund_amount']

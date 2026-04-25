@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
+import client, { getApiErrorMessage } from '../api/client';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
-import { useToast } from '../components/Toast';
+import { useToast } from '../components/ToastContext';
 import {
     Search,
     Plus,
@@ -69,6 +69,23 @@ export default function POS() {
         queryFn: () => client.get(`/inventory/products/?search=${searchTerm}`).then(res => res.data.results || res.data)
     });
 
+    const addToCart = (product: Product) => {
+        const existing = cart.find(item => item.product.id === product.id);
+        if (existing) {
+            if (existing.quantity < product.stock) {
+                setCart(cart.map(item =>
+                    item.product.id === product.id
+                        ? { ...item, quantity: item.quantity + 1 }
+                        : item
+                ));
+            }
+        } else {
+            if (product.stock > 0) {
+                setCart([...cart, { product, quantity: 1 }]);
+            }
+        }
+    };
+
     const handleProductAction = (product: Product) => {
         if (mode === 'SALE') {
             addToCart(product);
@@ -89,11 +106,9 @@ export default function POS() {
     const checkoutMutation = useMutation({
         mutationFn: (data: { items: Array<{ product_id: number; quantity: number }>; payment_method: string }) =>
             client.post('/sales/sales/', data),
-        onError: (error: any) => {
+        onError: (error: unknown) => {
             console.error("Erreur Checkout:", error);
-            toast.error("Erreur lors de la validation : " +
-                (error.response?.data?.detail || error.message || "Erreur inconnue")
-            );
+            toast.error("Erreur lors de la validation : " + getApiErrorMessage(error));
         },
         onSuccess: (response) => {
             // 1. Close modal
@@ -131,23 +146,6 @@ export default function POS() {
             }, 2000);
         }
     });
-
-    const addToCart = (product: Product) => {
-        const existing = cart.find(item => item.product.id === product.id);
-        if (existing) {
-            if (existing.quantity < product.stock) {
-                setCart(cart.map(item =>
-                    item.product.id === product.id
-                        ? { ...item, quantity: item.quantity + 1 }
-                        : item
-                ));
-            }
-        } else {
-            if (product.stock > 0) {
-                setCart([...cart, { product, quantity: 1 }]);
-            }
-        }
-    };
 
     const updateQuantity = (productId: number, delta: number) => {
         setCart(cart.map(item => {
@@ -208,8 +206,8 @@ export default function POS() {
                 discount_amount: response.data.discount_amount
             });
             toast.success(`Remise "${response.data.discount.name}" appliquée!`);
-        } catch (error: any) {
-            const errorMsg = error.response?.data?.code?.[0] || error.response?.data?.detail || 'Code invalide';
+        } catch (error: unknown) {
+            const errorMsg = getApiErrorMessage(error, 'Code invalide', 'code');
             setDiscountError(errorMsg);
             setAppliedDiscount(null);
         }

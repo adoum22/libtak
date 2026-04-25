@@ -8,7 +8,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 
 from .serializers import (
-    UserSerializer, 
+    UserSerializer,
+    MeSerializer,
     UserCreateSerializer, 
     UserUpdateSerializer,
     ChangePasswordSerializer,
@@ -54,15 +55,17 @@ class LogoutView(APIView):
 
 class UserMeView(generics.RetrieveUpdateAPIView):
     """Vue pour l'utilisateur connecté"""
-    serializer_class = UserSerializer
+    serializer_class = MeSerializer
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_object(self):
         return self.request.user
     
-    @action(detail=False, methods=['post'])
-    def change_password(self, request):
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
         """Changer le mot de passe de l'utilisateur connecté"""
         serializer = ChangePasswordSerializer(data=request.data)
         if serializer.is_valid():

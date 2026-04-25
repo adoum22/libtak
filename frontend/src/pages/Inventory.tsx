@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage, getApiErrorStatus } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
 import {
     Plus,
@@ -127,8 +127,8 @@ export default function Inventory() {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             closeModal();
         },
-        onError: (error: any) => {
-            toast.error('Erreur lors de la création : ' + (error.response?.data?.detail || JSON.stringify(error.response?.data)));
+        onError: (error: unknown) => {
+            toast.error('Erreur lors de la creation : ' + getApiErrorMessage(error));
         }
     });
 
@@ -141,12 +141,9 @@ export default function Inventory() {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             closeModal();
         },
-        onError: (error: any) => {
+        onError: (error: unknown) => {
             console.error("Update Error:", error);
-            const detail = error.response?.data?.detail
-                || JSON.stringify(error.response?.data)
-                || error.message
-                || "Erreur inconnue";
+            const detail = getApiErrorMessage(error);
             toast.error(`Erreur lors de la modification : ${detail}`);
         }
     });
@@ -166,16 +163,15 @@ export default function Inventory() {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
         },
-        onSuccess: (data: any) => {
+        onSuccess: (data: { data: { created: number; errors: unknown[] } }) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             toast.success(`Import terminé ! ${data.data.created} produits créés. ${data.data.errors.length} erreurs.`);
         },
-        onError: (error: any) => {
+        onError: (error: unknown) => {
             console.error("Import Error Details:", error);
-            const detail = error.response?.data?.detail
-                || error.response?.statusText
-                || error.message;
-            const status = error.response?.status ? ` (Status: ${error.response.status})` : '';
+            const detail = getApiErrorMessage(error);
+            const responseStatus = getApiErrorStatus(error);
+            const status = responseStatus ? ` (Status: ${responseStatus})` : '';
             toast.error(`Erreur import${status} : ${detail}`);
         }
     });

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
-import { useToast } from '../components/Toast';
+import client, { getApiErrorMessage } from '../api/client';
+import { useToast } from '../components/ToastContext';
 import ProductCreateModal from '../components/ProductCreateModal';
 import {
     ClipboardList,
@@ -31,6 +31,25 @@ interface Product {
     purchase_price: number;
     stock: number;
 }
+
+type PurchaseOrderForm = {
+    supplier: number;
+    notes: string;
+    expected_date: string | null;
+    items: Array<{ product: number; quantity: number; unit_cost: number }>;
+};
+
+type ReceiveOrderItem = {
+    item_id: number;
+    quantity: number;
+};
+
+type CreatedProduct = {
+    id: number;
+    name: string;
+    barcode: string;
+    purchase_price: string | number;
+};
 
 interface PurchaseOrderItem {
     id: number;
@@ -98,15 +117,15 @@ export default function PurchaseOrders() {
 
     // Create order
     const createOrder = useMutation({
-        mutationFn: (data: any) => client.post('/inventory/purchase-orders/', data),
+        mutationFn: (data: PurchaseOrderForm) => client.post('/inventory/purchase-orders/', data),
         onSuccess: () => {
             toast.success('Commande créée');
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             resetForm();
         },
-        onError: (err: any) => {
+        onError: (err: unknown) => {
             console.error("Create Order Error:", err);
-            toast.error(err.response?.data?.detail || 'Erreur lors de la création');
+            toast.error(getApiErrorMessage(err, 'Erreur lors de la creation'));
         }
     });
 
@@ -121,14 +140,14 @@ export default function PurchaseOrders() {
 
     // Receive order
     const receiveOrder = useMutation({
-        mutationFn: ({ id, items }: { id: number, items: any[] }) =>
+        mutationFn: ({ id, items }: { id: number, items: ReceiveOrderItem[] }) =>
             client.post(`/inventory/purchase-orders/${id}/receive/`, { items }),
         onSuccess: () => {
             toast.success('Réception validée - Stock mis à jour');
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
         },
-        onError: (err: any) => {
+        onError: (err: unknown) => {
             toast.error('Erreur lors de la réception');
             console.error(err);
         }
@@ -229,14 +248,14 @@ export default function PurchaseOrders() {
         }
     };
 
-    const handleProductCreated = (newProduct: any) => {
+    const handleProductCreated = (newProduct: CreatedProduct) => {
         // Automatically add the created product to the list
         setFormData({
             ...formData,
             items: [...formData.items, {
                 product: newProduct.id,
                 quantity: 1,
-                unit_cost: parseFloat(newProduct.purchase_price) || 0,
+                unit_cost: Number(newProduct.purchase_price) || 0,
                 productName: newProduct.name,
                 barcode: newProduct.barcode
             }]

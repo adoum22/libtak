@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import client from '../api/client';
+import client, { getApiErrorMessage } from '../api/client';
 import { useState } from 'react';
-import { useToast } from '../components/Toast';
+import { useToast } from '../components/ToastContext';
 import {
     FileText,
     Calendar,
@@ -106,9 +106,9 @@ export default function Reports() {
             link.click();
             link.remove();
             window.URL.revokeObjectURL(url);
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.error('Erreur lors du téléchargement', error);
-            const message = error.response?.data?.detail || error.message || 'Erreur lors du téléchargement';
+            const message = getApiErrorMessage(error, 'Erreur lors du telechargement');
             toast.error('Erreur : ' + message);
         }
     };
@@ -207,7 +207,7 @@ export default function Reports() {
                                         date.setDate(date.getDate() + 1);
                                         // Empêcher d'aller dans le futur si nécessaire, mais l'utilisateur n'a pas précisé.
                                         // On laisse libre pour l'instant ou on peut bloquer à aujourd'hui.
-                                        // Le user veut "naviguer facilement". 
+                                        // Le user veut "naviguer facilement".
                                         if (date <= new Date()) {
                                             setSelectedDate(date.toISOString().split('T')[0]);
                                         }
