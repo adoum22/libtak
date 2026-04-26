@@ -643,6 +643,8 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         from django.conf import settings as dj_settings
         from sales.models import Sale, SaleItem
 
+        from inventory.models import Product
+
         rs = ReportSettings.get_settings()
         recipients = rs.get_recipients_list()
         today = timezone.localdate()
@@ -659,6 +661,20 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         )['total'] or 0
         today_items = SaleItem.objects.filter(sale__in=today_sales_qs).count()
 
+        # Audit du stock pour expliquer les écarts dashboard vs page Stock.
+        all_products = Product.objects.values('id', 'name', 'barcode', 'stock', 'min_stock', 'active')
+        out_of_stock_list = [
+            p for p in all_products if (p['stock'] is None) or (p['stock'] <= 0)
+        ]
+        replenish_list = [
+            p for p in all_products
+            if p['stock'] is not None and p['min_stock'] is not None
+            and p['stock'] <= p['min_stock']
+        ]
+        null_min_stock = [p for p in all_products if p['min_stock'] is None]
+        null_stock = [p for p in all_products if p['stock'] is None]
+        inactive = [p for p in all_products if not p['active']]
+
         last_log = ReportLog.objects.filter(report_type='DAILY').order_by('-sent_at').first()
 
         return Response({
@@ -666,6 +682,16 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
             'sales_today_count': today_count,
             'sales_today_revenue_ttc': float(today_revenue_ttc),
             'sale_items_today_count': today_items,
+            'stock_audit': {
+                'total_products': all_products.count(),
+                'inactive_products': len(inactive),
+                'out_of_stock_visible': len(out_of_stock_list),
+                'out_of_stock_list': list(out_of_stock_list),
+                'to_replenish_count_recompute': len(replenish_list),
+                'replenish_list': list(replenish_list),
+                'products_with_null_min_stock': list(null_min_stock),
+                'products_with_null_stock': list(null_stock),
+            },
             'report_settings': {
                 'daily_enabled': rs.daily_enabled,
                 'recipients': recipients,
