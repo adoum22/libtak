@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import client from '../api/client';
 import { useTranslation } from 'react-i18next';
 import {
@@ -43,6 +44,9 @@ interface StatsData {
         total_qty: number;
         total_revenue: number;
     }>;
+    to_replenish_count?: number;
+    low_stock_only_count?: number;
+    out_of_stock_count?: number;
     low_stock: Array<{
         id: number;
         name: string;
@@ -75,7 +79,9 @@ export default function Dashboard() {
     const { data: stats, isLoading } = useQuery<StatsData>({
         queryKey: ['dashboardStats', range],
         queryFn: () => client.get(`/reporting/stats/?days=${range}`).then(res => res.data),
-        refetchInterval: 30000 // Refresh every 30s
+        refetchInterval: 30000, // Refresh every 30s
+        refetchOnWindowFocus: true, // re-check quand on revient sur l'onglet
+        staleTime: 0,
     });
 
     const rangeOptions: { value: ChartRange; label: string }[] = [
@@ -162,20 +168,33 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                {/* Low Stock */}
-                <div
-                    onClick={() => document.getElementById('low-stock-section')?.scrollIntoView({ behavior: 'smooth' })}
-                    className="stat-card cursor-pointer hover:scale-105 transition-transform"
+                {/* À réapprovisionner = stock <= seuil (inclut ruptures) */}
+                <Link
+                    to="/inventory"
+                    className="stat-card cursor-pointer hover:scale-105 transition-transform block"
                 >
                     <div className="stat-icon bg-danger-light">
                         <AlertTriangle size={24} className="text-danger" />
                     </div>
                     <div>
-                        <p className="stat-label">Stock bas</p>
-                        <p className="stat-value">{stats?.low_stock_count ?? stats?.low_stock?.length ?? 0}</p>
-                        <p className="text-sm text-muted">produits à réapprovisionner</p>
+                        <p className="stat-label">À réapprovisionner</p>
+                        <p className="stat-value">
+                            {stats?.to_replenish_count ?? stats?.low_stock_count ?? stats?.low_stock?.length ?? 0}
+                        </p>
+                        <p className="text-sm text-muted">
+                            {(stats?.out_of_stock_count ?? 0) > 0 ? (
+                                <>
+                                    dont <span className="text-danger font-semibold">{stats?.out_of_stock_count} en rupture</span>
+                                    {(stats?.low_stock_only_count ?? 0) > 0 && (
+                                        <> + <span className="text-warning font-semibold">{stats?.low_stock_only_count} bas</span></>
+                                    )}
+                                </>
+                            ) : (
+                                'produits à réapprovisionner'
+                            )}
+                        </p>
                     </div>
-                </div>
+                </Link>
             </div>
 
             {/* Charts */}

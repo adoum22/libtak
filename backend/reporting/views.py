@@ -440,10 +440,19 @@ class StatsView(APIView):
             total_revenue=Sum('total_price_ht')
         ).order_by('-total_qty')[:5]
         
-        # Produits en stock bas
-        low_stock_qs = Product.objects.filter(stock__lte=F('min_stock'))
-        low_stock_count = low_stock_qs.count()
-        low_stock = low_stock_qs.values('id', 'name', 'stock', 'min_stock')[:10]
+        # Produits à réapprovisionner = stock <= min_stock (inclut ruptures)
+        # On expose 3 chiffres pour qu'il n'y ait plus d'ambiguïté entre
+        # "stock bas" (faible mais encore là) et "rupture" (zéro):
+        #   - out_of_stock_count : stock <= 0
+        #   - low_stock_only_count : 1 <= stock <= min_stock
+        #   - to_replenish_count : la somme (= stock <= min_stock)
+        # `low_stock_count` est conservé pour rétrocompatibilité = même
+        # valeur que to_replenish_count.
+        replenish_qs = Product.objects.filter(stock__lte=F('min_stock'))
+        out_of_stock_count = Product.objects.filter(stock__lte=0).count()
+        to_replenish_count = replenish_qs.count()
+        low_stock_only_count = max(0, to_replenish_count - out_of_stock_count)
+        low_stock = replenish_qs.values('id', 'name', 'stock', 'min_stock')[:10]
         
         # Comparaison avec hier
         yesterday = today - timedelta(days=1)
@@ -539,7 +548,10 @@ class StatsView(APIView):
             },
             'top_products': list(top_products),
             'low_stock': list(low_stock),
-            'low_stock_count': low_stock_count,
+            'low_stock_count': to_replenish_count,  # rétrocompat
+            'to_replenish_count': to_replenish_count,
+            'low_stock_only_count': low_stock_only_count,
+            'out_of_stock_count': out_of_stock_count,
             'revenue_7d': revenue_7d,
             'hourly_today': hourly_today,
         })
