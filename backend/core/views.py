@@ -1,11 +1,13 @@
 from rest_framework import generics, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
+from django.http import FileResponse, Http404
+from django.urls import reverse
 
 from .serializers import (
     UserSerializer,
@@ -179,11 +181,35 @@ class PublicSettingsView(generics.RetrieveAPIView):
         # Retourner seulement les infos publiques
         data = {
             'store_name': settings.store_name,
+            'store_address': settings.store_address,
+            'store_phone': settings.store_phone,
+            'store_email': settings.store_email,
             'currency': settings.currency,
             'currency_symbol': settings.currency_symbol,
-            'logo_url': request.build_absolute_uri(settings.store_logo.url) if settings.store_logo else None
+            'print_header': settings.print_header,
+            'print_footer': settings.print_footer,
+            'company_name': settings.company_name,
+            'company_rc': settings.company_rc,
+            'company_ice': settings.company_ice,
+            'company_if': settings.company_if,
+            'company_patente': settings.company_patente,
+            'company_cnss': settings.company_cnss,
+            'invoice_prefix': settings.invoice_prefix,
+            'invoice_footer': settings.invoice_footer,
+            'logo_url': request.build_absolute_uri(reverse('app_settings_logo')) if settings.store_logo else None
         }
         return Response(data)
+
+
+class AppSettingsLogoView(APIView):
+    """Logo public de la boutique pour affichage et impression."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        settings = AppSettings.get_settings()
+        if not settings.store_logo:
+            raise Http404
+        return FileResponse(settings.store_logo.open('rb'))
 
 
 from django.http import HttpResponse

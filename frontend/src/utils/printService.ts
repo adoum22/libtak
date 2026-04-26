@@ -28,7 +28,9 @@ interface StoreSettings {
     storeName: string;
     address?: string;
     phone?: string;
+    email?: string;
     taxId?: string;
+    logoUrl?: string | null;
     header?: string;
     footer?: string;
 }
@@ -47,6 +49,15 @@ const defaultSettings: StoreSettings = {
  */
 function formatPrice(amount: number): string {
     return amount.toFixed(2) + ' DH';
+}
+
+function escapeHtml(value: string | number | null | undefined): string {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
 }
 
 /**
@@ -68,7 +79,7 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
         const lineTotal = item.product.price_ttc * item.quantity;
         itemsHTML += `
             <tr>
-                <td colspan="3" class="item-name">${item.product.name}</td>
+                <td colspan="3" class="item-name">${escapeHtml(item.product.name)}</td>
             </tr>
             <tr>
                 <td class="qty">${item.quantity} x ${formatPrice(item.product.price_ttc)}</td>
@@ -112,6 +123,13 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
             font-size: 16px;
             font-weight: bold;
             margin-bottom: 5px;
+        }
+        .store-logo {
+            max-width: 28mm;
+            max-height: 18mm;
+            object-fit: contain;
+            margin: 0 auto 5px;
+            display: block;
         }
         .store-info {
             font-size: 10px;
@@ -188,17 +206,19 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
 </head>
 <body>
     <div class="header">
-        <div class="store-name">${settings.storeName}</div>
-        ${settings.address ? `<div class="store-info">${settings.address}</div>` : ''}
-        ${settings.phone ? `<div class="store-info">Tél: ${settings.phone}</div>` : ''}
-        ${settings.taxId ? `<div class="store-info">IF: ${settings.taxId}</div>` : ''}
-        ${settings.header ? `<div class="store-info">${settings.header}</div>` : ''}
+        ${settings.logoUrl ? `<img class="store-logo" src="${escapeHtml(settings.logoUrl)}" alt="Logo" />` : ''}
+        <div class="store-name">${escapeHtml(settings.storeName)}</div>
+        ${settings.address ? `<div class="store-info">${escapeHtml(settings.address)}</div>` : ''}
+        ${settings.phone ? `<div class="store-info">Tel: ${escapeHtml(settings.phone)}</div>` : ''}
+        ${settings.email ? `<div class="store-info">${escapeHtml(settings.email)}</div>` : ''}
+        ${settings.taxId ? `<div class="store-info">IF: ${escapeHtml(settings.taxId)}</div>` : ''}
+        ${settings.header ? `<div class="store-info">${escapeHtml(settings.header)}</div>` : ''}
     </div>
 
     <div class="receipt-info">
         <div><span>Ticket N°:</span><span>${data.saleId}</span></div>
         <div><span>Date:</span><span>${dateStr} ${timeStr}</span></div>
-        ${data.cashierName ? `<div><span>Vendeur:</span><span>${data.cashierName}</span></div>` : ''}
+        ${data.cashierName ? `<div><span>Vendeur:</span><span>${escapeHtml(data.cashierName)}</span></div>` : ''}
     </div>
 
     <div class="separator"></div>
@@ -214,7 +234,7 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
     <div class="totals">
         ${data.discount ? `
             <div><span>Sous-total:</span><span>${formatPrice(data.subtotal)}</span></div>
-            <div class="discount"><span>Remise (${data.discount.name}):</span><span>-${formatPrice(data.discount.amount)}</span></div>
+            <div class="discount"><span>Remise (${escapeHtml(data.discount.name)}):</span><span>-${formatPrice(data.discount.amount)}</span></div>
         ` : ''}
         <div class="total-line">
             <span>TOTAL:</span>
@@ -229,7 +249,7 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
     </div>
 
     <div class="footer">
-        ${settings.footer || 'Merci pour votre visite!'}
+        ${escapeHtml(settings.footer || 'Merci pour votre visite!')}
     </div>
 
     <div class="barcode">

@@ -208,8 +208,8 @@ export default function Dashboard() {
                                 <AreaChart data={stats.revenue_7d}>
                                     <defs>
                                         <linearGradient id="caGradient" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.36} />
-                                            <stop offset="80%" stopColor="#6366f1" stopOpacity={0.04} />
+                                            <stop offset="0%" stopColor="#0f766e" stopOpacity={0.36} />
+                                            <stop offset="80%" stopColor="#0f766e" stopOpacity={0.04} />
                                         </linearGradient>
                                     </defs>
                                     <CartesianGrid stroke={gridStroke} vertical={false} />
@@ -223,7 +223,7 @@ export default function Dashboard() {
                                         type="monotone"
                                         dataKey="revenue"
                                         name="CA"
-                                        stroke="#6366f1"
+                                        stroke="#0f766e"
                                         strokeWidth={3}
                                         fill="url(#caGradient)"
                                         activeDot={{ r: 5, strokeWidth: 3, stroke: 'var(--color-bg-secondary)' }}
@@ -292,7 +292,7 @@ export default function Dashboard() {
                                 <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} />
                                 <YAxis dataKey="name" type="category" tick={axisTick} tickLine={false} axisLine={false} width={150} />
                                 <Tooltip content={<PremiumChartTooltip />} cursor={{ fill: 'var(--color-accent-light)' }} />
-                                <Bar dataKey="qty" name="Quantité" fill="#6366f1" radius={[0, 10, 10, 0]} maxBarSize={28} />
+                                <Bar dataKey="qty" name="Quantité" fill="#0f766e" radius={[0, 10, 10, 0]} maxBarSize={28} />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>

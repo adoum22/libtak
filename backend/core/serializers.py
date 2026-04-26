@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
+from django.urls import reverse
 from .models import AppSettings, AuditLog
 from .image_validators import validate_image_upload
 
@@ -155,6 +156,9 @@ class AppSettingsSerializer(serializers.ModelSerializer):
             'store_logo', 'logo_url',
             'default_tva', 'currency', 'currency_symbol',
             'print_header', 'print_footer',
+            'company_name', 'company_rc', 'company_ice', 'company_if',
+            'company_patente', 'company_cnss',
+            'invoice_prefix', 'invoice_footer',
             'cashier_can_view_stock', 'cashier_can_manage_stock',
             'updated_at'
         ]
@@ -164,6 +168,6 @@ class AppSettingsSerializer(serializers.ModelSerializer):
         if obj.store_logo:
             request = self.context.get('request')
             if request:
-                return request.build_absolute_uri(obj.store_logo.url)
-            return obj.store_logo.url
+                return request.build_absolute_uri(reverse('app_settings_logo'))
+            return reverse('app_settings_logo')
         return None

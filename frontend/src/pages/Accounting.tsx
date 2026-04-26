@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import {
     Calculator, DollarSign, TrendingUp, TrendingDown,
-    Plus, Trash2, ChevronLeft, ChevronRight,
+    Plus, Trash2, ChevronLeft, ChevronRight, CalendarDays, CalendarRange,
 } from 'lucide-react';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
@@ -16,7 +16,7 @@ const MONTHS_FR = [
     'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
 ];
-const PIE_COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+const PIE_COLORS = ['#0f766e', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#64748b', '#2563eb'];
 const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
 const gridStroke = 'var(--color-border-light)';
 
@@ -60,13 +60,35 @@ interface YearSummary {
     };
 }
 
+interface PeriodSummary {
+    type: 'day' | 'week';
+    date: string;
+    start_date: string;
+    end_date: string;
+    revenue: number;
+    gross_margin: number;
+    expenses: number;
+    net_profit: number;
+    expenses_detail: Expense[];
+    category_breakdown: Array<{ category: string; total: number }>;
+    daily: Array<{
+        date: string;
+        label: string;
+        revenue: number;
+        gross_margin: number;
+        expenses: number;
+        net_profit: number;
+    }>;
+}
+
 export default function Accounting() {
     const toast = useToast();
     const qc = useQueryClient();
     const now = new Date();
     const [year, setYear] = useState(now.getFullYear());
     const [month, setMonth] = useState(now.getMonth() + 1);
-    const [tab, setTab] = useState<'month' | 'year' | 'categories'>('month');
+    const [selectedDate, setSelectedDate] = useState(now.toISOString().slice(0, 10));
+    const [tab, setTab] = useState<'day' | 'week' | 'month' | 'year' | 'categories'>('day');
 
     // ---------- Queries ----------
     const { data: categories = [] } = useQuery<Category[]>({
@@ -87,6 +109,14 @@ export default function Accounting() {
         queryFn: () => client.get(`/accounting/summary/?year=${year}`).then(r => r.data),
     });
 
+    const { data: periodSummary, isLoading: periodLoading } = useQuery<PeriodSummary>({
+        queryKey: ['acc-period', tab, selectedDate],
+        queryFn: () => client
+            .get(`/accounting/period-summary/?type=${tab === 'week' ? 'week' : 'day'}&date=${selectedDate}`)
+            .then(r => r.data),
+        enabled: tab === 'day' || tab === 'week',
+    });
+
     // ---------- Mutations ----------
     const saveMonthly = useMutation({
         mutationFn: (payload: { manager_withdrawal: number; notes: string }) =>
@@ -100,12 +130,13 @@ export default function Accounting() {
     });
 
     const addExpense = useMutation({
-        mutationFn: (payload: { category: number; amount: number; description: string }) =>
-            client.post('/accounting/expenses/', { ...payload, year, month }),
+        mutationFn: (payload: { category: number; amount: number; description: string; incurred_on?: string; year?: number; month?: number }) =>
+            client.post('/accounting/expenses/', { ...payload, year: payload.year ?? year, month: payload.month ?? month }),
         onSuccess: () => {
             toast.success('Dépense ajoutée');
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
+            qc.invalidateQueries({ queryKey: ['acc-period'] });
         },
         onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
     });
@@ -115,6 +146,7 @@ export default function Accounting() {
         onSuccess: () => {
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
+            qc.invalidateQueries({ queryKey: ['acc-period'] });
         },
     });
 
@@ -159,6 +191,161 @@ export default function Accounting() {
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     // ---------- Render helpers ----------
+    const renderPeriodTab = () => {
+        if (periodLoading || !periodSummary) return <div className="text-center py-12 text-muted">Chargement...</div>;
+
+        const isWeek = tab === 'week';
+        const periodLabel = isWeek
+            ? `Du ${periodSummary.start_date} au ${periodSummary.end_date}`
+            : periodSummary.date;
+
+        return (
+            <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="stat-card">
+                        <div className="stat-icon bg-success-light"><DollarSign size={24} className="text-success" /></div>
+                        <div><p className="stat-label">CA</p><p className="stat-value">{fmt(periodSummary.revenue)} DH</p></div>
+                    </div>
+                    <div className="stat-card">
+                        <div className="stat-icon bg-blue-100"><TrendingUp size={24} className="text-blue-600" /></div>
+                        <div><p className="stat-label">Marge brute</p><p className="stat-value">{fmt(periodSummary.gross_margin)} DH</p></div>
+                    </div>
+                    <div className="stat-card">
+                        <div className="stat-icon bg-red-100"><TrendingDown size={24} className="text-red-500" /></div>
+                        <div><p className="stat-label">Dépenses</p><p className="stat-value">{fmt(periodSummary.expenses)} DH</p></div>
+                    </div>
+                    <div className="stat-card">
+                        <div className="stat-icon bg-accent-light"><TrendingUp size={24} className="text-accent" /></div>
+                        <div>
+                            <p className="stat-label">Bénéfice net</p>
+                            <p className={`stat-value ${periodSummary.net_profit >= 0 ? 'text-success' : 'text-red-500'}`}>
+                                {fmt(periodSummary.net_profit)} DH
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                {isWeek && (
+                    <div className="card chart-card p-6">
+                        <h2 className="chart-title mb-4">
+                            <span className="chart-title-icon"><CalendarRange size={18} /></span>
+                            Résultat par jour
+                        </h2>
+                        <div className="h-[280px] w-full">
+                            <ResponsiveContainer>
+                                <BarChart data={periodSummary.daily}>
+                                    <CartesianGrid stroke={gridStroke} vertical={false} />
+                                    <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
+                                    <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} />
+                                    <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} cursor={{ fill: 'var(--color-accent-light)' }} />
+                                    <Legend />
+                                    <Bar dataKey="revenue" name="CA" fill="#0f766e" radius={[8, 8, 3, 3]} maxBarSize={32} />
+                                    <Bar dataKey="expenses" name="Dépenses" fill="#ef4444" radius={[8, 8, 3, 3]} maxBarSize={32} />
+                                    <Bar dataKey="net_profit" name="Bénéfice net" fill="#0ea5e9" radius={[8, 8, 3, 3]} maxBarSize={32} />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </div>
+                    </div>
+                )}
+
+                <div className="card p-6">
+                    <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                        <h2 className="text-lg font-semibold">Ajouter une dépense datée</h2>
+                        <span className="text-sm text-muted">{periodLabel}</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                        <input
+                            type="date"
+                            value={selectedDate}
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                        />
+                        <select
+                            value={newExp.category}
+                            onChange={(e) => setNewExp({ ...newExp, category: e.target.value })}
+                        >
+                            <option value="">Catégorie...</option>
+                            {categories.map(c => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                        </select>
+                        <input
+                            type="number" step="0.01" min="0" placeholder="Montant"
+                            value={newExp.amount}
+                            onChange={(e) => setNewExp({ ...newExp, amount: e.target.value })}
+                        />
+                        <input
+                            type="text" placeholder="Description"
+                            value={newExp.description}
+                            onChange={(e) => setNewExp({ ...newExp, description: e.target.value })}
+                        />
+                        <button
+                            className="btn-primary flex items-center justify-center gap-2"
+                            disabled={!newExp.category || !newExp.amount || addExpense.isPending}
+                            onClick={() => {
+                                const dateParts = selectedDate.split('-').map(Number);
+                                addExpense.mutate({
+                                    category: Number(newExp.category),
+                                    amount: Number(newExp.amount),
+                                    description: newExp.description,
+                                    incurred_on: selectedDate,
+                                    year: dateParts[0],
+                                    month: dateParts[1],
+                                });
+                                if (dateParts.length === 3) {
+                                    setYear(dateParts[0]);
+                                    setMonth(dateParts[1]);
+                                }
+                                setNewExp({ category: '', amount: '', description: '' });
+                            }}
+                        >
+                            <Plus size={18} /> Ajouter
+                        </button>
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-header">
+                        <h2 className="font-semibold text-lg">Dépenses de la période</h2>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Catégorie</th>
+                                    <th>Description</th>
+                                    <th className="text-right">Montant</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {periodSummary.expenses_detail.length === 0 ? (
+                                    <tr><td colSpan={5} className="text-center py-8 text-muted">Aucune dépense</td></tr>
+                                ) : periodSummary.expenses_detail.map(e => (
+                                    <tr key={e.id}>
+                                        <td>{e.incurred_on || '-'}</td>
+                                        <td><span className="badge badge-accent">{e.category_name}</span></td>
+                                        <td>{e.description || '-'}</td>
+                                        <td className="text-right">{fmt(Number(e.amount))} DH</td>
+                                        <td className="text-right">
+                                            <button
+                                                onClick={() => deleteExpense.mutate(e.id)}
+                                                className="btn-ghost btn-icon text-red-500"
+                                                title="Supprimer"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const renderMonthTab = () => {
         if (monthLoading || !monthData) return <div className="text-center py-12 text-muted">Chargement...</div>;
 
@@ -503,7 +690,7 @@ export default function Accounting() {
                                         type="monotone"
                                         dataKey="net_profit"
                                         name="Bénéfice net"
-                                        stroke="#6366f1"
+                                        stroke="#0f766e"
                                         strokeWidth={3}
                                         dot={{ r: 4, strokeWidth: 2, fill: 'var(--color-bg-secondary)' }}
                                         activeDot={{ r: 6, strokeWidth: 3, stroke: 'var(--color-bg-secondary)' }}
@@ -612,6 +799,8 @@ export default function Accounting() {
             {/* Period selector */}
             <div className="card p-4 flex flex-wrap items-center gap-4">
                 <div className="flex bg-tertiary rounded-lg p-1">
+                    <button onClick={() => setTab('day')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'day' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarDays size={16} /> Quotidien</button>
+                    <button onClick={() => setTab('week')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'week' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarRange size={16} /> Hebdomadaire</button>
                     <button onClick={() => setTab('month')} className={`px-4 py-2 rounded-md transition ${tab === 'month' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Mensuel</button>
                     <button onClick={() => setTab('year')} className={`px-4 py-2 rounded-md transition ${tab === 'year' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Annuel</button>
                     <button onClick={() => setTab('categories')} className={`px-4 py-2 rounded-md transition ${tab === 'categories' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Catégories</button>
@@ -619,6 +808,14 @@ export default function Accounting() {
 
                 {tab !== 'categories' && (
                     <div className="flex items-center gap-2 ml-auto">
+                        {(tab === 'day' || tab === 'week') && (
+                            <input
+                                type="date"
+                                value={selectedDate}
+                                onChange={(e) => setSelectedDate(e.target.value)}
+                                className="w-auto"
+                            />
+                        )}
                         {tab === 'month' && (
                             <>
                                 <button className="btn-secondary btn-icon" onClick={() => {
@@ -632,15 +829,19 @@ export default function Accounting() {
                                 }}><ChevronRight size={20} /></button>
                             </>
                         )}
-                        <select value={year} onChange={(e) => setYear(parseInt(e.target.value))} className="w-auto">
-                            {Array.from({ length: 6 }, (_, i) => now.getFullYear() - i).map(y => (
-                                <option key={y} value={y}>{y}</option>
-                            ))}
-                        </select>
+                        {(tab === 'month' || tab === 'year') && (
+                            <select value={year} onChange={(e) => setYear(parseInt(e.target.value))} className="w-auto">
+                                {Array.from({ length: 6 }, (_, i) => now.getFullYear() - i).map(y => (
+                                    <option key={y} value={y}>{y}</option>
+                                ))}
+                            </select>
+                        )}
                     </div>
                 )}
             </div>
 
+            {tab === 'day' && renderPeriodTab()}
+            {tab === 'week' && renderPeriodTab()}
             {tab === 'month' && renderMonthTab()}
             {tab === 'year' && renderYearTab()}
             {tab === 'categories' && renderCategoriesTab()}

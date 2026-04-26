@@ -32,6 +32,17 @@ interface CartItem {
     quantity: number;
 }
 
+interface PublicSettings {
+    store_name: string;
+    store_address?: string;
+    store_phone?: string;
+    store_email?: string;
+    company_if?: string;
+    logo_url?: string | null;
+    print_header?: string;
+    print_footer?: string;
+}
+
 type POSMode = 'SALE' | 'PRICE_CHECK';
 
 export default function POS() {
@@ -62,6 +73,12 @@ export default function POS() {
     const { data: products = [] } = useQuery<Product[]>({
         queryKey: ['products', searchTerm],
         queryFn: () => client.get(`/inventory/products/?search=${searchTerm}`).then(res => res.data.results || res.data)
+    });
+
+    const { data: publicSettings } = useQuery<PublicSettings>({
+        queryKey: ['publicSettings'],
+        queryFn: () => client.get('/auth/settings/public/').then(res => res.data),
+        staleTime: 5 * 60_000,
     });
 
     const addToCart = (product: Product) => {
@@ -140,7 +157,16 @@ export default function POS() {
                 import('../utils/printService')
                     .then(({ printReceipt }) => {
                         try {
-                            printReceipt(receiptPayload);
+                            printReceipt(receiptPayload, {
+                                storeName: publicSettings?.store_name || 'Librairie Attaquaddoum',
+                                address: publicSettings?.store_address || '',
+                                phone: publicSettings?.store_phone || '',
+                                email: publicSettings?.store_email || '',
+                                taxId: publicSettings?.company_if || '',
+                                logoUrl: publicSettings?.logo_url || null,
+                                header: publicSettings?.print_header || '',
+                                footer: publicSettings?.print_footer || '',
+                            });
                         } catch (err) {
                             console.error('Print error (non-blocking):', err);
                         }

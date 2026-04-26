@@ -13,9 +13,9 @@
   --color-text-secondary: #4a4a68;
   --color-text-muted: #5a5a78;
 
-  --color-accent: #6366f1;
-  --color-accent-hover: #4f46e5;
-  --color-accent-light: #eef2ff;
+  --color-accent: #0f766e;
+  --color-accent-hover: #0e7490;
+  --color-accent-light: #ccfbf1;
 
   --color-success: #10b981;
   --color-success-light: #d1fae5;
@@ -53,9 +53,9 @@
   --color-text-secondary: #c8c8d8;
   --color-text-muted: #8888a0;
 
-  --color-accent: #818cf8;
-  --color-accent-hover: #6366f1;
-  --color-accent-light: rgba(99, 102, 241, 0.15);
+  --color-accent: #22d3ee;
+  --color-accent-hover: #2dd4bf;
+  --color-accent-light: rgba(45, 212, 191, 0.16);
 
   --color-success-light: rgba(16, 185, 129, 0.15);
   --color-warning-light: rgba(245, 158, 11, 0.15);
@@ -807,7 +807,7 @@ body {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 3px;
-  background: linear-gradient(90deg, var(--color-accent) 0%, #a855f7 100%);
+  background: linear-gradient(90deg, var(--color-accent) 0%, #0ea5e9 100%);
   opacity: 0;
   transition: opacity var(--transition-fast);
 }
@@ -873,7 +873,7 @@ button:disabled,
 }
 
 .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.34);
   transform: translateY(-1px);
 }
 
@@ -960,6 +960,15 @@ select:focus {
   box-shadow: 0 0 0 3px var(--color-accent-light);
 }
 
+.input-like {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+}
+
 input::placeholder {
   color: var(--color-text-muted);
 }
@@ -1012,7 +1021,7 @@ input:disabled {
   inset: auto -40% -80% auto;
   width: 180px;
   height: 180px;
-  background: radial-gradient(circle, rgba(168, 85, 247, 0.18) 0%, transparent 65%);
+  background: linear-gradient(135deg, rgba(15, 118, 110, 0.08), rgba(14, 165, 233, 0.08));
   pointer-events: none;
 }
 
@@ -1024,12 +1033,26 @@ input:disabled {
   align-items: center;
   justify-content: center;
   color: #fff;
-  background: linear-gradient(135deg, var(--color-accent) 0%, #a855f7 100%);
-  box-shadow: 0 6px 18px -6px rgba(99, 102, 241, 0.55),
+  background: linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%);
+  box-shadow: 0 6px 18px -6px rgba(15, 118, 110, 0.45),
               inset 0 1px 0 rgba(255, 255, 255, 0.25);
   flex-shrink: 0;
   position: relative;
   z-index: 1;
+}
+
+.sidebar-brand .brand-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.sidebar-brand .brand-logo span {
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .sidebar-brand .brand-text {
@@ -1042,7 +1065,7 @@ input:disabled {
   font-size: 1.15rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  background: linear-gradient(135deg, var(--color-accent) 0%, #a855f7 100%);
+  background: linear-gradient(135deg, var(--color-accent) 0%, #0ea5e9 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

@@ -8,6 +8,7 @@ from .views import (
     UserMeView,
     UserViewSet,
     AppSettingsView,
+    AppSettingsLogoView,
     PublicSettingsView,
     CustomTokenObtainPairView,
     DatabaseExportView,
@@ -34,6 +35,7 @@ urlpatterns = [
     # Settings
     path('settings/', AppSettingsView.as_view(), name='app_settings'),
     path('settings/public/', PublicSettingsView.as_view(), name='public_settings'),
+    path('settings/logo/', AppSettingsLogoView.as_view(), name='app_settings_logo'),
 
     # Database export/backup
     path('backup/', DatabaseExportView.as_view(), name='database_export'),

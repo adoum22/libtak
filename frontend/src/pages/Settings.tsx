@@ -31,6 +31,14 @@ interface AppSettings {
     logo_url?: string | null;
     print_header?: string;
     print_footer?: string;
+    company_name?: string;
+    company_rc?: string;
+    company_ice?: string;
+    company_if?: string;
+    company_patente?: string;
+    company_cnss?: string;
+    invoice_prefix?: string;
+    invoice_footer?: string;
     cashier_can_view_stock: boolean;
     cashier_can_manage_stock: boolean;
 }
@@ -288,6 +296,83 @@ export default function Settings() {
                                     onChange={(e) => setStoreForm({ ...storeForm, print_footer: e.target.value })}
                                     rows={2}
                                     placeholder="Ex: Merci de votre visite. À bientôt !"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="card max-w-2xl">
+                        <div className="card-header">
+                            <h2 className="font-semibold text-lg">Informations facture</h2>
+                        </div>
+                        <div className="card-body space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-2">Nom de la société</label>
+                                <input
+                                    type="text"
+                                    value={storeForm.company_name || ''}
+                                    onChange={(e) => setStoreForm({ ...storeForm, company_name: e.target.value })}
+                                    placeholder={storeForm.store_name || 'Nom légal affiché sur les factures'}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">RC</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.company_rc || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, company_rc: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">ICE</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.company_ice || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, company_ice: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">IF</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.company_if || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, company_if: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">Patente</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.company_patente || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, company_patente: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">CNSS</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.company_cnss || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, company_cnss: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium mb-2">Préfixe facture</label>
+                                    <input
+                                        type="text"
+                                        value={storeForm.invoice_prefix || ''}
+                                        onChange={(e) => setStoreForm({ ...storeForm, invoice_prefix: e.target.value })}
+                                        placeholder="FAC"
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium mb-2">Pied de facture</label>
+                                <textarea
+                                    value={storeForm.invoice_footer || ''}
+                                    onChange={(e) => setStoreForm({ ...storeForm, invoice_footer: e.target.value })}
+                                    rows={2}
+                                    placeholder="Ex: Merci pour votre confiance."
                                 />
                             </div>
                         </div>

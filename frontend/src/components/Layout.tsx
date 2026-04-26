@@ -18,7 +18,7 @@ import {
     ClipboardList,
     ClipboardCheck,
     Calculator,
-    BookOpenText,
+    ReceiptText,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -41,6 +41,13 @@ export default function Layout() {
     });
 
     const isAdmin = currentUser?.role === 'ADMIN';
+
+    const { data: appSettings } = useQuery({
+        queryKey: ['publicSettings'],
+        queryFn: () => client.get('/auth/settings/public/').then(res => res.data),
+        retry: false,
+        staleTime: 5 * 60_000,
+    });
 
     // Charger le thème sauvegardé
     useEffect(() => {
@@ -92,6 +99,7 @@ export default function Layout() {
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
         { icon: Calculator, label: 'Zakat', path: '/zakat', show: isAdmin },
         { icon: Calculator, label: 'Comptabilité', path: '/accounting', show: isAdmin },
+        { icon: ReceiptText, label: 'Factures', path: '/invoices', show: isAdmin },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },
     ];
 
@@ -111,10 +119,14 @@ export default function Layout() {
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
                 <div className="sidebar-brand">
                     <div className="brand-logo">
-                        <BookOpenText size={22} strokeWidth={2.2} />
+                        {appSettings?.logo_url ? (
+                            <img src={appSettings.logo_url} alt="Logo" />
+                        ) : (
+                            <span>LT</span>
+                        )}
                     </div>
                     <div className="brand-text">
-                        <h1>Librairie</h1>
+                        <h1>{appSettings?.store_name || 'Librairie'}</h1>
                         <p>Attaquaddoum</p>
                     </div>
                 </div>

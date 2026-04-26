@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, timedelta
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -16,6 +16,7 @@ from datetime import date as _date
 from sales.aggregates import (
     revenue_for_month,
     gross_margin_for_period,
+    operating_expenses_for_period,
 )
 
 from .models import ExpenseCategory, MonthlyAccounting, Expense
@@ -173,3 +174,97 @@ class YearSummaryView(APIView):
             'category_breakdown': category_breakdown,
             'totals': totals,
         })
+
+
+class PeriodSummaryView(APIView):
+    """Synthese comptable pour une journee ou une semaine."""
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        period_type = request.query_params.get('type', 'day')
+        raw_date = request.query_params.get('date')
+        target = (
+            date.fromisoformat(raw_date)
+            if raw_date
+            else timezone.localdate()
+        )
+
+        if period_type == 'week':
+            start = target - timedelta(days=target.weekday())
+            end = start + timedelta(days=6)
+        else:
+            period_type = 'day'
+            start = target
+            end = target
+
+        revenue = self._revenue_for_period(start, end)
+        gross_margin = gross_margin_for_period(start, end)
+        expenses = operating_expenses_for_period(start, end)
+        net_profit = gross_margin - expenses
+
+        expense_rows = (
+            Expense.objects.filter(self._expense_filter(start, end))
+            .select_related('category')
+            .order_by('-incurred_on', '-created_at')
+        )
+        expenses_detail = ExpenseSerializer(expense_rows, many=True).data
+
+        category_breakdown_qs = (
+            expense_rows.values('category__name')
+            .annotate(total=Sum('amount'))
+            .order_by('-total')
+        )
+
+        daily = []
+        if period_type == 'week':
+            for offset in range(7):
+                day = start + timedelta(days=offset)
+                day_revenue = self._revenue_for_period(day, day)
+                day_margin = gross_margin_for_period(day, day)
+                day_expenses = operating_expenses_for_period(day, day)
+                daily.append({
+                    'date': day.isoformat(),
+                    'label': day.strftime('%a %d/%m'),
+                    'revenue': float(day_revenue),
+                    'gross_margin': float(day_margin),
+                    'expenses': float(day_expenses),
+                    'net_profit': float(day_margin - day_expenses),
+                })
+
+        return Response({
+            'type': period_type,
+            'date': target.isoformat(),
+            'start_date': start.isoformat(),
+            'end_date': end.isoformat(),
+            'revenue': float(revenue),
+            'gross_margin': float(gross_margin),
+            'expenses': float(expenses),
+            'net_profit': float(net_profit),
+            'expenses_detail': expenses_detail,
+            'category_breakdown': [
+                {'category': row['category__name'], 'total': float(row['total'] or 0)}
+                for row in category_breakdown_qs
+            ],
+            'daily': daily,
+        })
+
+    def _revenue_for_period(self, start, end):
+        from sales.models import Sale
+
+        return Sale.objects.filter(
+            created_at__date__gte=start,
+            created_at__date__lte=end,
+        ).aggregate(total=Sum('total_ttc'))['total'] or 0
+
+    def _expense_filter(self, start, end):
+        q = Q(incurred_on__isnull=False, incurred_on__gte=start, incurred_on__lte=end)
+        cur = date(start.year, start.month, 1)
+        end_cap = date(end.year, end.month, 1)
+        month_q = Q()
+        while cur <= end_cap:
+            month_q |= Q(monthly__year=cur.year, monthly__month=cur.month)
+            if cur.month == 12:
+                cur = date(cur.year + 1, 1, 1)
+            else:
+                cur = date(cur.year, cur.month + 1, 1)
+        return q | (Q(incurred_on__isnull=True) & month_q)

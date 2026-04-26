@@ -88,7 +88,17 @@ class AppSettings(models.Model):
     # Impression tickets
     print_header = models.TextField(_('Ticket Header'), blank=True)
     print_footer = models.TextField(_('Ticket Footer'), blank=True)
-    
+
+    # Informations facture
+    company_name = models.CharField(_('Company Name'), max_length=200, blank=True)
+    company_rc = models.CharField(_('RC'), max_length=80, blank=True)
+    company_ice = models.CharField(_('ICE'), max_length=80, blank=True)
+    company_if = models.CharField(_('IF'), max_length=80, blank=True)
+    company_patente = models.CharField(_('Patente'), max_length=80, blank=True)
+    company_cnss = models.CharField(_('CNSS'), max_length=80, blank=True)
+    invoice_prefix = models.CharField(_('Invoice Prefix'), max_length=20, default='FAC')
+    invoice_footer = models.TextField(_('Invoice Footer'), blank=True)
+
     updated_at = models.DateTimeField(auto_now=True)
     
     def save(self, *args, **kwargs):
