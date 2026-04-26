@@ -70,8 +70,8 @@ def get_report_data(start_date, end_date):
     sale_items = SaleItem.objects.filter(sale__in=sales).select_related('product')
     for item in sale_items:
         if item.product:
-            cost = float(item.product.purchase_price) * item.quantity
-            revenue = float(item.unit_price) * item.quantity
+            cost = float(item.total_purchase_cost)
+            revenue = float(item.unit_price_ht) * item.quantity
             profit = revenue - cost
             total_profit += profit
             

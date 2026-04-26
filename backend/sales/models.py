@@ -42,6 +42,8 @@ class SaleItem(models.Model):
     unit_price_ht = models.DecimalField(max_digits=10, decimal_places=2)
     total_price_ht = models.DecimalField(max_digits=10, decimal_places=2)
     tva_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    unit_purchase_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    total_purchase_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     def __str__(self):
         return f"{self.quantity}x {self.product_name}"

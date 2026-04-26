@@ -32,7 +32,7 @@ def get_report_data(start_date, end_date):
     ).annotate(
         total_qty=Sum('quantity'),
         total_revenue=Sum(F('unit_price_ht') * F('quantity')),
-        total_cost=Sum(F('quantity') * F('product__purchase_price')),
+        total_cost=Sum('total_purchase_cost'),
         avg_unit_price=Sum(F('unit_price_ht') * F('quantity')) / Sum('quantity')
     ).order_by('-total_qty')
     

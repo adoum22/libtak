@@ -2,6 +2,7 @@ export interface InvoiceLine {
     description: string;
     quantity: number;
     unitPrice: number;
+    tvaRate: number;
 }
 
 export interface InvoiceCompany {
@@ -42,9 +43,13 @@ const escapeHtml = (value: string | number | null | undefined): string =>
         .replace(/'/g, '&#039;');
 
 export function printInvoice(data: InvoicePrintData): void {
-    const subtotal = data.lines.reduce((sum, line) => (
+    const subtotalHt = data.lines.reduce((sum, line) => (
         sum + (line.quantity * line.unitPrice)
     ), 0);
+    const totalTva = data.lines.reduce((sum, line) => (
+        sum + (line.quantity * line.unitPrice * (line.tvaRate / 100))
+    ), 0);
+    const totalTtc = subtotalHt + totalTva;
 
     const rows = data.lines.map(line => {
         const total = line.quantity * line.unitPrice;
@@ -53,7 +58,8 @@ export function printInvoice(data: InvoicePrintData): void {
                 <td>${escapeHtml(line.description)}</td>
                 <td class="num">${line.quantity}</td>
                 <td class="num">${money(line.unitPrice)}</td>
-                <td class="num">${money(total)}</td>
+                <td class="num">${line.tvaRate.toFixed(2)}%</td>
+                <td class="num">${money(total * (1 + line.tvaRate / 100))}</td>
             </tr>
         `;
     }).join('');
@@ -73,21 +79,21 @@ export function printInvoice(data: InvoicePrintData): void {
     <meta charset="UTF-8" />
     <title>Facture ${escapeHtml(data.invoiceNumber)}</title>
     <style>
-        @page { size: A4; margin: 16mm; }
+        @page { size: A4; margin: 18mm; }
         * { box-sizing: border-box; }
         body {
-            font-family: Arial, sans-serif;
-            color: #111827;
+            font-family: Arial, Helvetica, sans-serif;
+            color: #111;
             margin: 0;
             background: #fff;
-            font-size: 12px;
+            font-size: 12.5px;
         }
         .header {
             display: flex;
             justify-content: space-between;
             gap: 24px;
+            min-height: 96px;
             padding-bottom: 18px;
-            border-bottom: 2px solid #0f766e;
         }
         .brand { display: flex; gap: 14px; align-items: flex-start; }
         .logo {
@@ -98,48 +104,49 @@ export function printInvoice(data: InvoicePrintData): void {
             border-radius: 10px;
             padding: 6px;
         }
-        .company-name { font-size: 22px; font-weight: 800; color: #0f766e; }
+        .company-name { font-size: 18px; font-weight: 800; color: #111; }
         .muted { color: #4b5563; line-height: 1.45; }
         .invoice-title { text-align: right; }
-        .invoice-title h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }
-        .section { margin-top: 24px; }
+        .invoice-title h1 { margin: 0 0 18px; font-size: 22px; letter-spacing: 0; }
+        .section { margin-top: 28px; }
         .panel {
-            border: 1px solid #e5e7eb;
-            border-radius: 12px;
-            padding: 14px;
+            padding: 0;
         }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-        .label { color: #6b7280; font-size: 11px; text-transform: uppercase; font-weight: 700; }
-        table { width: 100%; border-collapse: collapse; margin-top: 24px; }
+        .label { color: #111; font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 34px; }
         th {
-            background: #0f766e;
-            color: #fff;
+            background: #fff;
+            color: #111;
             text-align: left;
-            padding: 10px;
-            font-size: 11px;
-            text-transform: uppercase;
+            padding: 8px 6px;
+            font-size: 12px;
+            border-bottom: 1px solid #111;
         }
-        td { padding: 10px; border-bottom: 1px solid #e5e7eb; }
+        td { padding: 9px 6px; border-bottom: 1px solid #f1f1f1; }
         .num { text-align: right; white-space: nowrap; }
         .total-box {
             margin-left: auto;
-            margin-top: 18px;
-            width: 280px;
-            border: 1px solid #0f766e;
-            border-radius: 12px;
-            overflow: hidden;
+            margin-top: 28px;
+            width: 310px;
         }
         .total-row {
             display: flex;
             justify-content: space-between;
-            padding: 12px 14px;
+            padding: 7px 0;
             font-weight: 700;
         }
-        .grand-total { background: #ccfbf1; color: #064e3b; font-size: 16px; }
+        .grand-total { border-top: 1px solid #111; font-size: 16px; }
+        .amount-words { margin-top: 24px; font-weight: 700; }
+        .provider {
+            margin-top: 74px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
         .footer {
-            margin-top: 36px;
+            margin-top: 24px;
             padding-top: 14px;
-            border-top: 1px solid #e5e7eb;
             text-align: center;
             color: #4b5563;
         }
@@ -151,15 +158,10 @@ export function printInvoice(data: InvoicePrintData): void {
             ${data.company.logoUrl ? `<img class="logo" src="${escapeHtml(data.company.logoUrl)}" />` : ''}
             <div>
                 <div class="company-name">${escapeHtml(data.company.name)}</div>
-                <div class="muted">${escapeHtml(data.company.address)}</div>
-                <div class="muted">${escapeHtml(data.company.phone)}</div>
-                <div class="muted">${escapeHtml(data.company.email)}</div>
-                <div class="muted">${companyMeta}</div>
             </div>
         </div>
         <div class="invoice-title">
-            <h1>FACTURE</h1>
-            <div class="muted">N: <strong>${escapeHtml(data.invoiceNumber)}</strong></div>
+            <h1>Facture N° ${escapeHtml(data.invoiceNumber)}</h1>
             <div class="muted">Date: ${escapeHtml(data.invoiceDate)}</div>
             ${data.dueDate ? `<div class="muted">Echeance: ${escapeHtml(data.dueDate)}</div>` : ''}
         </div>
@@ -167,8 +169,7 @@ export function printInvoice(data: InvoicePrintData): void {
 
     <div class="section grid">
         <div class="panel">
-            <div class="label">Client</div>
-            <h2>${escapeHtml(data.customerName)}</h2>
+            <div class="label">Client : ${escapeHtml(data.customerName)}</div>
             <div class="muted">${escapeHtml(data.customerAddress)}</div>
             <div class="muted">${data.customerIce ? `ICE: ${escapeHtml(data.customerIce)}` : ''}</div>
             <div class="muted">${escapeHtml(data.customerPhone)}</div>
@@ -184,7 +185,8 @@ export function printInvoice(data: InvoicePrintData): void {
             <tr>
                 <th>Description</th>
                 <th class="num">Qté</th>
-                <th class="num">Prix unitaire</th>
+                <th class="num">Prix unitaire HT</th>
+                <th class="num">TVA</th>
                 <th class="num">Total</th>
             </tr>
         </thead>
@@ -192,8 +194,25 @@ export function printInvoice(data: InvoicePrintData): void {
     </table>
 
     <div class="total-box">
-        <div class="total-row"><span>Total HT/TTC</span><span>${money(subtotal)}</span></div>
-        <div class="total-row grand-total"><span>Total à payer</span><span>${money(subtotal)}</span></div>
+        <div class="total-row"><span>Montant HT</span><span>${money(subtotalHt)}</span></div>
+        <div class="total-row"><span>TVA</span><span>${money(totalTva)}</span></div>
+        <div class="total-row grand-total"><span>Total Net à payer</span><span>${money(totalTtc)}</span></div>
+    </div>
+
+    <div class="amount-words">
+        ARRETE LA PRESENTE FACTURE A LA SOMME DE : # ${money(totalTtc)} #
+    </div>
+
+    <div class="provider">
+        <div>
+            <strong>Prestataire : ${escapeHtml(data.company.name)}</strong><br />
+            Adresse : ${escapeHtml(data.company.address)}<br />
+            Tel : ${escapeHtml(data.company.phone)}<br />
+            Email : ${escapeHtml(data.company.email)}
+        </div>
+        <div class="muted">
+            ${companyMeta}
+        </div>
     </div>
 
     <div class="footer">${escapeHtml(data.company.footer || 'Merci pour votre confiance.')}</div>

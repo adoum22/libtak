@@ -297,7 +297,7 @@ class PeriodSummaryView(APIView):
             .values('d')
             .annotate(
                 revenue=Sum(F('unit_price_ht') * F('quantity')),
-                cost=Sum(F('quantity') * F('product__purchase_price')),
+                cost=Sum('total_purchase_cost'),
             )
         )
         margin = {

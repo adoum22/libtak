@@ -111,12 +111,13 @@ export default function Accounting() {
         queryFn: () => client.get(`/accounting/summary/?year=${year}`).then(r => r.data),
     });
 
-    const { data: periodSummary, isLoading: periodLoading } = useQuery<PeriodSummary>({
+    const { data: periodSummary, isLoading: periodLoading, isError: periodIsError, error: periodError } = useQuery<PeriodSummary>({
         queryKey: ['acc-period', tab, selectedDate],
         queryFn: () => client
             .get(`/accounting/period-summary/?type=${tab === 'week' ? 'week' : 'day'}&date=${selectedDate}`)
             .then(r => r.data),
         enabled: tab === 'day' || tab === 'week',
+        retry: 1,
     });
 
     // ---------- Mutations ----------
@@ -194,7 +195,15 @@ export default function Accounting() {
 
     // ---------- Render helpers ----------
     const renderPeriodTab = () => {
-        if (periodLoading || !periodSummary) return <div className="text-center py-12 text-muted">Chargement...</div>;
+        if (periodLoading) return <div className="text-center py-12 text-muted">Chargement...</div>;
+        if (periodIsError) {
+            return (
+                <div className="card p-6 text-center text-danger">
+                    {getApiErrorMessage(periodError, 'Impossible de charger cette période')}
+                </div>
+            );
+        }
+        if (!periodSummary) return <div className="text-center py-12 text-muted">Aucune donnée</div>;
 
         const isWeek = tab === 'week';
         const periodLabel = isWeek

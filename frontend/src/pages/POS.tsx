@@ -32,17 +32,6 @@ interface CartItem {
     quantity: number;
 }
 
-interface PublicSettings {
-    store_name: string;
-    store_address?: string;
-    store_phone?: string;
-    store_email?: string;
-    company_if?: string;
-    logo_url?: string | null;
-    print_header?: string;
-    print_footer?: string;
-}
-
 type POSMode = 'SALE' | 'PRICE_CHECK';
 
 export default function POS() {
@@ -73,12 +62,6 @@ export default function POS() {
     const { data: products = [] } = useQuery<Product[]>({
         queryKey: ['products', searchTerm],
         queryFn: () => client.get(`/inventory/products/?search=${searchTerm}`).then(res => res.data.results || res.data)
-    });
-
-    const { data: publicSettings } = useQuery<PublicSettings>({
-        queryKey: ['publicSettings'],
-        queryFn: () => client.get('/auth/settings/public/').then(res => res.data),
-        staleTime: 5 * 60_000,
     });
 
     const addToCart = (product: Product) => {
@@ -126,7 +109,7 @@ export default function POS() {
             console.error("Erreur Checkout:", error);
             toast.error("Erreur lors de la validation : " + getApiErrorMessage(error));
         },
-        onSuccess: (response) => {
+        onSuccess: () => {
             // 1. Close payment modal and show success overlay first so the UI
             //    remains interactive even if printing fails or is slow.
             setShowPaymentModal(false);
@@ -136,45 +119,9 @@ export default function POS() {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
 
-            // 3. Snapshot data needed for the receipt before resetSale() can run.
-            const receiptPayload = {
-                saleId: response.data?.id ?? 0,
-                items: cart,
-                subtotal: subtotal,
-                discount: discountAmount > 0
-                    ? { name: 'Reduction', amount: discountAmount }
-                    : undefined,
-                total: total,
-                paymentMethod: 'CASH',
-                amountGiven: parseMoneyInput(amountGiven) || total,
-                change: changeAmount > 0 ? changeAmount : 0,
-            };
-
-            // 4. Defer the print to the next frame so React paints the overlay
-            //    BEFORE the print dialog grabs focus. This way the "Nouvelle
-            //    vente" button is always clickable, even while printing.
-            window.requestAnimationFrame(() => {
-                import('../utils/printService')
-                    .then(({ printReceipt }) => {
-                        try {
-                            printReceipt(receiptPayload, {
-                                storeName: publicSettings?.store_name || 'Librairie Attaquaddoum',
-                                address: publicSettings?.store_address || '',
-                                phone: publicSettings?.store_phone || '',
-                                email: publicSettings?.store_email || '',
-                                taxId: publicSettings?.company_if || '',
-                                logoUrl: publicSettings?.logo_url || null,
-                                header: publicSettings?.print_header || '',
-                                footer: publicSettings?.print_footer || '',
-                            });
-                        } catch (err) {
-                            console.error('Print error (non-blocking):', err);
-                        }
-                    })
-                    .catch(() => {
-                        // Print service unavailable; sale already validated.
-                    });
-            });
+            // Ticket printing is intentionally disabled while no thermal printer
+            // is connected. The sale remains validated and the cashier returns
+            // to a fresh cart through the success overlay.
         }
     });
 

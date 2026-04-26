@@ -5,7 +5,7 @@ from django.db.models import F, Sum
 from django.utils import timezone
 from rest_framework import serializers
 
-from inventory.models import Product
+from inventory.models import Product, ProductCostLayer
 from .models import Discount, Return, ReturnItem, Sale, SaleItem
 
 
@@ -21,9 +21,11 @@ class SaleItemSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'product_id', 'product_name', 'quantity',
             'unit_price_ht', 'total_price_ht', 'tva_rate',
+            'unit_purchase_price', 'total_purchase_cost',
         )
         read_only_fields = (
             'product_name', 'unit_price_ht', 'total_price_ht', 'tva_rate',
+            'unit_purchase_price', 'total_purchase_cost',
         )
 
 
@@ -36,6 +38,7 @@ class SaleItemDetailSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'product_name', 'product_barcode', 'quantity',
             'unit_price_ht', 'total_price_ht', 'tva_rate',
+            'unit_purchase_price', 'total_purchase_cost',
         )
 
 
@@ -187,8 +190,26 @@ class SaleSerializer(serializers.ModelSerializer):
             )
 
             for item in prepared_items:
-                SaleItem.objects.create(sale=sale, **item)
                 product = item['product']
+                purchase_cost = ProductCostLayer.consume_fifo(
+                    product,
+                    item['quantity'],
+                )
+                avg_purchase_price = Decimal('0.00')
+                if item['quantity'] > 0:
+                    avg_purchase_price = (purchase_cost / item['quantity']).quantize(
+                        Decimal('0.01'),
+                        rounding=ROUND_HALF_UP,
+                    )
+                SaleItem.objects.create(
+                    sale=sale,
+                    unit_purchase_price=avg_purchase_price,
+                    total_purchase_cost=purchase_cost.quantize(
+                        Decimal('0.01'),
+                        rounding=ROUND_HALF_UP,
+                    ),
+                    **item,
+                )
                 new_stock = self._decrement_product_stock(
                     product,
                     item['quantity'],
@@ -415,5 +436,11 @@ class ReturnSerializer(serializers.ModelSerializer):
                 if product:
                     product.stock += item_data['quantity']
                     product.save(update_fields=['stock', 'updated_at'])
+                    ProductCostLayer.create_layer(
+                        product=product,
+                        quantity=item_data['quantity'],
+                        unit_cost=sale_item.unit_purchase_price,
+                        note=f'Retour vente #{validated_data["sale"].id}',
+                    )
 
         return return_order

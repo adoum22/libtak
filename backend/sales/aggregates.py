@@ -35,7 +35,7 @@ def gross_margin_for_period(start_date, end_date) -> Decimal:
     )
     agg = items.aggregate(
         revenue=Sum(F('unit_price_ht') * F('quantity')),
-        cost=Sum(F('quantity') * F('product__purchase_price')),
+        cost=Sum('total_purchase_cost'),
     )
     discounts = Sale.objects.filter(
         created_at__date__gte=start_date,

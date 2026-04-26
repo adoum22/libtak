@@ -4,7 +4,7 @@ from rest_framework.test import APITestCase
 from rest_framework import serializers, status
 from decimal import Decimal
 
-from inventory.models import Product
+from inventory.models import Product, ProductCostLayer
 from .models import Sale, SaleItem, Discount, Return, ReturnItem
 from .serializers import SaleSerializer
 
@@ -151,6 +151,38 @@ class SalesAPITest(APITestCase):
         # Vérifier décrémentation stock
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 98)  # 100 - 2
+
+    def test_sale_consumes_purchase_cost_layers_fifo(self):
+        ProductCostLayer.objects.filter(product=self.product).delete()
+        ProductCostLayer.objects.create(
+            product=self.product,
+            unit_cost=Decimal('1.00'),
+            initial_quantity=3,
+            remaining_quantity=3,
+        )
+        ProductCostLayer.objects.create(
+            product=self.product,
+            unit_cost=Decimal('1.10'),
+            initial_quantity=5,
+            remaining_quantity=5,
+        )
+        self.product.purchase_price = Decimal('1.10')
+        self.product.stock = 8
+        self.product.save(update_fields=['purchase_price', 'stock'])
+
+        response = self.client.post('/api/sales/sales/', {
+            'items': [{'product_id': self.product.id, 'quantity': 5}],
+            'payment_method': 'CASH',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        sale_item = Sale.objects.get(id=response.data['id']).items.first()
+        self.assertEqual(sale_item.total_purchase_cost, Decimal('5.20'))
+        self.assertEqual(sale_item.unit_purchase_price, Decimal('1.04'))
+        self.assertEqual(
+            list(ProductCostLayer.objects.filter(product=self.product).values_list('remaining_quantity', flat=True)),
+            [0, 3],
+        )
 
     def test_create_sale_with_direct_discount(self):
         data = {

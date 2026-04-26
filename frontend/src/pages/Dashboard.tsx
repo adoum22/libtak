@@ -49,6 +49,7 @@ interface StatsData {
         stock: number;
         min_stock: number;
     }>;
+    low_stock_count?: number;
     revenue_7d?: Array<{
         label: string;
         date: string;
@@ -171,7 +172,7 @@ export default function Dashboard() {
                     </div>
                     <div>
                         <p className="stat-label">Stock bas</p>
-                        <p className="stat-value">{stats?.low_stock?.length || 0}</p>
+                        <p className="stat-value">{stats?.low_stock_count ?? stats?.low_stock?.length ?? 0}</p>
                         <p className="text-sm text-muted">produits à réapprovisionner</p>
                     </div>
                 </div>

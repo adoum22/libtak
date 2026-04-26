@@ -134,12 +134,105 @@ class Product(models.Model):
     @property
     def stock_value(self):
         """Valeur du stock au prix d'achat"""
-        return self.stock * self.purchase_price
+        layered_value = self.cost_layers.aggregate(
+            total=models.Sum(
+                models.F('remaining_quantity') * models.F('unit_cost'),
+                output_field=models.DecimalField(max_digits=14, decimal_places=2),
+            ),
+        )['total']
+        return layered_value if layered_value is not None else self.stock * self.purchase_price
     
     @property
     def is_low_stock(self):
         """Vérifie si le stock est bas"""
         return self.stock <= self.min_stock
+
+
+class ProductCostLayer(models.Model):
+    """Lot de coût d'achat consommé en FIFO par les ventes."""
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='cost_layers',
+    )
+    source_movement = models.OneToOneField(
+        'StockMovement',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cost_layer',
+    )
+    unit_cost = models.DecimalField(_('Unit Cost'), max_digits=10, decimal_places=2)
+    initial_quantity = models.PositiveIntegerField(_('Initial Quantity'))
+    remaining_quantity = models.PositiveIntegerField(_('Remaining Quantity'))
+    note = models.CharField(_('Note'), max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Product Cost Layer')
+        verbose_name_plural = _('Product Cost Layers')
+        ordering = ['created_at', 'id']
+        indexes = [
+            models.Index(fields=['product', 'remaining_quantity', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name}: {self.remaining_quantity}/{self.initial_quantity} @ {self.unit_cost}"
+
+    @classmethod
+    def create_layer(cls, product, quantity, unit_cost=None, source_movement=None, note=''):
+        if quantity <= 0:
+            return None
+        return cls.objects.create(
+            product=product,
+            source_movement=source_movement,
+            unit_cost=unit_cost if unit_cost is not None else product.purchase_price,
+            initial_quantity=quantity,
+            remaining_quantity=quantity,
+            note=note,
+        )
+
+    @classmethod
+    def ensure_layers_cover_stock(cls, product):
+        available = cls.objects.filter(product=product).aggregate(
+            total=models.Sum('remaining_quantity'),
+        )['total'] or 0
+        missing = product.stock - available
+        if missing > 0:
+            cls.create_layer(
+                product=product,
+                quantity=missing,
+                unit_cost=product.purchase_price,
+                note='Rattrapage stock sans lot',
+            )
+
+    @classmethod
+    def consume_fifo(cls, product, quantity):
+        if quantity <= 0:
+            return 0
+
+        cls.ensure_layers_cover_stock(product)
+        remaining = quantity
+        total_cost = 0
+
+        layers = (
+            cls.objects.select_for_update()
+            .filter(product=product, remaining_quantity__gt=0)
+            .order_by('created_at', 'id')
+        )
+        for layer in layers:
+            if remaining <= 0:
+                break
+            consumed = min(remaining, layer.remaining_quantity)
+            layer.remaining_quantity -= consumed
+            layer.save(update_fields=['remaining_quantity'])
+            total_cost += layer.unit_cost * consumed
+            remaining -= consumed
+
+        if remaining > 0:
+            total_cost += product.purchase_price * remaining
+
+        return total_cost
 
 
 class StockMovement(models.Model):
@@ -216,6 +309,7 @@ class StockMovement(models.Model):
             if self.movement_type == self.MovementType.IN:
                 product.stock += self.quantity
             elif self.movement_type == self.MovementType.OUT:
+                ProductCostLayer.consume_fifo(product, abs(self.quantity))
                 product.stock -= self.quantity
             elif self.movement_type == self.MovementType.RETURN:
                 product.stock += self.quantity
@@ -223,11 +317,29 @@ class StockMovement(models.Model):
                 # Pour adjustment, quantity est la nouvelle valeur absolue
                 new_total = self.quantity
                 self.quantity = new_total - self.stock_before
+                if self.quantity < 0:
+                    ProductCostLayer.consume_fifo(product, abs(self.quantity))
                 product.stock = new_total
 
             self.stock_after = product.stock
             product.save(update_fields=['stock', 'updated_at'])
             super().save(*args, **kwargs)
+            if self.movement_type in {self.MovementType.IN, self.MovementType.RETURN}:
+                ProductCostLayer.create_layer(
+                    product=product,
+                    quantity=abs(self.quantity),
+                    unit_cost=self.unit_cost or product.purchase_price,
+                    source_movement=self,
+                    note=self.get_movement_type_display(),
+                )
+            elif self.movement_type == self.MovementType.ADJUST and self.quantity > 0:
+                ProductCostLayer.create_layer(
+                    product=product,
+                    quantity=self.quantity,
+                    unit_cost=self.unit_cost or product.purchase_price,
+                    source_movement=self,
+                    note='Ajustement stock',
+                )
 
 
 class PriceHistory(models.Model):

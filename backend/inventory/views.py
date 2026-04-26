@@ -6,7 +6,7 @@ from core.permissions import CanManageInventory, CanViewInventory, IsAdminRole, 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.core.files.base import ContentFile
-from django.db.models import Sum, F
+from django.db.models import DecimalField, Sum, F
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, StringIO
@@ -17,7 +17,7 @@ import zipfile
 
 logger = logging.getLogger(__name__)
 
-from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
+from .models import Category, Product, ProductCostLayer, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 from .serializers import (
     CategorySerializer,
     ProductSerializer,
@@ -91,6 +91,29 @@ class ProductViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    def perform_create(self, serializer):
+        product = serializer.save()
+        ProductCostLayer.create_layer(
+            product=product,
+            quantity=product.stock,
+            unit_cost=product.purchase_price,
+            note='Stock initial produit',
+        )
+
+    def perform_update(self, serializer):
+        old_product = Product.objects.get(pk=serializer.instance.pk)
+        product = serializer.save()
+        delta = product.stock - old_product.stock
+        if delta > 0:
+            ProductCostLayer.create_layer(
+                product=product,
+                quantity=delta,
+                unit_cost=product.purchase_price,
+                note='Ajout stock via fiche produit',
+            )
+        elif delta < 0:
+            ProductCostLayer.consume_fifo(product, abs(delta))
+
     @action(detail=False, methods=['get'])
     def stats(self, request):
         """Statistiques globales des produits"""
@@ -101,9 +124,15 @@ class ProductViewSet(viewsets.ModelViewSet):
         low_stock_count = products.filter(stock__lte=F('min_stock')).count()
         out_of_stock = products.filter(stock=0).count()
 
-        # Valeur totale du stock
-        stock_value = products.aggregate(
-            total=Sum(F('stock') * F('purchase_price'))
+        product_ids = products.values('id')
+        stock_value = ProductCostLayer.objects.filter(
+            product_id__in=product_ids,
+            remaining_quantity__gt=0,
+        ).aggregate(
+            total=Sum(
+                F('remaining_quantity') * F('unit_cost'),
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            )
         )['total'] or 0
 
         return Response({
@@ -392,6 +421,12 @@ class ProductViewSet(viewsets.ModelViewSet):
                         product.image.save(image_name, image_content, save=False)
 
                     product.save()
+                    ProductCostLayer.create_layer(
+                        product=product,
+                        quantity=product.stock,
+                        unit_cost=product.purchase_price,
+                        note='Stock importé',
+                    )
                     created_count += 1
                 except Exception as exc:
                     errors.append(f"Ligne {line_number}: {exc}")

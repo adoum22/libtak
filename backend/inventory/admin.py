@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Category, Product, Supplier, StockMovement
+from .models import Category, Product, ProductCostLayer, Supplier, StockMovement
 
 
 @admin.register(Category)
@@ -50,3 +50,17 @@ class StockMovementAdmin(admin.ModelAdmin):
     
     def has_change_permission(self, request, obj=None):
         return False  # Stock movements shouldn't be modified
+
+
+@admin.register(ProductCostLayer)
+class ProductCostLayerAdmin(admin.ModelAdmin):
+    list_display = ('product', 'unit_cost', 'initial_quantity', 'remaining_quantity', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('product__name', 'product__barcode', 'note')
+    readonly_fields = ('product', 'source_movement', 'unit_cost', 'initial_quantity', 'remaining_quantity', 'note', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

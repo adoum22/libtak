@@ -6,7 +6,7 @@ from django.db import transaction
 from django.db.models import F
 from core.models import AuditLog
 from core.permissions import IsAdminRole
-from inventory.models import Product
+from inventory.models import Product, ProductCostLayer
 from .models import Sale, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
@@ -153,6 +153,7 @@ class ReturnViewSet(viewsets.ModelViewSet):
             for item in items:
                 product = locked_products.get(item.sale_item.product_id)
                 if product:
+                    ProductCostLayer.consume_fifo(product, item.quantity)
                     product.stock = max(0, product.stock - item.quantity)
                     product.save(update_fields=['stock', 'updated_at'])
             return_order.status = Return.ReturnStatus.REJECTED

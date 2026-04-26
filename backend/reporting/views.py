@@ -441,10 +441,9 @@ class StatsView(APIView):
         ).order_by('-total_qty')[:5]
         
         # Produits en stock bas
-        low_stock = Product.objects.filter(
-            stock__lte=F('min_stock'),
-            active=True
-        ).values('id', 'name', 'stock', 'min_stock')[:10]
+        low_stock_qs = Product.objects.filter(stock__lte=F('min_stock'))
+        low_stock_count = low_stock_qs.count()
+        low_stock = low_stock_qs.values('id', 'name', 'stock', 'min_stock')[:10]
         
         # Comparaison avec hier
         yesterday = today - timedelta(days=1)
@@ -540,6 +539,7 @@ class StatsView(APIView):
             },
             'top_products': list(top_products),
             'low_stock': list(low_stock),
+            'low_stock_count': low_stock_count,
             'revenue_7d': revenue_7d,
             'hourly_today': hourly_today,
         })

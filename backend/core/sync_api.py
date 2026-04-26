@@ -117,9 +117,11 @@ def _import_sale(sale_data: dict) -> bool:
             product=product,
             product_name=item_data['product_name'],
             quantity=item_data['quantity'],
-            unit_price_ht=item_data['unit_price_ht'],
-            total_price_ht=item_data['total_ht'],
-            tva_rate=20  # Default
+            unit_price_ht=item_data.get('unit_price_ht', item_data.get('unit_price', 0)),
+            total_price_ht=item_data.get('total_ht', 0),
+            tva_rate=item_data.get('tva_rate', 20),
+            unit_purchase_price=item_data.get('unit_purchase_price', 0),
+            total_purchase_cost=item_data.get('total_purchase_cost', 0),
         )
     
     return True

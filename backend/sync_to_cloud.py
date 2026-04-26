@@ -51,6 +51,11 @@ def serialize_sale(sale):
             'product_name': item.product.name if item.product else item.product_name,
             'quantity': item.quantity,
             'unit_price': str(item.unit_price_ht),
+            'unit_price_ht': str(item.unit_price_ht),
+            'total_ht': str(item.total_price_ht),
+            'tva_rate': str(item.tva_rate),
+            'unit_purchase_price': str(item.unit_purchase_price),
+            'total_purchase_cost': str(item.total_purchase_cost),
         })
     
     return {
