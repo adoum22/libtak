@@ -9,7 +9,9 @@ import {
     DollarSign,
     ArrowUpRight,
     ArrowDownRight,
-    Package
+    Package,
+    Activity,
+    Trophy,
 } from 'lucide-react';
 import {
     AreaChart,
@@ -22,6 +24,7 @@ import {
     Tooltip,
     ResponsiveContainer,
 } from 'recharts';
+import PremiumChartTooltip from '../components/PremiumChartTooltip';
 
 interface DailyData {
     total_sales: number;
@@ -60,6 +63,9 @@ interface StatsData {
 }
 
 type ChartRange = 7 | 30 | 90;
+
+const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
+const gridStroke = 'var(--color-border-light)';
 
 export default function Dashboard() {
     const { t } = useTranslation();
@@ -174,10 +180,11 @@ export default function Dashboard() {
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* CA — période sélectionnable */}
-                <div className="card">
+                <div className="card chart-card">
                     <div className="card-header flex items-center justify-between gap-3 flex-wrap">
-                        <h2 className="text-lg font-semibold">
-                            📈 CA — {rangeOptions.find(r => r.value === range)?.label}
+                        <h2 className="chart-title">
+                            <span className="chart-title-icon"><TrendingUp size={18} /></span>
+                            CA — {rangeOptions.find(r => r.value === range)?.label}
                         </h2>
                         <div className="inline-flex bg-tertiary rounded-lg p-1 text-sm">
                             {rangeOptions.map(opt => (
@@ -197,27 +204,29 @@ export default function Dashboard() {
                     </div>
                     <div className="card-body">
                         {stats?.revenue_7d?.some(d => d.revenue > 0) ? (
-                            <ResponsiveContainer width="100%" height={240}>
+                            <ResponsiveContainer width="100%" height={260}>
                                 <AreaChart data={stats.revenue_7d}>
                                     <defs>
                                         <linearGradient id="caGradient" x1="0" y1="0" x2="0" y2="1">
-                                            <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.5} />
-                                            <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.36} />
+                                            <stop offset="80%" stopColor="#6366f1" stopOpacity={0.04} />
                                         </linearGradient>
                                     </defs>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <CartesianGrid stroke={gridStroke} vertical={false} />
+                                    <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
+                                    <YAxis tick={axisTick} tickLine={false} axisLine={false} width={42} />
                                     <Tooltip
-                                        formatter={(v: unknown) => [`${(Number(v) || 0).toLocaleString('fr-FR')} DH`, 'CA']}
-                                        contentStyle={{ borderRadius: 8, fontSize: 12 }}
+                                        content={<PremiumChartTooltip valueSuffix=" DH" />}
+                                        cursor={{ stroke: 'var(--color-accent)', strokeOpacity: 0.18 }}
                                     />
                                     <Area
                                         type="monotone"
                                         dataKey="revenue"
-                                        stroke="#3b82f6"
-                                        strokeWidth={2}
+                                        name="CA"
+                                        stroke="#6366f1"
+                                        strokeWidth={3}
                                         fill="url(#caGradient)"
+                                        activeDot={{ r: 5, strokeWidth: 3, stroke: 'var(--color-bg-secondary)' }}
                                     />
                                 </AreaChart>
                             </ResponsiveContainer>
@@ -230,22 +239,25 @@ export default function Dashboard() {
                 </div>
 
                 {/* Activité par heure aujourd'hui */}
-                <div className="card">
+                <div className="card chart-card">
                     <div className="card-header">
-                        <h2 className="text-lg font-semibold">🕐 Activité par heure (aujourd'hui)</h2>
+                        <h2 className="chart-title">
+                            <span className="chart-title-icon"><Activity size={18} /></span>
+                            Activité par heure
+                        </h2>
                     </div>
                     <div className="card-body">
                         {stats?.hourly_today?.some(h => h.revenue > 0) ? (
-                            <ResponsiveContainer width="100%" height={240}>
+                            <ResponsiveContainer width="100%" height={260}>
                                 <BarChart data={stats.hourly_today}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                                    <YAxis tick={{ fontSize: 11 }} />
+                                    <CartesianGrid stroke={gridStroke} vertical={false} />
+                                    <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
+                                    <YAxis tick={axisTick} tickLine={false} axisLine={false} width={42} />
                                     <Tooltip
-                                        formatter={(v: unknown) => [`${(Number(v) || 0).toLocaleString('fr-FR')} DH`, 'CA']}
-                                        contentStyle={{ borderRadius: 8, fontSize: 12 }}
+                                        content={<PremiumChartTooltip valueSuffix=" DH" />}
+                                        cursor={{ fill: 'var(--color-accent-light)' }}
                                     />
-                                    <Bar dataKey="revenue" fill="#10b981" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="revenue" name="CA" fill="#10b981" radius={[10, 10, 4, 4]} maxBarSize={38} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : (
@@ -259,9 +271,12 @@ export default function Dashboard() {
 
             {/* Top produits BarChart horizontal */}
             {stats?.top_products && stats.top_products.length > 0 && (
-                <div className="card">
+                <div className="card chart-card">
                     <div className="card-header">
-                        <h2 className="text-lg font-semibold">🏆 Top produits — quantité (ce mois)</h2>
+                        <h2 className="chart-title">
+                            <span className="chart-title-icon"><Trophy size={18} /></span>
+                            Top produits — quantité
+                        </h2>
                     </div>
                     <div className="card-body">
                         <ResponsiveContainer width="100%" height={Math.max(180, stats.top_products.length * 42)}>
@@ -273,11 +288,11 @@ export default function Dashboard() {
                                 layout="vertical"
                                 margin={{ left: 16, right: 16 }}
                             >
-                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                                <XAxis type="number" tick={{ fontSize: 11 }} />
-                                <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={150} />
-                                <Tooltip contentStyle={{ borderRadius: 8, fontSize: 12 }} />
-                                <Bar dataKey="qty" fill="#6366f1" radius={[0, 6, 6, 0]} />
+                                <CartesianGrid stroke={gridStroke} horizontal={false} />
+                                <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} />
+                                <YAxis dataKey="name" type="category" tick={axisTick} tickLine={false} axisLine={false} width={150} />
+                                <Tooltip content={<PremiumChartTooltip />} cursor={{ fill: 'var(--color-accent-light)' }} />
+                                <Bar dataKey="qty" name="Quantité" fill="#6366f1" radius={[0, 10, 10, 0]} maxBarSize={28} />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
@@ -289,7 +304,10 @@ export default function Dashboard() {
                 {/* Top Products */}
                 <div className="card">
                     <div className="card-header flex items-center justify-between">
-                        <h2 className="text-lg font-semibold">🏆 Top Produits (ce mois)</h2>
+                        <h2 className="chart-title">
+                            <span className="chart-title-icon"><Trophy size={18} /></span>
+                            Top produits du mois
+                        </h2>
                     </div>
                     <div className="card-body p-0">
                         <table>
@@ -333,7 +351,10 @@ export default function Dashboard() {
                 {/* Low Stock Alert */}
                 <div id="low-stock-section" className="card">
                     <div className="card-header flex items-center justify-between">
-                        <h2 className="text-lg font-semibold">⚠️ Alertes Stock Bas</h2>
+                        <h2 className="chart-title">
+                            <span className="chart-title-icon"><AlertTriangle size={18} /></span>
+                            Alertes stock bas
+                        </h2>
                     </div>
                     <div className="card-body p-0">
                         {stats?.low_stock?.length ? (

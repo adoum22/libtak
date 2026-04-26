@@ -701,6 +701,91 @@ body {
   padding: 1.5rem;
 }
 
+.chart-card {
+  overflow: hidden;
+}
+
+.chart-card .card-header {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-secondary) 92%, var(--color-accent-light)),
+    var(--color-bg-secondary)
+  );
+}
+
+.chart-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.chart-title-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-accent);
+  background: var(--color-accent-light);
+}
+
+.chart-tooltip {
+  min-width: 150px;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-bg-secondary) 92%, transparent);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(12px);
+}
+
+.chart-tooltip-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.chart-tooltip-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.chart-tooltip-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+}
+
+.chart-tooltip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+}
+
+.chart-tooltip-name {
+  color: var(--color-text-muted);
+}
+
+.chart-tooltip-value {
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.recharts-cartesian-axis-tick-value {
+  fill: var(--color-text-muted);
+}
+
+.recharts-legend-item-text {
+  color: var(--color-text-secondary) !important;
+}
+
 /* ===== STAT CARD ===== */
 .stat-card {
   background-color: var(--color-bg-secondary);

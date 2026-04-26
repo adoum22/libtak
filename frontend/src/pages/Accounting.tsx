@@ -10,12 +10,15 @@ import {
 } from 'lucide-react';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
+import PremiumChartTooltip from '../components/PremiumChartTooltip';
 
 const MONTHS_FR = [
     'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
     'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
 ];
-const PIE_COLORS = ['#1e40af', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+const PIE_COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
+const gridStroke = 'var(--color-border-light)';
 
 const categoryLabel = (entry: unknown) => {
     if (typeof entry === 'object' && entry !== null && 'category' in entry) {
@@ -224,16 +227,19 @@ export default function Accounting() {
                 {/* Charts row */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Décomposition CA -> Bénéfice */}
-                    <div className="card p-6 lg:col-span-2">
-                        <h2 className="text-lg font-semibold mb-4">Décomposition du résultat</h2>
+                    <div className="card chart-card p-6 lg:col-span-2">
+                        <h2 className="chart-title mb-4">
+                            <span className="chart-title-icon"><TrendingUp size={18} /></span>
+                            Décomposition du résultat
+                        </h2>
                         <div className="h-[280px] w-full">
                             <ResponsiveContainer>
                                 <BarChart data={waterfall}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                                    <YAxis tick={{ fontSize: 11 }} />
-                                    <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
-                                    <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                                    <CartesianGrid stroke={gridStroke} vertical={false} />
+                                    <XAxis dataKey="name" tick={axisTick} tickLine={false} axisLine={false} />
+                                    <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} />
+                                    <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} cursor={{ fill: 'var(--color-accent-light)' }} />
+                                    <Bar dataKey="value" name="Montant" radius={[10, 10, 4, 4]} maxBarSize={48}>
                                         {waterfall.map((d, i) => (
                                             <Cell key={i} fill={d.fill} />
                                         ))}
@@ -244,8 +250,11 @@ export default function Accounting() {
                     </div>
 
                     {/* Pie dépenses */}
-                    <div className="card p-6">
-                        <h2 className="text-lg font-semibold mb-4">Dépenses par catégorie</h2>
+                    <div className="card chart-card p-6">
+                        <h2 className="chart-title mb-4">
+                            <span className="chart-title-icon"><TrendingDown size={18} /></span>
+                            Dépenses par catégorie
+                        </h2>
                         <div className="h-[280px] w-full">
                             {catData.length === 0 ? (
                                 <div className="flex items-center justify-center h-full text-muted text-sm">
@@ -256,14 +265,15 @@ export default function Accounting() {
                                     <PieChart>
                                         <Pie
                                             data={catData} dataKey="total" nameKey="category"
-                                            cx="50%" cy="50%" outerRadius={90}
+                                            cx="50%" cy="50%" innerRadius={52} outerRadius={90}
+                                            paddingAngle={2}
                                             label={categoryLabel}
                                         >
                                             {catData.map((row, i) => (
                                                 <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                             ))}
                                         </Pie>
-                                        <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
+                                        <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
@@ -424,19 +434,22 @@ export default function Accounting() {
                 </div>
 
                 {/* Chart 1: Revenue vs Expenses (bar) */}
-                <div className="card p-6">
-                    <h2 className="text-lg font-semibold mb-4">CA vs Dépenses (mensuel)</h2>
+                <div className="card chart-card p-6">
+                    <h2 className="chart-title mb-4">
+                        <span className="chart-title-icon"><DollarSign size={18} /></span>
+                        CA vs Dépenses
+                    </h2>
                     <div className="h-[320px] w-full">
                         <ResponsiveContainer>
                             <BarChart data={summary.months}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                <XAxis dataKey="label" />
-                                <YAxis tickFormatter={(v) => `${v}`} />
-                                <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
+                                <CartesianGrid stroke={gridStroke} vertical={false} />
+                                <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
+                                <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} tickFormatter={(v) => `${v}`} />
+                                <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} cursor={{ fill: 'var(--color-accent-light)' }} />
                                 <Legend />
-                                <Bar dataKey="revenue" name="CA" fill="#10b981" />
-                                <Bar dataKey="expenses" name="Dépenses" fill="#ef4444" />
-                                <Bar dataKey="manager_withdrawal" name="Retrait gérant" fill="#f59e0b" />
+                                <Bar dataKey="revenue" name="CA" fill="#10b981" radius={[8, 8, 3, 3]} maxBarSize={34} />
+                                <Bar dataKey="expenses" name="Dépenses" fill="#ef4444" radius={[8, 8, 3, 3]} maxBarSize={34} />
+                                <Bar dataKey="manager_withdrawal" name="Retrait gérant" fill="#f59e0b" radius={[8, 8, 3, 3]} maxBarSize={34} />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
@@ -444,8 +457,11 @@ export default function Accounting() {
 
                 {/* Chart 2: Expense breakdown (pie) */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="card p-6">
-                        <h2 className="text-lg font-semibold mb-4">Dépenses par catégorie</h2>
+                    <div className="card chart-card p-6">
+                        <h2 className="chart-title mb-4">
+                            <span className="chart-title-icon"><TrendingDown size={18} /></span>
+                            Dépenses par catégorie
+                        </h2>
                         <div className="h-[320px] w-full">
                             {summary.category_breakdown.length === 0 ? (
                                 <div className="flex items-center justify-center h-full text-muted">Aucune dépense enregistrée</div>
@@ -455,14 +471,15 @@ export default function Accounting() {
                                         <Pie
                                             data={summary.category_breakdown}
                                             dataKey="total" nameKey="category"
-                                            cx="50%" cy="50%" outerRadius={110}
+                                            cx="50%" cy="50%" innerRadius={62} outerRadius={110}
+                                            paddingAngle={2}
                                             label={categoryLabel}
                                         >
                                             {summary.category_breakdown.map((row, i: number) => (
                                                 <Cell key={row.category ?? i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                             ))}
                                         </Pie>
-                                        <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
+                                        <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} />
                                     </PieChart>
                                 </ResponsiveContainer>
                             )}
@@ -470,16 +487,27 @@ export default function Accounting() {
                     </div>
 
                     {/* Chart 3: Net profit trend (line) */}
-                    <div className="card p-6">
-                        <h2 className="text-lg font-semibold mb-4">Bénéfice net mensuel</h2>
+                    <div className="card chart-card p-6">
+                        <h2 className="chart-title mb-4">
+                            <span className="chart-title-icon"><TrendingUp size={18} /></span>
+                            Bénéfice net mensuel
+                        </h2>
                         <div className="h-[320px] w-full">
                             <ResponsiveContainer>
                                 <LineChart data={summary.months}>
-                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                    <XAxis dataKey="label" />
-                                    <YAxis />
-                                    <Tooltip formatter={(v: unknown) => `${fmt(Number(v) || 0)} DH`} />
-                                    <Line type="monotone" dataKey="net_profit" stroke="#1e40af" strokeWidth={3} dot={{ r: 5 }} />
+                                    <CartesianGrid stroke={gridStroke} vertical={false} />
+                                    <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
+                                    <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} />
+                                    <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} cursor={{ stroke: 'var(--color-accent)', strokeOpacity: 0.18 }} />
+                                    <Line
+                                        type="monotone"
+                                        dataKey="net_profit"
+                                        name="Bénéfice net"
+                                        stroke="#6366f1"
+                                        strokeWidth={3}
+                                        dot={{ r: 4, strokeWidth: 2, fill: 'var(--color-bg-secondary)' }}
+                                        activeDot={{ r: 6, strokeWidth: 3, stroke: 'var(--color-bg-secondary)' }}
+                                    />
                                 </LineChart>
                             </ResponsiveContainer>
                         </div>
