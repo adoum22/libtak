@@ -580,42 +580,133 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def receive(self, request, pk=None):
-        """Réceptionner la commande et mettre à jour le stock"""
+        """Réceptionner la commande et mettre à jour le stock.
+
+        Format attendu de chaque item dans `items` :
+            {
+              "item_id":              <int, requis>,
+              "quantity":             <int, optionnel — défaut = restant à recevoir>,
+              "unit_cost":            <decimal, optionnel — prix réel de la livraison,
+                                       remplace le prix négocié à la commande si fourni.
+                                       Utile quand le fournisseur change le prix au
+                                       dernier moment>,
+              "update_purchase_price": <bool, optionnel — si true, met à jour
+                                       Product.purchase_price avec ce nouveau coût
+                                       (prix par défaut pour les futures commandes)>,
+              "new_sale_price":       <decimal, optionnel — si fourni, met à jour
+                                       Product.sale_price_ht (prix de vente public)>
+            }
+
+        Chaque réception crée un nouveau ProductCostLayer FIFO au coût indiqué :
+        les anciennes unités déjà en stock continuent d'être consommées en premier
+        avec leur prix d'origine, les nouvelles unités s'empilent au prix de cette
+        livraison-ci. C'est le comportement FIFO attendu par l'utilisateur.
+        """
+        from django.db import transaction
+        from decimal import Decimal, InvalidOperation
+
         order = self.get_object()
         if order.status not in ['SENT', 'PARTIAL']:
-            return Response({'detail': 'Commande non envoyée'}, status=400)
+            return Response(
+                {'detail': 'Commande non envoyée — réception impossible.'},
+                status=400,
+            )
 
         received_items = request.data.get('items', [])
+        if not received_items:
+            return Response(
+                {'detail': "Aucun article à réceptionner."},
+                status=400,
+            )
 
-        for received in received_items:
+        def parse_decimal(value):
+            if value in (None, ''):
+                return None
             try:
-                item = order.items.get(id=received['item_id'])
-                qty = int(received.get('quantity', item.quantity))
-                item.received_quantity += qty
-                item.save()
+                return Decimal(str(value))
+            except (InvalidOperation, TypeError):
+                return None
 
-                # Ajouter au stock
-                # Stock update handled by StockMovement signal
+        results = []
+        with transaction.atomic():
+            for received in received_items:
+                try:
+                    item = order.items.select_related('product').get(
+                        id=received['item_id']
+                    )
+                except (PurchaseOrderItem.DoesNotExist, KeyError):
+                    continue
 
-                # Créer mouvement de stock
+                remaining = max(0, item.quantity - item.received_quantity)
+                qty = int(received.get('quantity', remaining))
+                if qty <= 0:
+                    continue
+                if qty > remaining:
+                    qty = remaining  # safeguard contre la sur-réception
+
+                # Coût appliqué à cette livraison : override saisi à la réception
+                # OU prix négocié à la commande par défaut.
+                override_cost = parse_decimal(received.get('unit_cost'))
+                applied_cost = override_cost if override_cost is not None else item.unit_cost
+
+                # Optionnel : propager comme nouveau prix d'achat par défaut sur le produit
+                update_default = bool(received.get('update_purchase_price'))
+                # Optionnel : nouveau prix de vente public
+                new_sale_price = parse_decimal(received.get('new_sale_price'))
+
+                # Création du mouvement de stock — déclenche automatiquement
+                # la création du ProductCostLayer FIFO via StockMovement.save()
                 StockMovement.objects.create(
                     product=item.product,
                     movement_type='IN',
                     quantity=qty,
-                    unit_cost=item.unit_cost,
+                    unit_cost=applied_cost,
                     supplier=order.supplier,
                     reference=f"PO-{order.reference}",
-                    created_by=request.user
+                    notes=(
+                        f"Réception commande {order.reference}"
+                        if not override_cost
+                        else f"Réception {order.reference} — prix ajusté à la livraison"
+                    ),
+                    created_by=request.user,
                 )
-            except PurchaseOrderItem.DoesNotExist:
-                pass
 
-        # Vérifier si toute la commande est reçue
-        all_received = all(i.received_quantity >= i.quantity for i in order.items.all())
-        order.status = 'RECEIVED' if all_received else 'PARTIAL'
-        order.save()
+                # Met à jour la quantité reçue de la ligne de commande
+                item.received_quantity += qty
+                item.save(update_fields=['received_quantity'])
 
-        return Response(PurchaseOrderSerializer(order, context={'request': request}).data)
+                # Mise à jour des prix produit si demandé
+                product_changes = []
+                if update_default and applied_cost is not None:
+                    item.product.purchase_price = applied_cost
+                    product_changes.append('purchase_price')
+                if new_sale_price is not None and new_sale_price > 0:
+                    item.product.sale_price_ht = new_sale_price
+                    product_changes.append('sale_price_ht')
+                if product_changes:
+                    product_changes.append('updated_at')
+                    item.product.save(update_fields=product_changes)
+
+                results.append({
+                    'item_id': item.id,
+                    'product': item.product.name,
+                    'received': qty,
+                    'unit_cost_applied': float(applied_cost or 0),
+                    'updated_purchase_price': update_default,
+                    'updated_sale_price': new_sale_price is not None and new_sale_price > 0,
+                })
+
+            # Mise à jour du statut de la commande
+            all_received = all(
+                i.received_quantity >= i.quantity for i in order.items.all()
+            )
+            order.status = 'RECEIVED' if all_received else 'PARTIAL'
+            order.save(update_fields=['status', 'updated_at'])
+
+        return Response({
+            'order': PurchaseOrderSerializer(order, context={'request': request}).data,
+            'results': results,
+        })
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):

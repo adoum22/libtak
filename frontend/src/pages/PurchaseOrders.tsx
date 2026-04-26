@@ -29,6 +29,7 @@ interface Product {
     name: string;
     barcode: string;
     purchase_price: number;
+    sale_price_ht?: number;
     stock: number;
 }
 
@@ -42,6 +43,27 @@ type PurchaseOrderForm = {
 type ReceiveOrderItem = {
     item_id: number;
     quantity: number;
+    unit_cost?: number;
+    update_purchase_price?: boolean;
+    new_sale_price?: number;
+};
+
+// État local de la modal de réception : un draft par ligne de commande.
+// Permet de saisir la quantité réellement reçue, le prix payé (peut différer
+// du prix négocié à la commande), et de propager ce nouveau prix sur la
+// fiche produit (purchase_price par défaut + sale_price_ht public).
+type ReceiveDraft = {
+    item_id: number;
+    product_name: string;
+    barcode?: string;
+    ordered_qty: number;
+    already_received: number;
+    remaining: number;
+    quantity: string;          // ce qu'on reçoit MAINTENANT
+    unit_cost: string;         // prix réel appliqué (par défaut = prix de la commande)
+    update_purchase_price: boolean;
+    new_sale_price: string;    // optionnel
+    current_sale_price: number;
 };
 
 type CreatedProduct = {
@@ -83,6 +105,8 @@ export default function PurchaseOrders() {
     const [showForm, setShowForm] = useState(false);
     const [showCreateProduct, setShowCreateProduct] = useState(false);
     const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
+    const [receivingOrder, setReceivingOrder] = useState<PurchaseOrder | null>(null);
+    const [receiveDrafts, setReceiveDrafts] = useState<ReceiveDraft[]>([]);
     const [formData, setFormData] = useState({
         supplier: '',
         notes: '',
@@ -226,26 +250,87 @@ export default function PurchaseOrders() {
     };
 
     const handleReceiveClick = (order: PurchaseOrder) => {
-        // Calculate remaining items to avoid double receiving
-        const itemsToReceive = order.items
-            .map(item => ({
-                item_id: item.id,
-                quantity: Math.max(0, item.quantity - (item.received_quantity || 0)),
-                product_name: item.product_name
-            }))
-            .filter(i => i.quantity > 0);
+        // Construit le draft initial : 1 ligne par article, pré-rempli avec
+        // la quantité restante et le prix de la commande comme défauts.
+        const drafts: ReceiveDraft[] = order.items
+            .filter(item => (item.quantity - (item.received_quantity || 0)) > 0)
+            .map(item => {
+                const remaining = Math.max(0, item.quantity - (item.received_quantity || 0));
+                // On essaie de récupérer le prix de vente actuel via la fiche produit
+                // si disponible (le serializer Product le renvoie en `sale_price_ht`)
+                const matchingProduct = products.find(p => p.id === item.product);
+                const currentSale = matchingProduct?.sale_price_ht ?? 0;
+                return {
+                    item_id: item.id,
+                    product_name: item.product_name || `Produit #${item.product}`,
+                    barcode: item.barcode,
+                    ordered_qty: item.quantity,
+                    already_received: item.received_quantity || 0,
+                    remaining,
+                    quantity: String(remaining),
+                    unit_cost: String(item.unit_cost),
+                    update_purchase_price: false,
+                    new_sale_price: '',
+                    current_sale_price: Number(currentSale) || 0,
+                };
+            });
 
-        if (itemsToReceive.length === 0) {
-            toast.info("Tous les articles de cette commande ont déjà été reçus.");
+        if (drafts.length === 0) {
+            toast.info('Tous les articles de cette commande ont déjà été reçus.');
             return;
         }
 
-        const confirmMessage = `Confirmer la réception des articles RESTANTS ?\n\nStock à ajouter :\n${itemsToReceive.map(i => `- ${i.quantity} x ${i.product_name}`).join('\n')}\n\nAttention : Cliquez une seule fois.`;
+        setReceiveDrafts(drafts);
+        setReceivingOrder(order);
+    };
 
-        if (window.confirm(confirmMessage)) {
-            const payload = itemsToReceive.map(({ item_id, quantity }) => ({ item_id, quantity }));
-            receiveOrder.mutate({ id: order.id, items: payload });
+    const updateDraft = (item_id: number, patch: Partial<ReceiveDraft>) => {
+        setReceiveDrafts(drafts =>
+            drafts.map(d => (d.item_id === item_id ? { ...d, ...patch } : d))
+        );
+    };
+
+    const handleReceiveConfirm = () => {
+        if (!receivingOrder) return;
+
+        const items: ReceiveOrderItem[] = receiveDrafts
+            .map(d => {
+                const qty = Number(d.quantity) || 0;
+                const cost = Number(d.unit_cost);
+                const newSale = Number(d.new_sale_price);
+                if (qty <= 0) return null;
+                const payload: ReceiveOrderItem = {
+                    item_id: d.item_id,
+                    quantity: qty,
+                };
+                // unit_cost envoyé seulement si différent du prix d'origine
+                // OU si l'utilisateur veut le propager comme nouveau défaut
+                if (Number.isFinite(cost) && cost > 0) payload.unit_cost = cost;
+                if (d.update_purchase_price) payload.update_purchase_price = true;
+                if (Number.isFinite(newSale) && newSale > 0) payload.new_sale_price = newSale;
+                return payload;
+            })
+            .filter((item): item is ReceiveOrderItem => item !== null);
+
+        if (items.length === 0) {
+            toast.error('Aucune quantité à réceptionner.');
+            return;
         }
+
+        receiveOrder.mutate(
+            { id: receivingOrder.id, items },
+            {
+                onSuccess: () => {
+                    setReceivingOrder(null);
+                    setReceiveDrafts([]);
+                },
+            }
+        );
+    };
+
+    const handleReceiveCancel = () => {
+        setReceivingOrder(null);
+        setReceiveDrafts([]);
     };
 
     const handleProductCreated = (newProduct: CreatedProduct) => {
@@ -427,18 +512,52 @@ export default function PurchaseOrders() {
                                     <div className="w-10"></div>
                                 </div>
                                 {formData.items.map((item) => (
-                                    <div key={item.product} className="flex items-center p-3 border-t border-border hover:bg-tertiary/30">
-                                        <div className="flex-1">
-                                            <div className="font-medium">{item.productName || `Produit #${item.product}`}</div>
+                                    <div key={item.product} className="flex items-center p-3 border-t border-border hover:bg-tertiary/30 gap-2">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="font-medium truncate">{item.productName || `Produit #${item.product}`}</div>
                                             <div className="text-xs text-muted flex items-center gap-1">
                                                 <Barcode size={10} /> {item.barcode || '---'}
                                             </div>
                                         </div>
-                                        <div className="w-24 text-right text-sm">
-                                            {item.unit_cost.toFixed(2)}
+                                        <div className="w-24">
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                value={item.unit_cost}
+                                                onChange={(e) => {
+                                                    const newCost = Number(e.target.value);
+                                                    setFormData({
+                                                        ...formData,
+                                                        items: formData.items.map(i =>
+                                                            i.product === item.product
+                                                                ? { ...i, unit_cost: Number.isFinite(newCost) ? newCost : 0 }
+                                                                : i
+                                                        ),
+                                                    });
+                                                }}
+                                                className="w-full text-right text-sm py-1 px-2"
+                                                title="Prix d'achat négocié pour cette commande (DH)"
+                                            />
                                         </div>
-                                        <div className="w-20 text-center font-bold">
-                                            {item.quantity}
+                                        <div className="w-20">
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                value={item.quantity}
+                                                onChange={(e) => {
+                                                    const newQty = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                                                    setFormData({
+                                                        ...formData,
+                                                        items: formData.items.map(i =>
+                                                            i.product === item.product
+                                                                ? { ...i, quantity: newQty }
+                                                                : i
+                                                        ),
+                                                    });
+                                                }}
+                                                className="w-full text-center text-sm py-1 px-2 font-bold"
+                                            />
                                         </div>
                                         <div className="w-24 text-right font-bold text-accent">
                                             {(item.quantity * item.unit_cost).toFixed(2)}
@@ -604,6 +723,150 @@ export default function PurchaseOrders() {
                     onSuccess={handleProductCreated}
                     initialName={searchProduct}
                 />
+            )}
+
+            {/* Receive Order Modal */}
+            {receivingOrder && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={handleReceiveCancel} />
+                    <div className="relative card w-full max-w-5xl max-h-[90vh] overflow-y-auto p-0 animate-slideUp">
+                        <div className="card-header sticky top-0 bg-secondary z-10 flex items-center justify-between">
+                            <div>
+                                <h2 className="text-xl font-bold flex items-center gap-2">
+                                    <Check size={22} className="text-success" />
+                                    Réception — {receivingOrder.reference}
+                                </h2>
+                                <p className="text-sm text-muted mt-1">
+                                    Saisis les quantités réellement reçues. Tu peux ajuster le prix
+                                    payé si le fournisseur l'a modifié, et propager ce nouveau prix
+                                    sur la fiche produit.
+                                </p>
+                            </div>
+                            <button
+                                onClick={handleReceiveCancel}
+                                className="btn-ghost btn-icon"
+                                aria-label="Fermer"
+                            >
+                                <X size={22} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-3">
+                            {receiveDrafts.map(draft => {
+                                const qty = Number(draft.quantity) || 0;
+                                const cost = Number(draft.unit_cost) || 0;
+                                const lineTotal = qty * cost;
+                                const tooMany = qty > draft.remaining;
+                                return (
+                                    <div
+                                        key={draft.item_id}
+                                        className="border rounded-lg p-4 bg-tertiary/30 space-y-3"
+                                    >
+                                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                                            <div className="min-w-0">
+                                                <p className="font-bold">{draft.product_name}</p>
+                                                <p className="text-xs text-muted flex items-center gap-1">
+                                                    <Barcode size={10} /> {draft.barcode || '---'}
+                                                </p>
+                                                <p className="text-xs text-muted mt-1">
+                                                    Commandé : <b>{draft.ordered_qty}</b>
+                                                    {draft.already_received > 0 && (
+                                                        <> · Déjà reçu : <b className="text-warning">{draft.already_received}</b></>
+                                                    )}
+                                                    {' '}· Restant : <b className="text-success">{draft.remaining}</b>
+                                                </p>
+                                            </div>
+                                            <div className="text-right text-sm">
+                                                <span className="text-muted">Total ligne </span>
+                                                <span className="font-bold text-accent">{lineTotal.toFixed(2)} DH</span>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                            <div>
+                                                <label className="block text-xs font-semibold text-muted mb-1">
+                                                    Quantité reçue
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    max={draft.remaining}
+                                                    value={draft.quantity}
+                                                    onChange={(e) => updateDraft(draft.item_id, { quantity: e.target.value })}
+                                                    className={`w-full text-center font-bold ${tooMany ? 'border-danger' : ''}`}
+                                                />
+                                                {tooMany && (
+                                                    <p className="text-xs text-danger mt-1">
+                                                        Max {draft.remaining}
+                                                    </p>
+                                                )}
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-muted mb-1">
+                                                    Prix d'achat appliqué (DH)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={draft.unit_cost}
+                                                    onChange={(e) => updateDraft(draft.item_id, { unit_cost: e.target.value })}
+                                                    className="w-full text-right"
+                                                />
+                                                <p className="text-xs text-muted mt-1">
+                                                    Crée un nouveau lot FIFO à ce prix.
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-semibold text-muted mb-1">
+                                                    Nouveau prix de vente HT (optionnel)
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    min="0"
+                                                    value={draft.new_sale_price}
+                                                    onChange={(e) => updateDraft(draft.item_id, { new_sale_price: e.target.value })}
+                                                    placeholder={`actuel : ${draft.current_sale_price.toFixed(2)}`}
+                                                    className="w-full text-right"
+                                                />
+                                                <p className="text-xs text-muted mt-1">
+                                                    Si rempli, met à jour la fiche produit.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                                            <input
+                                                type="checkbox"
+                                                checked={draft.update_purchase_price}
+                                                onChange={(e) => updateDraft(draft.item_id, { update_purchase_price: e.target.checked })}
+                                            />
+                                            <span>
+                                                Mettre à jour aussi le <b>prix d'achat par défaut</b> du produit
+                                                (pour les prochaines commandes)
+                                            </span>
+                                        </label>
+                                    </div>
+                                );
+                            })}
+                        </div>
+
+                        <div className="card-header sticky bottom-0 bg-secondary z-10 flex items-center justify-end gap-3 border-t">
+                            <button onClick={handleReceiveCancel} className="btn-secondary">
+                                Annuler
+                            </button>
+                            <button
+                                onClick={handleReceiveConfirm}
+                                disabled={receiveOrder.isPending}
+                                className="btn-primary flex items-center gap-2"
+                            >
+                                <Check size={18} />
+                                {receiveOrder.isPending ? 'Enregistrement…' : 'Confirmer la réception'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
