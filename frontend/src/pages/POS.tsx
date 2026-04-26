@@ -289,12 +289,12 @@ export default function POS() {
 
                             <div className="space-y-2">
                                 <label className="block text-sm font-medium">Montant Perçu</label>
-                                <div className="relative">
+                                <div className="flex rounded-xl border-2 border-border bg-secondary focus-within:border-accent">
                                     <input
                                         type="text"
                                         inputMode="decimal"
                                         autoFocus
-                                        className="text-2xl font-bold py-3 pl-4 pr-16 w-full border-2 focus:border-accent rounded-xl"
+                                        className="text-2xl font-bold py-3 pl-4 pr-3 w-full border-0 bg-transparent focus:ring-0 focus:outline-none"
                                         placeholder="0.00"
                                         value={amountGiven}
                                         onChange={e => setAmountGiven(e.target.value)}
@@ -302,7 +302,7 @@ export default function POS() {
                                             if (e.key === 'Enter' && changeAmount >= 0) handleCheckout();
                                         }}
                                     />
-                                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-muted font-bold">DH</span>
+                                    <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
                                 </div>
                             </div>
 
@@ -541,16 +541,16 @@ export default function POS() {
                                         <p className="text-xs text-muted">Montant deduit en dirhams</p>
                                     </div>
                                 </div>
-                                <div className="relative w-40 shrink-0">
+                                <div className="flex w-44 shrink-0 rounded-xl border border-border bg-secondary focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20">
                                     <input
                                         type="text"
                                         inputMode="decimal"
-                                        className="input-sm w-full pr-12 text-right font-bold"
+                                        className="w-full min-w-0 border-0 bg-transparent px-3 py-2 text-right font-bold focus:ring-0 focus:outline-none"
                                         placeholder="0.00"
                                         value={discountInput}
                                         onChange={(e) => setDiscountInput(e.target.value)}
                                     />
-                                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted">DH</span>
+                                    <span className="px-3 flex items-center text-xs font-bold text-muted border-l border-border">DH</span>
                                 </div>
                             </div>
                             {discountTooHigh && (
