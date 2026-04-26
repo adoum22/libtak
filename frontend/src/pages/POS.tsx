@@ -294,7 +294,7 @@ export default function POS() {
                                         type="text"
                                         inputMode="decimal"
                                         autoFocus
-                                        className="text-2xl font-bold py-3 pl-4 pr-3 w-full border-0 bg-transparent focus:ring-0 focus:outline-none"
+                                        className="money-input text-2xl font-bold py-3 pl-4 pr-3 w-full"
                                         placeholder="0.00"
                                         value={amountGiven}
                                         onChange={e => setAmountGiven(e.target.value)}
@@ -545,7 +545,7 @@ export default function POS() {
                                     <input
                                         type="text"
                                         inputMode="decimal"
-                                        className="w-full min-w-0 border-0 bg-transparent px-3 py-2 text-right font-bold focus:ring-0 focus:outline-none"
+                                        className="money-input w-full min-w-0 px-3 py-2 text-right font-bold"
                                         placeholder="0.00"
                                         value={discountInput}
                                         onChange={(e) => setDiscountInput(e.target.value)}

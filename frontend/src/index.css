@@ -885,6 +885,14 @@ input:disabled {
   background-color: var(--color-bg-tertiary);
 }
 
+.money-input,
+.money-input:focus {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+  background: transparent;
+}
+
 .input-icon-left {
   padding-left: 2.75rem;
 }
