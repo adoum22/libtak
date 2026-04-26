@@ -1,6 +1,8 @@
 from datetime import date, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q, Sum
+from django.db.models import F, Sum
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -18,6 +20,7 @@ from sales.aggregates import (
     gross_margin_for_period,
     operating_expenses_for_period,
 )
+from sales.models import Sale, SaleItem
 
 from .models import ExpenseCategory, MonthlyAccounting, Expense
 from .serializers import (
@@ -177,7 +180,12 @@ class YearSummaryView(APIView):
 
 
 class PeriodSummaryView(APIView):
-    """Synthese comptable pour une journee ou une semaine."""
+    """Synthese comptable pour une journee ou une semaine.
+
+    Performance : pour la vue semaine, on agrège tous les jours en une seule
+    passe SQL (3-4 requêtes au total) au lieu d'appeler les helpers en boucle
+    pour chaque jour (28+ requêtes).
+    """
     permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get(self, request):
@@ -197,31 +205,48 @@ class PeriodSummaryView(APIView):
             start = target
             end = target
 
-        revenue = self._revenue_for_period(start, end)
-        gross_margin = gross_margin_for_period(start, end)
-        expenses = operating_expenses_for_period(start, end)
+        # Agrégats journaliers (en 1 requête chacun, pas par jour)
+        revenue_by_day = self._revenue_by_day(start, end)
+        margin_by_day = self._gross_margin_by_day(start, end)
+        dated_expenses_by_day = self._dated_expenses_by_day(start, end)
+
+        # Quote-part journalière des dépenses non-datées (calcul Python pur)
+        undated_share_by_day = self._undated_share_by_day(start, end)
+
+        # Totaux période
+        revenue = sum(revenue_by_day.values(), Decimal('0'))
+        gross_margin = sum(margin_by_day.values(), Decimal('0'))
+        dated_total = sum(dated_expenses_by_day.values(), Decimal('0'))
+        undated_total = sum(undated_share_by_day.values(), Decimal('0'))
+        expenses = dated_total + undated_total
         net_profit = gross_margin - expenses
 
-        expense_rows = (
-            Expense.objects.filter(self._expense_filter(start, end))
+        # Liste des dépenses datées dans la période (pas les non-datées,
+        # qui sont des "moyennes mensuelles" - on les expose à part).
+        dated_expense_rows = (
+            Expense.objects.filter(
+                incurred_on__isnull=False,
+                incurred_on__gte=start,
+                incurred_on__lte=end,
+            )
             .select_related('category')
             .order_by('-incurred_on', '-created_at')
         )
-        expenses_detail = ExpenseSerializer(expense_rows, many=True).data
+        expenses_detail = ExpenseSerializer(dated_expense_rows, many=True).data
 
-        category_breakdown_qs = (
-            expense_rows.values('category__name')
-            .annotate(total=Sum('amount'))
-            .order_by('-total')
-        )
+        # Breakdown par catégorie : datées + quote-part des non-datées
+        category_breakdown = self._category_breakdown(start, end)
 
         daily = []
         if period_type == 'week':
             for offset in range(7):
                 day = start + timedelta(days=offset)
-                day_revenue = self._revenue_for_period(day, day)
-                day_margin = gross_margin_for_period(day, day)
-                day_expenses = operating_expenses_for_period(day, day)
+                day_revenue = revenue_by_day.get(day, Decimal('0'))
+                day_margin = margin_by_day.get(day, Decimal('0'))
+                day_expenses = (
+                    dated_expenses_by_day.get(day, Decimal('0'))
+                    + undated_share_by_day.get(day, Decimal('0'))
+                )
                 daily.append({
                     'date': day.isoformat(),
                     'label': day.strftime('%a %d/%m'),
@@ -239,32 +264,153 @@ class PeriodSummaryView(APIView):
             'revenue': float(revenue),
             'gross_margin': float(gross_margin),
             'expenses': float(expenses),
+            'expenses_dated': float(dated_total),
+            'expenses_undated_share': float(undated_total),
             'net_profit': float(net_profit),
             'expenses_detail': expenses_detail,
-            'category_breakdown': [
-                {'category': row['category__name'], 'total': float(row['total'] or 0)}
-                for row in category_breakdown_qs
-            ],
+            'category_breakdown': category_breakdown,
             'daily': daily,
         })
 
-    def _revenue_for_period(self, start, end):
-        from sales.models import Sale
+    # ---- Helpers agrégés ----
 
-        return Sale.objects.filter(
-            created_at__date__gte=start,
-            created_at__date__lte=end,
-        ).aggregate(total=Sum('total_ttc'))['total'] or 0
+    def _revenue_by_day(self, start, end):
+        rows = (
+            Sale.objects.filter(
+                created_at__date__gte=start,
+                created_at__date__lte=end,
+            )
+            .annotate(d=TruncDate('created_at'))
+            .values('d')
+            .annotate(total=Sum('total_ttc'))
+        )
+        return {row['d']: row['total'] or Decimal('0') for row in rows}
 
-    def _expense_filter(self, start, end):
-        q = Q(incurred_on__isnull=False, incurred_on__gte=start, incurred_on__lte=end)
+    def _gross_margin_by_day(self, start, end):
+        # Marge brute = (vente HT - achat) - remise, agrégée par jour.
+        items = (
+            SaleItem.objects.filter(
+                sale__created_at__date__gte=start,
+                sale__created_at__date__lte=end,
+            )
+            .annotate(d=TruncDate('sale__created_at'))
+            .values('d')
+            .annotate(
+                revenue=Sum(F('unit_price_ht') * F('quantity')),
+                cost=Sum(F('quantity') * F('product__purchase_price')),
+            )
+        )
+        margin = {
+            row['d']: (row['revenue'] or Decimal('0')) - (row['cost'] or Decimal('0'))
+            for row in items
+        }
+        # Soustraire les remises par jour
+        discounts = (
+            Sale.objects.filter(
+                created_at__date__gte=start,
+                created_at__date__lte=end,
+            )
+            .annotate(d=TruncDate('created_at'))
+            .values('d')
+            .annotate(total=Sum('discount_amount'))
+        )
+        for row in discounts:
+            margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
+                row['total'] or Decimal('0')
+            )
+        return margin
+
+    def _dated_expenses_by_day(self, start, end):
+        rows = (
+            Expense.objects.filter(
+                incurred_on__isnull=False,
+                incurred_on__gte=start,
+                incurred_on__lte=end,
+            )
+            .values('incurred_on')
+            .annotate(total=Sum('amount'))
+        )
+        return {row['incurred_on']: row['total'] or Decimal('0') for row in rows}
+
+    def _undated_share_by_day(self, start, end):
+        """Pour chaque mois intersectant la période, on récupère le total
+        des dépenses non-datées et on attribue amount/days_in_month à
+        chaque jour qui est dans la période.
+        """
+        result = {}
         cur = date(start.year, start.month, 1)
-        end_cap = date(end.year, end.month, 1)
-        month_q = Q()
-        while cur <= end_cap:
-            month_q |= Q(monthly__year=cur.year, monthly__month=cur.month)
+        while cur <= end:
+            days_in_month = monthrange(cur.year, cur.month)[1]
+            month_end = date(cur.year, cur.month, days_in_month)
+            eff_start = max(start, cur)
+            eff_end = min(end, month_end)
+            if eff_end >= eff_start:
+                month_undated = Expense.objects.filter(
+                    incurred_on__isnull=True,
+                    monthly__year=cur.year,
+                    monthly__month=cur.month,
+                ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+                if month_undated:
+                    daily_share = (month_undated / Decimal(days_in_month)).quantize(
+                        Decimal('0.01'), rounding=ROUND_HALF_UP,
+                    )
+                    d = eff_start
+                    while d <= eff_end:
+                        result[d] = result.get(d, Decimal('0')) + daily_share
+                        d += timedelta(days=1)
             if cur.month == 12:
                 cur = date(cur.year + 1, 1, 1)
             else:
                 cur = date(cur.year, cur.month + 1, 1)
-        return q | (Q(incurred_on__isnull=True) & month_q)
+        return result
+
+    def _category_breakdown(self, start, end):
+        # Datées
+        dated_rows = (
+            Expense.objects.filter(
+                incurred_on__isnull=False,
+                incurred_on__gte=start,
+                incurred_on__lte=end,
+            )
+            .values('category__name')
+            .annotate(total=Sum('amount'))
+        )
+        breakdown = {row['category__name']: row['total'] or Decimal('0') for row in dated_rows}
+        # Non-datées au prorata
+        cur = date(start.year, start.month, 1)
+        while cur <= end:
+            days_in_month = monthrange(cur.year, cur.month)[1]
+            month_end = date(cur.year, cur.month, days_in_month)
+            eff_start = max(start, cur)
+            eff_end = min(end, month_end)
+            if eff_end >= eff_start:
+                days_overlap = (eff_end - eff_start).days + 1
+                ratio = Decimal(days_overlap) / Decimal(days_in_month)
+                month_rows = (
+                    Expense.objects.filter(
+                        incurred_on__isnull=True,
+                        monthly__year=cur.year,
+                        monthly__month=cur.month,
+                    )
+                    .values('category__name')
+                    .annotate(total=Sum('amount'))
+                )
+                for row in month_rows:
+                    share = ((row['total'] or Decimal('0')) * ratio).quantize(
+                        Decimal('0.01'), rounding=ROUND_HALF_UP,
+                    )
+                    breakdown[row['category__name']] = breakdown.get(
+                        row['category__name'], Decimal('0'),
+                    ) + share
+            if cur.month == 12:
+                cur = date(cur.year + 1, 1, 1)
+            else:
+                cur = date(cur.year, cur.month + 1, 1)
+
+        return [
+            {'category': name, 'total': float(total)}
+            for name, total in sorted(
+                breakdown.items(), key=lambda kv: kv[1], reverse=True,
+            )
+            if total > 0
+        ]

@@ -68,6 +68,8 @@ interface PeriodSummary {
     revenue: number;
     gross_margin: number;
     expenses: number;
+    expenses_dated?: number;
+    expenses_undated_share?: number;
     net_profit: number;
     expenses_detail: Expense[];
     category_breakdown: Array<{ category: string; total: number }>;
@@ -212,7 +214,15 @@ export default function Accounting() {
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-red-100"><TrendingDown size={24} className="text-red-500" /></div>
-                        <div><p className="stat-label">Dépenses</p><p className="stat-value">{fmt(periodSummary.expenses)} DH</p></div>
+                        <div>
+                            <p className="stat-label">Dépenses</p>
+                            <p className="stat-value">{fmt(periodSummary.expenses)} DH</p>
+                            {(periodSummary.expenses_undated_share ?? 0) > 0 && (
+                                <p className="text-xs text-muted" title="Quote-part journalière des dépenses non-datées du mois">
+                                    dont {fmt(periodSummary.expenses_undated_share || 0)} DH réparti
+                                </p>
+                            )}
+                        </div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-icon bg-accent-light"><TrendingUp size={24} className="text-accent" /></div>
@@ -615,7 +625,7 @@ export default function Accounting() {
                         <div key={q.quarter} className="card p-4">
                             <p className="text-sm text-muted">{q.label}</p>
                             <p className="text-xl font-bold">{fmt(q.net_profit)} DH</p>
-                            <p className="text-xs text-muted mt-1">CA: {fmt(q.revenue)} • Dép: {fmt(q.expenses + q.manager_withdrawal)}</p>
+                            <p className="text-xs text-muted mt-1">CA: {fmt(q.revenue)} • Dép: {fmt(q.expenses)}</p>
                         </div>
                     ))}
                 </div>

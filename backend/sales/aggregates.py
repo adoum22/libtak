@@ -1,6 +1,6 @@
 from calendar import monthrange
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Sum, F
 
@@ -51,42 +51,52 @@ def gross_margin_for_period(start_date, end_date) -> Decimal:
 def operating_expenses_for_period(start_date, end_date) -> Decimal:
     """Total des dépenses d'exploitation rattachées à la période.
 
-    On utilise la date `incurred_on` de chaque dépense quand elle existe ;
-    sinon on rattache la dépense au mois (year/month) de son MonthlyAccounting
-    parent et on l'inclut dès qu'au moins un jour du mois tombe dans la
-    période demandée.
+    Règle d'attribution :
+      - Dépense AVEC `incurred_on` : compte uniquement si la date tombe dans la
+        période demandée (factuel).
+      - Dépense SANS `incurred_on` (saisie comme "ce mois j'ai dépensé X" sans
+        jour précis) : répartie uniformément sur tous les jours du mois.
+        On en attribue à la période la quote-part au prorata du nombre de jours
+        de chevauchement.
+
+    Cela évite le bug "20 DH du 24 avril déduits aussi du 23, 25, 26..." :
+    une dépense non-datée du mois d'avril (30 jours) regardée pour 1 seul jour
+    contribue 20/30 ≈ 0,67 DH ; sur le mois entier on retrouve bien 20 DH.
     """
     from accounting.models import Expense
 
-    # Dépenses datées dans la période
+    # 1) Dépenses datées : exact match sur incurred_on dans la période
     dated = Expense.objects.filter(
         incurred_on__isnull=False,
         incurred_on__gte=start_date,
         incurred_on__lte=end_date,
     ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
-    # Dépenses non datées : on les compte au prorata du mois si le mois
-    # intersecte la période. Pour rester simple et prévisible, on les
-    # inclut intégralement quand le 1er du mois est dans la période.
-    undated = Decimal('0')
-    months_seen = set()
+    # 2) Dépenses non-datées : prorata sur le nombre de jours d'intersection
+    #    entre la période demandée et chaque mois concerné.
+    undated_total = Decimal('0')
     cur = date(start_date.year, start_date.month, 1)
-    end_cap = date(end_date.year, end_date.month, 1)
-    while cur <= end_cap:
-        months_seen.add((cur.year, cur.month))
-        # avancer d'un mois
+    while cur <= end_date:
+        days_in_month = monthrange(cur.year, cur.month)[1]
+        month_end = date(cur.year, cur.month, days_in_month)
+        eff_start = max(start_date, cur)
+        eff_end = min(end_date, month_end)
+        if eff_end >= eff_start:
+            days_overlap = (eff_end - eff_start).days + 1
+            month_undated = Expense.objects.filter(
+                incurred_on__isnull=True,
+                monthly__year=cur.year,
+                monthly__month=cur.month,
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+            if month_undated:
+                ratio = Decimal(days_overlap) / Decimal(days_in_month)
+                undated_total += (month_undated * ratio).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP,
+                )
+        # mois suivant
         if cur.month == 12:
             cur = date(cur.year + 1, 1, 1)
         else:
             cur = date(cur.year, cur.month + 1, 1)
 
-    if months_seen:
-        from django.db.models import Q
-        q = Q()
-        for y, m in months_seen:
-            q |= Q(monthly__year=y, monthly__month=m)
-        undated = Expense.objects.filter(
-            incurred_on__isnull=True,
-        ).filter(q).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-
-    return dated + undated
+    return dated + undated_total
