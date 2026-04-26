@@ -2,9 +2,11 @@ from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db import transaction
 from django.db.models import F
 from core.models import AuditLog
 from core.permissions import IsAdminRole
+from inventory.models import Product
 from .models import Sale, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
@@ -125,21 +127,36 @@ class ReturnViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def reject(self, request, pk=None):
-        """Reject a return request"""
+        """Reject a return request and roll back the stock that was added on
+        create. Wrapped in a transaction with select_for_update so concurrent
+        sales on the same product cannot interleave with the rollback."""
         return_order = self.get_object()
         if return_order.status != Return.ReturnStatus.PENDING:
             return Response(
                 {'error': 'Only pending returns can be rejected.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        return_order.status = Return.ReturnStatus.REJECTED
-        return_order.save()
 
-        # Restore stock was already done on create, so we need to reverse it
-        for item in return_order.items.all():
-            if item.sale_item.product:
-                item.sale_item.product.stock -= item.quantity
-                item.sale_item.product.save()
+        with transaction.atomic():
+            items = list(return_order.items.select_related('sale_item').all())
+            product_ids = sorted({
+                item.sale_item.product_id
+                for item in items
+                if item.sale_item.product_id
+            })
+            locked_products = {
+                product.id: product
+                for product in Product.objects.select_for_update()
+                .filter(id__in=product_ids)
+                .order_by('id')
+            }
+            for item in items:
+                product = locked_products.get(item.sale_item.product_id)
+                if product:
+                    product.stock = max(0, product.stock - item.quantity)
+                    product.save(update_fields=['stock', 'updated_at'])
+            return_order.status = Return.ReturnStatus.REJECTED
+            return_order.save(update_fields=['status', 'updated_at'])
 
         AuditLog.log(
             user=request.user, action=AuditLog.ActionType.RETURN,

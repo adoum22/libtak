@@ -110,34 +110,45 @@ export default function POS() {
             toast.error("Erreur lors de la validation : " + getApiErrorMessage(error));
         },
         onSuccess: (response) => {
-            // 1. Close modal
+            // 1. Close payment modal and show success overlay first so the UI
+            //    remains interactive even if printing fails or is slow.
             setShowPaymentModal(false);
-
-            // 2. Show Success Overlay
             setShowSuccessOverlay(true);
 
-            // 3. Invalidate queries (stock update)
+            // 2. Invalidate queries (stock update)
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
 
-            // 4. Print receipt if configured
-            try {
-                import('../utils/printService').then(({ printReceipt }) => {
-                    printReceipt({
-                        saleId: response.data?.id || Date.now(),
-                        items: cart,
-                        subtotal: subtotal,
-                        discount: discountAmount > 0 ? { name: 'Reduction', amount: discountAmount } : undefined,
-                        total: total,
-                        paymentMethod: 'CASH',
-                        amountGiven: parseMoneyInput(amountGiven) || total,
-                        change: changeAmount > 0 ? changeAmount : 0
-                    });
-                });
-            } catch {
-                // Print service not available; ignore.
-            }
+            // 3. Snapshot data needed for the receipt before resetSale() can run.
+            const receiptPayload = {
+                saleId: response.data?.id ?? 0,
+                items: cart,
+                subtotal: subtotal,
+                discount: discountAmount > 0
+                    ? { name: 'Reduction', amount: discountAmount }
+                    : undefined,
+                total: total,
+                paymentMethod: 'CASH',
+                amountGiven: parseMoneyInput(amountGiven) || total,
+                change: changeAmount > 0 ? changeAmount : 0,
+            };
 
+            // 4. Defer the print to the next frame so React paints the overlay
+            //    BEFORE the print dialog grabs focus. This way the "Nouvelle
+            //    vente" button is always clickable, even while printing.
+            window.requestAnimationFrame(() => {
+                import('../utils/printService')
+                    .then(({ printReceipt }) => {
+                        try {
+                            printReceipt(receiptPayload);
+                        } catch (err) {
+                            console.error('Print error (non-blocking):', err);
+                        }
+                    })
+                    .catch(() => {
+                        // Print service unavailable; sale already validated.
+                    });
+            });
         }
     });
 

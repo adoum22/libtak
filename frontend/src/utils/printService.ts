@@ -241,30 +241,80 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
 }
 
 /**
- * Print receipt using browser print dialog
+ * Print receipt using a hidden iframe.
+ *
+ * Why iframe and not window.open():
+ *  - window.open() called from an async callback (mutation onSuccess) is
+ *    routinely blocked by popup blockers.
+ *  - window.print() inside a popup steals focus and can freeze the parent
+ *    tab's event loop (the POS "Nouvelle vente" button stops responding).
+ *  - An iframe lives inside the parent document: no popup blocker, no focus
+ *    theft, parent UI stays interactive even while the print dialog is open.
  */
 export function printReceipt(data: PrintReceiptData, settings?: StoreSettings): void {
     const html = generateReceiptHTML(data, settings);
 
-    // Create print window
-    const printWindow = window.open('', '_blank', 'width=300,height=600');
-    if (!printWindow) {
-        console.error('Could not open print window. Check popup blocker.');
-        return;
+    // Remove any leftover print iframe from a previous receipt
+    const previous = document.getElementById('libtak-print-frame');
+    if (previous && previous.parentNode) {
+        previous.parentNode.removeChild(previous);
     }
 
-    printWindow.document.write(html);
-    printWindow.document.close();
+    const iframe = document.createElement('iframe');
+    iframe.id = 'libtak-print-frame';
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.setAttribute('tabindex', '-1');
+    // Off-screen but still rendered (display:none breaks print in some browsers)
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.style.opacity = '0';
+    iframe.style.pointerEvents = 'none';
 
-    // Wait for content to load then print
-    printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-        // Close after printing (optional - user can close manually)
-        setTimeout(() => {
-            printWindow.close();
-        }, 1000);
+    let cleanedUp = false;
+    const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
     };
+
+    iframe.onload = () => {
+        const win = iframe.contentWindow;
+        if (!win) {
+            cleanup();
+            return;
+        }
+        try {
+            win.focus();
+            win.print();
+        } catch (err) {
+            console.error('Print failed:', err);
+        }
+        // Modern browsers fire afterprint on the iframe window
+        const afterPrint = () => cleanup();
+        try {
+            win.addEventListener('afterprint', afterPrint, { once: true });
+        } catch {
+            // ignore
+        }
+        // Safety net in case afterprint never fires (Safari iframe quirks)
+        setTimeout(cleanup, 4000);
+    };
+
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) {
+        cleanup();
+        console.error('Could not access print iframe document');
+        return;
+    }
+    doc.open();
+    doc.write(html);
+    doc.close();
 }
 
 /**
