@@ -17,7 +17,9 @@ import {
     AlertCircle,
     Banknote,
     ScanLine,
-    Upload
+    Upload,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 
 interface Product {
@@ -50,11 +52,15 @@ interface Supplier {
     name: string;
 }
 
+type StockFilter = 'all' | 'low' | 'out';
+
 export default function Inventory() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const { t } = useTranslation();
     const [search, setSearch] = useState('');
+    const [stockFilter, setStockFilter] = useState<StockFilter>('all');
+    const [page, setPage] = useState(1);
     const [showModal, setShowModal] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -78,12 +84,32 @@ export default function Inventory() {
         supplier: ''
     });
 
-    const { data: productsData, isLoading, error } = useQuery({
-        queryKey: ['products', search],
-        queryFn: () => client.get(`/inventory/products/?search=${search}`).then(res => res.data)
+    const { data: productsData, isLoading, error } = useQuery<{ results?: Product[]; count?: number; next?: string | null; previous?: string | null } | Product[]>({
+        queryKey: ['products', search, stockFilter, page],
+        queryFn: () => {
+            const params = new URLSearchParams();
+            if (search) params.set('search', search);
+            if (stockFilter === 'low') params.set('low_stock', 'true');
+            if (stockFilter === 'out') params.set('stock_status', 'out');
+            params.set('page', String(page));
+            return client.get(`/inventory/products/?${params.toString()}`).then(res => res.data);
+        },
     });
 
-    const products: Product[] = productsData?.results || productsData || [];
+    const isPaginated = productsData && !Array.isArray(productsData);
+    const products: Product[] = isPaginated
+        ? (productsData as { results?: Product[] }).results ?? []
+        : (productsData as Product[]) ?? [];
+    const totalCount: number = isPaginated ? (productsData as { count?: number }).count ?? products.length : products.length;
+    const hasNext: boolean = isPaginated ? Boolean((productsData as { next?: string | null }).next) : false;
+    const hasPrev: boolean = isPaginated ? Boolean((productsData as { previous?: string | null }).previous) : false;
+    const PAGE_SIZE = 50;
+    const pageStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+    const pageEnd = Math.min(page * PAGE_SIZE, totalCount);
+
+    // Reset à la page 1 quand on change de filtre/recherche
+    const setStockFilterReset = (f: StockFilter) => { setStockFilter(f); setPage(1); };
+    const setSearchReset = (s: string) => { setSearch(s); setPage(1); };
 
     const { data: categoriesData } = useQuery({
         queryKey: ['categories'],
@@ -306,18 +332,44 @@ export default function Inventory() {
                 )}
             </div>
 
-            {/* Search */}
-            <div className="card p-4">
-                <div className="relative max-w-md">
+            {/* Search + Filters */}
+            <div className="card p-4 flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[260px] max-w-md">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted" size={20} />
                     <input
                         type="text"
                         placeholder={t('SearchProducts')}
                         style={{ paddingLeft: '3rem' }}
                         value={search}
-                        onChange={(e) => setSearch(e.target.value)}
+                        onChange={(e) => setSearchReset(e.target.value)}
                     />
                 </div>
+                <div className="flex bg-tertiary rounded-lg p-1">
+                    <button
+                        type="button"
+                        onClick={() => setStockFilterReset('all')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${stockFilter === 'all' ? 'bg-secondary shadow text-accent' : 'text-muted hover:text-primary'}`}
+                    >
+                        Tous
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setStockFilterReset('low')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1 ${stockFilter === 'low' ? 'bg-warning text-white shadow' : 'text-muted hover:text-primary'}`}
+                    >
+                        <AlertTriangle size={14} /> Stock bas
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setStockFilterReset('out')}
+                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition flex items-center gap-1 ${stockFilter === 'out' ? 'bg-danger text-white shadow' : 'text-muted hover:text-primary'}`}
+                    >
+                        <X size={14} /> Rupture
+                    </button>
+                </div>
+                <span className="text-sm text-muted ml-auto">
+                    {totalCount} produit{totalCount > 1 ? 's' : ''}
+                </span>
             </div>
 
             {/* Products Table */}
@@ -448,6 +500,36 @@ export default function Inventory() {
                         </table>
                     )}
                 </div>
+
+                {/* Pagination footer */}
+                {isPaginated && totalCount > 0 && (
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 border-t flex-wrap">
+                        <span className="text-sm text-muted">
+                            Affichage {pageStart}–{pageEnd} sur {totalCount}
+                        </span>
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setPage(p => Math.max(1, p - 1))}
+                                disabled={!hasPrev || page === 1}
+                                className="btn-ghost btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                                aria-label="Page précédente"
+                            >
+                                <ChevronLeft size={20} />
+                            </button>
+                            <span className="text-sm font-medium">Page {page}</span>
+                            <button
+                                type="button"
+                                onClick={() => setPage(p => p + 1)}
+                                disabled={!hasNext}
+                                className="btn-ghost btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                                aria-label="Page suivante"
+                            >
+                                <ChevronRight size={20} />
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Modal */}

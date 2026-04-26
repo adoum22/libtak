@@ -84,10 +84,17 @@ class ProductViewSet(viewsets.ModelViewSet):
         if barcode:
             queryset = queryset.filter(barcode=barcode)
 
-        # Filtre stock bas
+        # Filtre stock bas (incluant les ruptures)
         low_stock = self.request.query_params.get('low_stock')
         if low_stock and low_stock.lower() == 'true':
             queryset = queryset.filter(stock__lte=F('min_stock'))
+
+        # Filtre rupture seulement (stock = 0)
+        stock_status = self.request.query_params.get('stock_status')
+        if stock_status == 'out':
+            queryset = queryset.filter(stock__lte=0)
+        elif stock_status == 'low':
+            queryset = queryset.filter(stock__lte=F('min_stock'), stock__gt=0)
 
         return queryset
 

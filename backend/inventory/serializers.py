@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from core.image_validators import validate_image_upload
-from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
+from .models import Category, Product, Supplier, StockMovement, ProductCostLayer, PurchaseOrder, PurchaseOrderItem, InventoryCount, InventoryCountItem
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -97,6 +97,25 @@ class ProductCreateSerializer(serializers.ModelSerializer):
 
     def validate_image(self, value):
         return validate_image_upload(value)
+
+    def create(self, validated_data):
+        """Crée le produit ET le 1er layer FIFO si du stock initial est saisi.
+
+        Sans ça, un nouveau produit avec stock>0 saisi depuis l'UI n'a pas
+        de layer : la 1re vente déclenche `ensure_layers_cover_stock` qui
+        crée un layer au `purchase_price` *actuel* (qui peut avoir change
+        entre la creation du produit et la 1re vente). Le snapshot serait
+        alors faux. On fige donc le coût initial dès la creation.
+        """
+        product = super().create(validated_data)
+        if product.stock and product.stock > 0:
+            ProductCostLayer.create_layer(
+                product=product,
+                quantity=product.stock,
+                unit_cost=product.purchase_price,
+                note='Stock initial à la création',
+            )
+        return product
 
 
 class StockMovementSerializer(serializers.ModelSerializer):

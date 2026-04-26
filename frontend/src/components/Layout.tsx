@@ -18,7 +18,6 @@ import {
     ClipboardList,
     ClipboardCheck,
     Calculator,
-    ReceiptText,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -99,7 +98,6 @@ export default function Layout() {
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
         { icon: Calculator, label: 'Zakat', path: '/zakat', show: isAdmin },
         { icon: Calculator, label: 'Comptabilité', path: '/accounting', show: isAdmin },
-        { icon: ReceiptText, label: 'Factures', path: '/invoices', show: isAdmin },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },
     ];
 

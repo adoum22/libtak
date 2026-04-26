@@ -571,13 +571,111 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=['post'])
     def test_email(self, request):
-        """Envoyer un rapport de test"""
+        """Envoyer un rapport de test SYNCHRONE.
+
+        Bug précédent : utilisait .delay() qui suppose Celery actif.
+        Sur PythonAnywhere free tier on n'a pas Celery, .delay() levait
+        une exception silencieuse et l'email n'était jamais envoyé.
+        On appelle maintenant la tâche directement et on renvoie le
+        statut d'envoi pour debug.
+        """
         from .tasks import send_daily_report
-        
-        # Pour le test, on envoie un rapport journalier
-        result = send_daily_report.delay()
-        
+        from django.conf import settings as dj_settings
+
+        try:
+            result = send_daily_report()
+            log = ReportLog.objects.filter(report_type='DAILY').order_by('-sent_at').first()
+            return Response({
+                'message': result,
+                'success': bool(log and log.success),
+                'last_log': {
+                    'sent_at': log.sent_at.isoformat() if log else None,
+                    'recipients': log.recipients if log else None,
+                    'total_sales': log.total_sales if log else None,
+                    'total_revenue': float(log.total_revenue) if log else None,
+                    'success': bool(log.success) if log else None,
+                    'error_message': log.error_message if log else None,
+                } if log else None,
+                'smtp_config': {
+                    'host': getattr(dj_settings, 'EMAIL_HOST', None),
+                    'port': getattr(dj_settings, 'EMAIL_PORT', None),
+                    'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
+                    'password_set': bool(getattr(dj_settings, 'EMAIL_HOST_PASSWORD', None)),
+                    'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
+                    'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
+                },
+            })
+        except Exception as exc:
+            logger.exception('test_email failed')
+            return Response(
+                {
+                    'message': 'Erreur envoi test',
+                    'error': str(exc),
+                    'success': False,
+                },
+                status=500,
+            )
+
+    @action(detail=False, methods=['get'])
+    def diagnose(self, request):
+        """Diagnostique : pourquoi le rapport peut être vide ou non envoyé.
+
+        Vérifie en un coup d'œil :
+        - settings SMTP (host/port/user/password configurés ?)
+        - destinataires (vide ?)
+        - daily_enabled
+        - ventes vues par la même requête que le rapport (preuve qu'il y a
+          bien des données)
+        - dernier log d'envoi
+        """
+        from django.conf import settings as dj_settings
+        from sales.models import Sale, SaleItem
+
+        rs = ReportSettings.get_settings()
+        recipients = rs.get_recipients_list()
+        today = timezone.localdate()
+
+        # Mêmes filtres que get_report_data → pour reproduire ce que voit
+        # le rapport.
+        today_sales_qs = Sale.objects.filter(
+            created_at__date__gte=today,
+            created_at__date__lte=today,
+        )
+        today_count = today_sales_qs.count()
+        today_revenue_ttc = today_sales_qs.aggregate(
+            total=Sum('total_ttc'),
+        )['total'] or 0
+        today_items = SaleItem.objects.filter(sale__in=today_sales_qs).count()
+
+        last_log = ReportLog.objects.filter(report_type='DAILY').order_by('-sent_at').first()
+
         return Response({
-            'message': 'Test report queued',
-            'task_id': str(result.id)
+            'today': today.isoformat(),
+            'sales_today_count': today_count,
+            'sales_today_revenue_ttc': float(today_revenue_ttc),
+            'sale_items_today_count': today_items,
+            'report_settings': {
+                'daily_enabled': rs.daily_enabled,
+                'recipients': recipients,
+                'recipients_count': len(recipients),
+                'daily_time': str(rs.daily_time),
+            },
+            'smtp_config': {
+                'host': getattr(dj_settings, 'EMAIL_HOST', None),
+                'port': getattr(dj_settings, 'EMAIL_PORT', None),
+                'user': getattr(dj_settings, 'EMAIL_HOST_USER', None),
+                'password_set': bool(getattr(dj_settings, 'EMAIL_HOST_PASSWORD', None)),
+                'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
+                'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
+            },
+            'last_daily_log': {
+                'sent_at': last_log.sent_at.isoformat() if last_log else None,
+                'period_start': last_log.period_start.isoformat() if last_log else None,
+                'period_end': last_log.period_end.isoformat() if last_log else None,
+                'total_sales': last_log.total_sales if last_log else None,
+                'total_revenue': float(last_log.total_revenue) if last_log else None,
+                'recipients': last_log.recipients if last_log else None,
+                'success': last_log.success if last_log else None,
+                'error_message': last_log.error_message if last_log else None,
+            } if last_log else None,
         })
