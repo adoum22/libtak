@@ -20,6 +20,19 @@ except ImportError:
 
 TESTING = 'test' in sys.argv
 
+# Commandes manage.py qui peuvent tourner sans SECRET_KEY réelle
+# (les commandes admin lancées en console PA n'héritent pas des
+# env vars définies dans le fichier WSGI). On accepte une SECRET_KEY
+# bidon UNIQUEMENT pour ces commandes utilitaires - le webapp web
+# continue d'exiger la vraie SECRET_KEY pour servir les requêtes.
+_MANAGEMENT_COMMANDS = {
+    'migrate', 'makemigrations', 'showmigrations', 'sqlmigrate',
+    'shell', 'createsuperuser', 'collectstatic', 'check',
+    'send_scheduled_reports', 'init_users', 'dbshell', 'dumpdata',
+    'loaddata', 'changepassword',
+}
+RUNNING_MANAGEMENT_COMMAND = any(arg in _MANAGEMENT_COMMANDS for arg in sys.argv)
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -27,7 +40,7 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
 SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
-    if DEBUG:
+    if DEBUG or TESTING or RUNNING_MANAGEMENT_COMMAND:
         SECRET_KEY = 'django-insecure-dev-only-not-for-production'
     else:
         raise RuntimeError("SECRET_KEY environment variable is required in production")
