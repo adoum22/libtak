@@ -2,7 +2,21 @@ import os
 import sys
 from pathlib import Path
 from datetime import timedelta
-from celery.schedules import crontab
+
+# Celery est optionnel (pas installé sur PA free tier). On garde le
+# CELERY_BEAT_SCHEDULE en tant que documentation/fallback pour les
+# environnements qui ont Celery, mais sur PA c'est le management
+# command send_scheduled_reports lancé par cron qui exécute les
+# rapports à 23h.
+try:
+    from celery.schedules import crontab
+    HAS_CELERY = True
+except ImportError:
+    HAS_CELERY = False
+    def crontab(*args, **kwargs):  # noqa: E306
+        """Stub no-op pour ne pas crasher la déclaration de
+        CELERY_BEAT_SCHEDULE quand celery n'est pas installé."""
+        return None
 
 TESTING = 'test' in sys.argv
 
