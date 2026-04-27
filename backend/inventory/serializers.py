@@ -52,6 +52,7 @@ class ProductSerializer(serializers.ModelSerializer):
     stock_value = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     is_low_stock = serializers.BooleanField(read_only=True)
     image_url = serializers.SerializerMethodField()
+    price_layers = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -60,6 +61,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'purchase_price', 'sale_price_ht', 'tva', 'price_ttc',
             'profit_margin', 'profit_percentage',
             'stock', 'min_stock', 'stock_value', 'is_low_stock',
+            'price_layers',
             'category', 'category_name',
             'supplier', 'supplier_name',
             'image', 'image_url',
@@ -77,6 +79,17 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def validate_image(self, value):
         return validate_image_upload(value)
+
+    def get_price_layers(self, obj):
+        return [
+            {
+                'remaining_quantity': layer.remaining_quantity,
+                'sale_price': layer.sale_price or obj.sale_price_ht,
+            }
+            for layer in obj.cost_layers.filter(
+                remaining_quantity__gt=0,
+            ).order_by('created_at', 'id')[:10]
+        ]
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
@@ -113,6 +126,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
                 product=product,
                 quantity=product.stock,
                 unit_cost=product.purchase_price,
+                sale_price=product.sale_price_ht,
                 note='Stock initial à la création',
             )
         return product
@@ -130,7 +144,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'product_barcode',
             'movement_type', 'movement_type_display',
-            'quantity', 'unit_cost',
+            'quantity', 'unit_cost', 'sale_price',
             'stock_before', 'stock_after',
             'reference', 'notes',
             'supplier', 'supplier_name',
@@ -152,6 +166,7 @@ class StockInSerializer(serializers.Serializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     quantity = serializers.IntegerField(min_value=1)
     unit_cost = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    sale_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all(), required=False)
     reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
     notes = serializers.CharField(required=False, allow_blank=True)
@@ -161,12 +176,14 @@ class StockInSerializer(serializers.Serializer):
         
         # Si pas de coût unitaire fourni, utiliser le prix d'achat du produit
         unit_cost = validated_data.get('unit_cost', product.purchase_price)
+        sale_price = validated_data.get('sale_price', product.sale_price_ht)
         
         movement = StockMovement.objects.create(
             product=product,
             movement_type=StockMovement.MovementType.IN,
             quantity=validated_data['quantity'],
             unit_cost=unit_cost,
+            sale_price=sale_price,
             supplier=validated_data.get('supplier'),
             reference=validated_data.get('reference', ''),
             notes=validated_data.get('notes', ''),

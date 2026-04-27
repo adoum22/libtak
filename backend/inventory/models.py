@@ -143,6 +143,12 @@ class Product(models.Model):
         API, mais LibTak ne majore plus automatiquement les prix avec la TVA.
         La TVA est reservee aux factures.
         """
+        current_layer = self.cost_layers.filter(
+            remaining_quantity__gt=0,
+            sale_price__isnull=False,
+        ).order_by('created_at', 'id').first()
+        if current_layer:
+            return self._safe_decimal(current_layer.sale_price)
         return self._safe_decimal(self.sale_price_ht)
 
     @property
@@ -197,6 +203,13 @@ class ProductCostLayer(models.Model):
         related_name='cost_layer',
     )
     unit_cost = models.DecimalField(_('Unit Cost'), max_digits=10, decimal_places=2)
+    sale_price = models.DecimalField(
+        _('Sale Price'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
     initial_quantity = models.PositiveIntegerField(_('Initial Quantity'))
     remaining_quantity = models.PositiveIntegerField(_('Remaining Quantity'))
     note = models.CharField(_('Note'), max_length=200, blank=True)
@@ -214,13 +227,22 @@ class ProductCostLayer(models.Model):
         return f"{self.product.name}: {self.remaining_quantity}/{self.initial_quantity} @ {self.unit_cost}"
 
     @classmethod
-    def create_layer(cls, product, quantity, unit_cost=None, source_movement=None, note=''):
+    def create_layer(
+        cls,
+        product,
+        quantity,
+        unit_cost=None,
+        sale_price=None,
+        source_movement=None,
+        note='',
+    ):
         if quantity <= 0:
             return None
         return cls.objects.create(
             product=product,
             source_movement=source_movement,
             unit_cost=unit_cost if unit_cost is not None else product.purchase_price,
+            sale_price=sale_price if sale_price is not None else product.sale_price_ht,
             initial_quantity=quantity,
             remaining_quantity=quantity,
             note=note,
@@ -237,17 +259,18 @@ class ProductCostLayer(models.Model):
                 product=product,
                 quantity=missing,
                 unit_cost=product.purchase_price,
+                sale_price=product.sale_price_ht,
                 note='Rattrapage stock sans lot',
             )
 
     @classmethod
-    def consume_fifo(cls, product, quantity):
+    def consume_fifo_breakdown(cls, product, quantity):
         if quantity <= 0:
-            return 0
+            return []
 
         cls.ensure_layers_cover_stock(product)
         remaining = quantity
-        total_cost = 0
+        chunks = []
 
         layers = (
             cls.objects.select_for_update()
@@ -260,13 +283,30 @@ class ProductCostLayer(models.Model):
             consumed = min(remaining, layer.remaining_quantity)
             layer.remaining_quantity -= consumed
             layer.save(update_fields=['remaining_quantity'])
-            total_cost += layer.unit_cost * consumed
+            chunks.append({
+                'quantity': consumed,
+                'unit_cost': layer.unit_cost,
+                'sale_price': layer.sale_price or product.sale_price_ht,
+                'total_cost': layer.unit_cost * consumed,
+            })
             remaining -= consumed
 
         if remaining > 0:
-            total_cost += product.purchase_price * remaining
+            chunks.append({
+                'quantity': remaining,
+                'unit_cost': product.purchase_price,
+                'sale_price': product.sale_price_ht,
+                'total_cost': product.purchase_price * remaining,
+            })
 
-        return total_cost
+        return chunks
+
+    @classmethod
+    def consume_fifo(cls, product, quantity):
+        return sum(
+            chunk['total_cost']
+            for chunk in cls.consume_fifo_breakdown(product, quantity)
+        )
 
 
 class StockMovement(models.Model):
@@ -295,6 +335,14 @@ class StockMovement(models.Model):
         null=True,
         blank=True,
         help_text=_('Cost per unit for stock in')
+    )
+    sale_price = models.DecimalField(
+        _('Sale Price'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Sale price for this stock lot'),
     )
     stock_before = models.IntegerField(_('Stock Before'))
     stock_after = models.IntegerField(_('Stock After'))
@@ -363,6 +411,7 @@ class StockMovement(models.Model):
                     product=product,
                     quantity=abs(self.quantity),
                     unit_cost=self.unit_cost or product.purchase_price,
+                    sale_price=self.sale_price or product.sale_price_ht,
                     source_movement=self,
                     note=self.get_movement_type_display(),
                 )
@@ -371,6 +420,7 @@ class StockMovement(models.Model):
                     product=product,
                     quantity=self.quantity,
                     unit_cost=self.unit_cost or product.purchase_price,
+                    sale_price=self.sale_price or product.sale_price_ht,
                     source_movement=self,
                     note='Ajustement stock',
                 )

@@ -144,21 +144,22 @@ class SaleSerializer(serializers.ModelSerializer):
                         f"Disponible: {product.stock}"
                     )
 
-                unit_price_ht = product.sale_price_ht
                 tva_rate = Decimal('0.00')
-                line_ht = unit_price_ht * quantity
-                line_tva = Decimal('0.00')
-
-                total_ht += line_ht
-                total_tva += line_tva
-                prepared_items.append({
-                    'product': product,
-                    'quantity': quantity,
-                    'unit_price_ht': unit_price_ht,
-                    'total_price_ht': line_ht,
-                    'tva_rate': tva_rate,
-                    'product_name': product.name,
-                })
+                for chunk in ProductCostLayer.consume_fifo_breakdown(product, quantity):
+                    unit_price = chunk['sale_price']
+                    chunk_quantity = chunk['quantity']
+                    line_ht = unit_price * chunk_quantity
+                    total_ht += line_ht
+                    prepared_items.append({
+                        'product': product,
+                        'quantity': chunk_quantity,
+                        'unit_price_ht': unit_price,
+                        'total_price_ht': line_ht,
+                        'tva_rate': tva_rate,
+                        'product_name': product.name,
+                        'purchase_cost': chunk['total_cost'],
+                        'unit_cost': chunk['unit_cost'],
+                    })
 
             total_ttc_before_discount = total_ht + total_tva
             if discount_amount > total_ttc_before_discount:
@@ -191,10 +192,8 @@ class SaleSerializer(serializers.ModelSerializer):
 
             for item in prepared_items:
                 product = item['product']
-                purchase_cost = ProductCostLayer.consume_fifo(
-                    product,
-                    item['quantity'],
-                )
+                purchase_cost = item.pop('purchase_cost')
+                item.pop('unit_cost', None)
                 avg_purchase_price = Decimal('0.00')
                 if item['quantity'] > 0:
                     avg_purchase_price = (purchase_cost / item['quantity']).quantize(
@@ -438,6 +437,7 @@ class ReturnSerializer(serializers.ModelSerializer):
                         product=product,
                         quantity=item_data['quantity'],
                         unit_cost=sale_item.unit_purchase_price,
+                        sale_price=sale_item.unit_price_ht,
                         note=f'Retour vente #{validated_data["sale"].id}',
                     )
 

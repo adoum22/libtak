@@ -54,10 +54,10 @@ class StockMovementAdmin(admin.ModelAdmin):
 
 @admin.register(ProductCostLayer)
 class ProductCostLayerAdmin(admin.ModelAdmin):
-    list_display = ('product', 'unit_cost', 'initial_quantity', 'remaining_quantity', 'created_at')
+    list_display = ('product', 'unit_cost', 'sale_price', 'initial_quantity', 'remaining_quantity', 'created_at')
     list_filter = ('created_at',)
     search_fields = ('product__name', 'product__barcode', 'note')
-    readonly_fields = ('product', 'source_movement', 'unit_cost', 'initial_quantity', 'remaining_quantity', 'note', 'created_at')
+    readonly_fields = ('product', 'source_movement', 'unit_cost', 'sale_price', 'initial_quantity', 'remaining_quantity', 'note', 'created_at')
 
     def has_add_permission(self, request):
         return False

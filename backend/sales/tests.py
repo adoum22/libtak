@@ -176,12 +176,46 @@ class SalesAPITest(APITestCase):
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        sale_item = Sale.objects.get(id=response.data['id']).items.first()
-        self.assertEqual(sale_item.total_purchase_cost, Decimal('5.20'))
-        self.assertEqual(sale_item.unit_purchase_price, Decimal('1.04'))
+        sale = Sale.objects.get(id=response.data['id'])
+        self.assertEqual(
+            sum(item.total_purchase_cost for item in sale.items.all()),
+            Decimal('5.20'),
+        )
         self.assertEqual(
             list(ProductCostLayer.objects.filter(product=self.product).values_list('remaining_quantity', flat=True)),
             [0, 3],
+        )
+
+    def test_sale_consumes_sale_prices_by_fifo_lot(self):
+        ProductCostLayer.objects.filter(product=self.product).delete()
+        ProductCostLayer.objects.create(
+            product=self.product,
+            unit_cost=Decimal('6.00'),
+            sale_price=Decimal('10.00'),
+            initial_quantity=2,
+            remaining_quantity=2,
+        )
+        ProductCostLayer.objects.create(
+            product=self.product,
+            unit_cost=Decimal('7.00'),
+            sale_price=Decimal('12.00'),
+            initial_quantity=5,
+            remaining_quantity=5,
+        )
+        self.product.stock = 7
+        self.product.save(update_fields=['stock'])
+
+        response = self.client.post('/api/sales/sales/', {
+            'items': [{'product_id': self.product.id, 'quantity': 4}],
+            'payment_method': 'CASH',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        sale = Sale.objects.get(id=response.data['id'])
+        self.assertEqual(sale.total_ttc, Decimal('44.00'))
+        self.assertEqual(
+            list(sale.items.order_by('id').values_list('quantity', 'unit_price_ht')),
+            [(2, Decimal('10.00')), (2, Decimal('12.00'))],
         )
 
     def test_create_sale_with_direct_discount(self):

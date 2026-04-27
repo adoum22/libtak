@@ -30,6 +30,7 @@ interface Product {
     barcode: string;
     purchase_price: number;
     sale_price_ht?: number;
+    price_ttc?: number;
     stock: number;
 }
 
@@ -221,7 +222,7 @@ export default function PurchaseOrders() {
                     product: selectedProduct.id,
                     quantity: itemQty,
                     unit_cost: selectedProduct.purchase_price,
-                    sale_price: Number(selectedProduct.sale_price_ht) || 0,
+                    sale_price: Number(selectedProduct.price_ttc ?? selectedProduct.sale_price_ht) || 0,
                     productName: selectedProduct.name,
                     barcode: selectedProduct.barcode
                 }]

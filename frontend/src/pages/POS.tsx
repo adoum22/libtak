@@ -23,6 +23,10 @@ interface Product {
     barcode: string;
     sale_price_ht: number;
     price_ttc: number;
+    price_layers?: Array<{
+        remaining_quantity: number;
+        sale_price: number;
+    }>;
     stock: number;
     image_url?: string;
 }
@@ -57,6 +61,25 @@ export default function POS() {
     const parseMoneyInput = (value: string) => (
         Number.parseFloat(value.replace(',', '.')) || 0
     );
+
+    const getLineTotal = (product: Product, quantity: number) => {
+        let remaining = quantity;
+        let total = 0;
+        const layers = product.price_layers || [];
+
+        for (const layer of layers) {
+            if (remaining <= 0) break;
+            const layerQty = Math.min(remaining, layer.remaining_quantity);
+            total += layerQty * Number(layer.sale_price);
+            remaining -= layerQty;
+        }
+
+        if (remaining > 0) {
+            total += remaining * product.price_ttc;
+        }
+
+        return total;
+    };
 
     // Fetch products
     const { data: products = [] } = useQuery<Product[]>({
@@ -167,7 +190,7 @@ export default function POS() {
         setShowSuccessOverlay(false);
     }, [resetSale]);
 
-    const subtotal = cart.reduce((sum, item) => sum + (item.product.price_ttc * item.quantity), 0);
+    const subtotal = cart.reduce((sum, item) => sum + getLineTotal(item.product, item.quantity), 0);
     const parsedDiscount = parseMoneyInput(discountInput);
     const discountAmount = Math.min(Math.max(parsedDiscount, 0), subtotal);
     const total = Math.max(0, subtotal - discountAmount);
@@ -474,7 +497,7 @@ export default function POS() {
                                             </div>
                                         </div>
                                         <span className="font-bold text-lg text-primary">
-                                            {(item.product.price_ttc * item.quantity).toFixed(2)}
+                                            {getLineTotal(item.product, item.quantity).toFixed(2)}
                                         </span>
                                     </div>
 

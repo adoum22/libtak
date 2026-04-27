@@ -104,6 +104,7 @@ class ProductViewSet(viewsets.ModelViewSet):
             product=product,
             quantity=product.stock,
             unit_cost=product.purchase_price,
+            sale_price=product.sale_price_ht,
             note='Stock initial produit',
         )
 
@@ -116,6 +117,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 product=product,
                 quantity=delta,
                 unit_cost=product.purchase_price,
+                sale_price=product.sale_price_ht,
                 note='Ajout stock via fiche produit',
             )
         elif delta < 0:
@@ -432,6 +434,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                         product=product,
                         quantity=product.stock,
                         unit_cost=product.purchase_price,
+                        sale_price=product.sale_price_ht,
                         note='Stock importé',
                     )
                     created_count += 1
@@ -665,6 +668,7 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                     movement_type='IN',
                     quantity=qty,
                     unit_cost=applied_cost,
+                    sale_price=new_sale_price,
                     supplier=order.supplier,
                     reference=f"PO-{order.reference}",
                     notes=(
@@ -684,9 +688,6 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 if update_default and applied_cost is not None:
                     item.product.purchase_price = applied_cost
                     product_changes.append('purchase_price')
-                if new_sale_price is not None and new_sale_price > 0:
-                    item.product.sale_price_ht = new_sale_price
-                    product_changes.append('sale_price_ht')
                 if product_changes:
                     product_changes.append('updated_at')
                     item.product.save(update_fields=product_changes)

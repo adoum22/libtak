@@ -7,7 +7,7 @@ from decimal import Decimal
 from io import BytesIO
 import zipfile
 
-from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, PriceHistory
+from .models import Category, Product, ProductCostLayer, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, PriceHistory
 
 User = get_user_model()
 
@@ -331,7 +331,12 @@ class InventoryAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         product.refresh_from_db()
         self.assertEqual(product.purchase_price, Decimal('4.00'))
-        self.assertEqual(product.sale_price_ht, Decimal('15.00'))
+        self.assertEqual(product.sale_price_ht, Decimal('12.00'))
+        self.assertEqual(product.price_ttc, Decimal('15.00'))
+        self.assertEqual(
+            ProductCostLayer.objects.get(product=product).sale_price,
+            Decimal('15.00'),
+        )
         self.assertEqual(response.data['results'][0]['updated_sale_price'], True)
 
 
