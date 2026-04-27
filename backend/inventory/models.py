@@ -114,38 +114,70 @@ class Product(models.Model):
     def __str__(self):
         return f"{self.name} ({self.barcode})"
 
+    # Helpers pour neutraliser les valeurs NULL / Decimal manquants — un
+    # produit créé via une vieille migration ou un import bâclé peut avoir
+    # min_stock=None ou purchase_price=None, ce qui faisait crasher le
+    # serializer (TypeError sur '0 <= None') -> 500 sur /inventory/products/
+    # -> "Erreur de chargement" côté frontend.
+    @staticmethod
+    def _safe_decimal(value, default='0'):
+        from decimal import Decimal
+        if value is None:
+            return Decimal(default)
+        return value if hasattr(value, 'quantize') else Decimal(str(value))
+
+    @staticmethod
+    def _safe_int(value, default=0):
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     @property
     def price_ttc(self):
         """Prix de vente TTC"""
-        return self.sale_price_ht * (1 + self.tva / 100)
-    
+        sp = self._safe_decimal(self.sale_price_ht)
+        tva = self._safe_decimal(self.tva)
+        from decimal import Decimal
+        return sp * (Decimal('1') + tva / Decimal('100'))
+
     @property
     def profit_margin(self):
         """Marge bénéficiaire par unité"""
-        return self.sale_price_ht - self.purchase_price
-    
+        return self._safe_decimal(self.sale_price_ht) - self._safe_decimal(self.purchase_price)
+
     @property
     def profit_percentage(self):
         """Pourcentage de marge"""
-        if self.purchase_price > 0:
-            return ((self.sale_price_ht - self.purchase_price) / self.purchase_price) * 100
+        pp = self._safe_decimal(self.purchase_price)
+        sp = self._safe_decimal(self.sale_price_ht)
+        if pp > 0:
+            from decimal import Decimal
+            return ((sp - pp) / pp) * Decimal('100')
         return 0
-    
+
     @property
     def stock_value(self):
         """Valeur du stock au prix d'achat"""
-        layered_value = self.cost_layers.aggregate(
-            total=models.Sum(
-                models.F('remaining_quantity') * models.F('unit_cost'),
-                output_field=models.DecimalField(max_digits=14, decimal_places=2),
-            ),
-        )['total']
-        return layered_value if layered_value is not None else self.stock * self.purchase_price
-    
+        try:
+            layered_value = self.cost_layers.aggregate(
+                total=models.Sum(
+                    models.F('remaining_quantity') * models.F('unit_cost'),
+                    output_field=models.DecimalField(max_digits=14, decimal_places=2),
+                ),
+            )['total']
+        except Exception:
+            layered_value = None
+        if layered_value is not None:
+            return layered_value
+        return self._safe_int(self.stock) * self._safe_decimal(self.purchase_price)
+
     @property
     def is_low_stock(self):
-        """Vérifie si le stock est bas"""
-        return self.stock <= self.min_stock
+        """Vérifie si le stock est bas (robuste aux NULL legacy)."""
+        return self._safe_int(self.stock) <= self._safe_int(self.min_stock, default=5)
 
 
 class ProductCostLayer(models.Model):
