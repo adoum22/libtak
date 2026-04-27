@@ -697,11 +697,13 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
                 })
 
             # Mise à jour du statut de la commande
-            all_received = all(
-                i.received_quantity >= i.quantity for i in order.items.all()
-            )
+            all_received = not PurchaseOrderItem.objects.filter(
+                order=order,
+                received_quantity__lt=F('quantity'),
+            ).exists()
             order.status = 'RECEIVED' if all_received else 'PARTIAL'
             order.save(update_fields=['status', 'updated_at'])
+            order.refresh_from_db()
 
         return Response({
             'order': PurchaseOrderSerializer(order, context={'request': request}).data,

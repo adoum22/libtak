@@ -33,7 +33,7 @@ def normalize_nulls(apps, schema_editor):
                 'stock', 'min_stock', 'purchase_price', 'sale_price_ht', 'tva',
             ])
             fixed += 1
-    print(f"  → normalized {fixed} product(s) with NULL fields")
+    print(f"  normalized {fixed} product(s) with NULL fields")
 
 
 class Migration(migrations.Migration):

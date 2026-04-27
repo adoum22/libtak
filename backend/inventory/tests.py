@@ -7,7 +7,7 @@ from decimal import Decimal
 from io import BytesIO
 import zipfile
 
-from .models import Category, Product, Supplier, StockMovement, PriceHistory
+from .models import Category, Product, Supplier, StockMovement, PurchaseOrder, PurchaseOrderItem, PriceHistory
 
 User = get_user_model()
 
@@ -265,6 +265,41 @@ class InventoryAPITest(APITestCase):
         response = self.client.get('/api/inventory/products/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_purchase_order_full_receive_sets_received_status(self):
+        supplier = Supplier.objects.create(name='Fournisseur commande')
+        product = Product.objects.create(
+            name='Produit commande',
+            barcode='7777777777777',
+            sale_price_ht=Decimal('12.00'),
+            purchase_price=Decimal('4.00'),
+            stock=0,
+        )
+        order = PurchaseOrder.objects.create(
+            supplier=supplier,
+            status='PARTIAL',
+            created_by=self.admin,
+        )
+        item = PurchaseOrderItem.objects.create(
+            order=order,
+            product=product,
+            quantity=20,
+            unit_cost=Decimal('4.00'),
+            received_quantity=10,
+        )
+
+        response = self.client.post(
+            f'/api/inventory/purchase-orders/{order.id}/receive/',
+            {'items': [{'item_id': item.id, 'quantity': 10}]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        order.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(item.received_quantity, 20)
+        self.assertEqual(order.status, 'RECEIVED')
+        self.assertEqual(response.data['order']['status'], 'RECEIVED')
 
 
 class SupplierAPITest(APITestCase):
