@@ -411,7 +411,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                             row.get('purchase_price'), '0'
                         ),
                         sale_price_ht=self._import_decimal(row.get('sale_price'), '0'),
-                        tva=self._import_decimal(row.get('tva'), '20'),
+                        tva=Decimal('0'),
                         stock=self._import_int(row.get('stock'), 0),
                         min_stock=self._import_int(row.get('min_stock'), 5),
                         category=category,

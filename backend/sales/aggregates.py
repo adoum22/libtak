@@ -8,11 +8,11 @@ from .models import Sale, SaleItem
 
 
 def revenue_for_month(year: int, month: int) -> Decimal:
-    """Total TTC revenue for a given calendar month.
+    """Total revenue for a given calendar month.
 
     Single source of truth for monthly revenue used by the accounting
     and reporting modules. Reports may further deduct returns or COGS;
-    this returns gross sales TTC only.
+    this returns gross sales only.
     """
     last_day = monthrange(year, month)[1]
     qs = Sale.objects.filter(
@@ -23,7 +23,7 @@ def revenue_for_month(year: int, month: int) -> Decimal:
 
 
 def gross_margin_for_period(start_date, end_date) -> Decimal:
-    """Marge brute pour une période = Σ (prix_vente_HT - prix_achat) × quantité.
+    """Marge brute pour une période = Σ (prix_vente - prix_achat) × quantité.
 
     Source unique pour le calcul du bénéfice avant déduction des dépenses
     d'exploitation. Utilisée par accounting et reporting pour garantir la

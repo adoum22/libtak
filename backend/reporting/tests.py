@@ -16,23 +16,23 @@ User = get_user_model()
 
 class ReportSettingsTest(TestCase):
     """Tests pour ReportSettings (singleton)"""
-    
+
     def test_singleton_pattern(self):
         """Test qu'il n'y a qu'une seule instance de ReportSettings"""
         settings1 = ReportSettings.get_settings()
         settings1.daily_enabled = True
         settings1.save()
-        
+
         settings2 = ReportSettings.get_settings()
         self.assertEqual(settings1.pk, settings2.pk)
         self.assertEqual(settings1.pk, 1)
-    
+
     def test_recipients_list(self):
         """Test parsing de la liste des destinataires"""
         settings = ReportSettings.get_settings()
         settings.email_recipients = 'test1@email.com, test2@email.com, test3@email.com'
         settings.save()
-        
+
         recipients = settings.get_recipients_list()
         self.assertEqual(len(recipients), 3)
         self.assertIn('test1@email.com', recipients)
@@ -40,7 +40,7 @@ class ReportSettingsTest(TestCase):
 
 class ReportDataTest(TestCase):
     """Tests pour la génération des données de rapport"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(
             username='testuser',
@@ -54,17 +54,17 @@ class ReportDataTest(TestCase):
             tva=Decimal('20.00'),
             stock=100
         )
-    
+
     def test_empty_report(self):
         """Test rapport sans ventes"""
         today = timezone.localdate()
         data = get_report_data(today, today)
-        
+
         self.assertEqual(data['total_sales'], 0)
         self.assertEqual(data['total_revenue'], 0.0)
         self.assertEqual(data['total_profit'], 0.0)
         self.assertEqual(len(data['items_sold']), 0)
-    
+
     def test_report_with_sales(self):
         """Test rapport avec ventes"""
         # Créer une vente
@@ -84,12 +84,12 @@ class ReportDataTest(TestCase):
             total_price_ht=Decimal('20.00'),
             tva_rate=Decimal('20.00')
         )
-        
+
         today = timezone.localdate()
         data = get_report_data(today, today)
-        
+
         self.assertEqual(data['total_sales'], 1)
-        # Le rapport utilise unit_price_ht * quantity = 20.0 (HT, pas TTC)
+        # Le rapport utilise le prix de vente simple * quantity = 20.0
         self.assertEqual(data['total_revenue'], 20.0)
         self.assertGreater(data['total_profit'], 0)
         self.assertEqual(len(data['items_sold']), 1)
@@ -97,7 +97,7 @@ class ReportDataTest(TestCase):
 
 class ReportLogTest(TestCase):
     """Tests pour l'historique des rapports"""
-    
+
     def test_create_report_log(self):
         """Test création d'un log de rapport"""
         today = timezone.localdate()
@@ -118,7 +118,7 @@ class ReportLogTest(TestCase):
 
 class ReportingAPITest(APITestCase):
     """Tests API pour les rapports"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -131,34 +131,34 @@ class ReportingAPITest(APITestCase):
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-    
+
     def test_daily_report(self):
         """Test endpoint rapport journalier"""
         response = self.client.get('/api/reporting/daily/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('total_sales', response.data)
-    
+
     def test_weekly_report(self):
         """Test endpoint rapport hebdomadaire"""
         response = self.client.get('/api/reporting/weekly/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_monthly_report(self):
         """Test endpoint rapport mensuel"""
         response = self.client.get('/api/reporting/monthly/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_stats_endpoint(self):
         """Test endpoint statistiques"""
         response = self.client.get('/api/reporting/stats/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('today', response.data)
-    
+
     def test_report_settings(self):
         """Test endpoint paramètres rapports"""
         response = self.client.get('/api/reporting/settings/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_update_report_settings(self):
         """Test mise à jour paramètres rapports"""
         data = {
@@ -168,7 +168,7 @@ class ReportingAPITest(APITestCase):
         }
         response = self.client.patch('/api/reporting/settings/', data)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_report_logs(self):
         """Test liste des logs de rapports"""
         response = self.client.get('/api/reporting/logs/')

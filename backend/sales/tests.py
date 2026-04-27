@@ -13,7 +13,7 @@ User = get_user_model()
 
 class SaleModelTest(TestCase):
     """Tests pour le modèle Sale"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(
             username='cashier',
@@ -28,7 +28,7 @@ class SaleModelTest(TestCase):
             tva=Decimal('20.00'),
             stock=100
         )
-    
+
     def test_sale_creation(self):
         """Test création d'une vente"""
         sale = Sale.objects.create(
@@ -44,7 +44,7 @@ class SaleModelTest(TestCase):
 
 class DiscountModelTest(TestCase):
     """Tests pour le modèle Discount"""
-    
+
     def test_percentage_discount(self):
         """Test remise en pourcentage"""
         discount = Discount.objects.create(
@@ -57,7 +57,7 @@ class DiscountModelTest(TestCase):
         # 10% de 100 = 10
         result = discount.calculate_discount(Decimal('100.00'))
         self.assertEqual(result, Decimal('10.00'))
-    
+
     def test_fixed_discount(self):
         """Test remise fixe"""
         discount = Discount.objects.create(
@@ -69,7 +69,7 @@ class DiscountModelTest(TestCase):
         )
         result = discount.calculate_discount(Decimal('50.00'))
         self.assertEqual(result, Decimal('5.00'))
-    
+
     def test_min_purchase_requirement(self):
         """Test montant minimum d'achat"""
         discount = Discount.objects.create(
@@ -82,16 +82,16 @@ class DiscountModelTest(TestCase):
         # Sous le minimum - pas de remise
         result = discount.calculate_discount(Decimal('50.00'))
         self.assertEqual(result, 0)
-        
+
         # Au-dessus du minimum - remise appliquée
         result = discount.calculate_discount(Decimal('150.00'))
         self.assertEqual(result, Decimal('30.00'))
-    
+
     def test_discount_validity(self):
         """Test validité des remises"""
         from django.utils import timezone
         from datetime import timedelta
-        
+
         # Remise active
         active_discount = Discount.objects.create(
             name='Active',
@@ -100,7 +100,7 @@ class DiscountModelTest(TestCase):
             active=True
         )
         self.assertTrue(active_discount.is_valid)
-        
+
         # Remise inactive
         inactive_discount = Discount.objects.create(
             name='Inactive',
@@ -113,7 +113,7 @@ class DiscountModelTest(TestCase):
 
 class SalesAPITest(APITestCase):
     """Tests API pour les ventes"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(
             username='cashier',
@@ -128,7 +128,7 @@ class SalesAPITest(APITestCase):
             tva=Decimal('20.00'),
             stock=100
         )
-        
+
         # Authentification
         response = self.client.post('/api/auth/login/', {
             'username': 'cashier',
@@ -136,7 +136,7 @@ class SalesAPITest(APITestCase):
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-    
+
     def test_create_sale(self):
         """Test création d'une vente via API"""
         data = {
@@ -147,7 +147,7 @@ class SalesAPITest(APITestCase):
         }
         response = self.client.post('/api/sales/sales/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        
+
         # Vérifier décrémentation stock
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 98)  # 100 - 2
@@ -201,7 +201,11 @@ class SalesAPITest(APITestCase):
         )
         self.assertEqual(
             Decimal(str(response.data['total_ttc'])),
-            Decimal('19.00'),
+            Decimal('15.00'),
+        )
+        self.assertEqual(
+            Decimal(str(response.data['total_tva'])),
+            Decimal('0.00'),
         )
 
     def test_discount_cannot_exceed_sale_total(self):
@@ -243,7 +247,7 @@ class SalesAPITest(APITestCase):
         sale = Sale.objects.get(id=response.data['id'])
         self.assertEqual(sale.items.count(), 1)
         self.assertEqual(sale.items.first().quantity, 5)
-    
+
     def test_insufficient_stock(self):
         """Test vente avec stock insuffisant"""
         data = {
@@ -265,7 +269,7 @@ class SalesAPITest(APITestCase):
 
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, 1)
-    
+
     def test_list_sales(self):
         """Test liste des ventes"""
         response = self.client.get('/api/sales/sales/')
@@ -274,7 +278,7 @@ class SalesAPITest(APITestCase):
 
 class DiscountAPITest(APITestCase):
     """Tests API pour les remises"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -287,7 +291,7 @@ class DiscountAPITest(APITestCase):
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-    
+
     def test_create_discount(self):
         """Test création d'une remise"""
         data = {
@@ -299,7 +303,7 @@ class DiscountAPITest(APITestCase):
         }
         response = self.client.post('/api/sales/discounts/', data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-    
+
     def test_apply_discount(self):
         """Test application d'un code promo"""
         Discount.objects.create(
@@ -316,7 +320,7 @@ class DiscountAPITest(APITestCase):
         response = self.client.post('/api/sales/discounts/apply/', data)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(float(response.data['discount_amount']), 10.0)
-    
+
     def test_invalid_discount_code(self):
         """Test code promo invalide"""
         data = {
@@ -346,7 +350,7 @@ class DiscountAPITest(APITestCase):
 
 class ReturnAPITest(APITestCase):
     """Tests API pour les retours"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -360,14 +364,14 @@ class ReturnAPITest(APITestCase):
             tva=Decimal('20.00'),
             stock=100
         )
-        
+
         response = self.client.post('/api/auth/login/', {
             'username': 'admin',
             'password': 'admin123'
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-        
+
         # Créer une vente pour le retour
         sale_data = {
             'items': [{'product_id': self.product.id, 'quantity': 5}],
@@ -376,12 +380,12 @@ class ReturnAPITest(APITestCase):
         sale_response = self.client.post('/api/sales/sales/', sale_data, format='json')
         self.sale = Sale.objects.get(id=sale_response.data['id'])
         self.sale_item = self.sale.items.first()
-    
+
     def test_create_return(self):
         """Test création d'un retour"""
         self.product.refresh_from_db()
         stock_before = self.product.stock  # 95 après la vente
-        
+
         data = {
             'sale': self.sale.id,
             'reason': 'Produit défectueux',
@@ -391,7 +395,7 @@ class ReturnAPITest(APITestCase):
         }
         response = self.client.post('/api/sales/returns/', data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        
+
         # Vérifier que le stock a été restauré
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, stock_before + 2)
@@ -414,7 +418,7 @@ class ReturnAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(
             Decimal(str(response.data['refund_amount'])),
-            Decimal('10.00'),
+            Decimal('8.00'),
         )
 
     def test_return_item_must_belong_to_sale(self):

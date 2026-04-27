@@ -819,7 +819,7 @@ export default function PurchaseOrders() {
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-semibold text-muted mb-1">
-                                                    Nouveau prix de vente HT (optionnel)
+                                                    Nouveau prix de vente (optionnel)
                                                 </label>
                                                 <input
                                                     type="number"

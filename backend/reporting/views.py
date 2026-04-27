@@ -80,10 +80,10 @@ class ExportReportView(APIView):
             # Création du PDF
             buffer = BytesIO()
             doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-            
+
             elements = []
             styles = getSampleStyleSheet()
-            
+
             # Titre
             title_style = ParagraphStyle(
                 'Title',
@@ -94,7 +94,7 @@ class ExportReportView(APIView):
                 alignment=1 # Center
             )
             elements.append(Paragraph(f"Rapport {report_type.capitalize()}", title_style))
-            
+
             # Sous-titre Période
             period_style = ParagraphStyle(
                 'Period',
@@ -112,7 +112,7 @@ class ExportReportView(APIView):
                 ['Ventes', "CA", "Bénéfice Net"],
                 [str(data['total_sales']), f"{data['total_revenue']:.2f} DH", f"{data['total_profit']:.2f} DH"]
             ]
-            
+
             summary_table = Table(summary_data, colWidths=[5*cm, 5*cm, 5*cm])
             summary_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f3f4f6')),
@@ -139,7 +139,7 @@ class ExportReportView(APIView):
 
             # En-têtes tableau produits
             table_data = [['Produit', 'Prix Unit.', 'Qté', 'Total', 'Marge']]
-            
+
             for item in data['items_sold']:
                 table_data.append([
                     item['name'][:35] + ('...' if len(item['name']) > 35 else ''), # Tronquer noms longs
@@ -148,11 +148,11 @@ class ExportReportView(APIView):
                     f"{item['revenue']:.2f}",
                     f"{item['profit']:.2f}"
                 ])
-                
+
             # Création tableau produits
             row_count = len(table_data)
             product_table = Table(table_data, colWidths=[7*cm, 2.5*cm, 1.5*cm, 3*cm, 3*cm])
-            
+
             product_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -165,19 +165,19 @@ class ExportReportView(APIView):
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
                 ('TEXTCOLOR', (-1, 1), (-1, -1), colors.green), # Colonne Marge en vert
             ]))
-            
+
             elements.append(product_table)
             elements.append(Spacer(1, 20))
-            
+
             # Section Retours (en bas, après le tableau produits)
             if data.get('returns_count', 0) > 0:
                 returns_data = [
                     ['CA Brut', 'Retours', 'CA Net'],
-                    [f"{data.get('gross_revenue', 0):.2f} DH", 
-                     f"-{data.get('total_returns', 0):.2f} DH ({data.get('returns_count', 0)})", 
+                    [f"{data.get('gross_revenue', 0):.2f} DH",
+                     f"-{data.get('total_returns', 0):.2f} DH ({data.get('returns_count', 0)})",
                      f"{data['total_revenue']:.2f} DH"]
                 ]
-                
+
                 returns_table = Table(returns_data, colWidths=[5*cm, 5*cm, 5*cm])
                 returns_table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#fef2f2')),
@@ -198,7 +198,7 @@ class ExportReportView(APIView):
                 ]))
                 elements.append(returns_table)
                 elements.append(Spacer(1, 20))
-            
+
             # Footer
             elements.append(Spacer(1, 20))
             footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=8, textColor=colors.gray, alignment=1)
@@ -213,7 +213,7 @@ class ExportReportView(APIView):
             response = HttpResponse(content_type='application/pdf')
             response['Content-Disposition'] = f'attachment; filename="rapport_{report_type}_{start_date}.pdf"'
             response.write(pdf)
-            
+
             return response
 
         except Exception:
@@ -262,7 +262,7 @@ class ExportReportView(APIView):
             row = 4
             summary = [
                 ('Ventes', data.get('total_sales', 0), None),
-                ('CA HT (net)', f"{data.get('total_revenue', 0):.2f} DH", None),
+                ('CA net', f"{data.get('total_revenue', 0):.2f} DH", None),
                 ('Marge brute (vente - achat)',
                  f"{data.get('gross_margin', 0):.2f} DH", None),
                 ('Dépenses d\'exploitation',
@@ -288,8 +288,8 @@ class ExportReportView(APIView):
 
             # Tableau produits
             row += 2
-            headers = ['Produit', 'Code-barres', 'Prix unit. HT',
-                       'Qté', 'CA HT', 'Marge']
+            headers = ['Produit', 'Code-barres', 'Prix unit.',
+                       'Qté', 'CA', 'Marge']
             for col, h in enumerate(headers, start=1):
                 c = ws.cell(row=row, column=col, value=h)
                 c.font = blue
@@ -356,10 +356,10 @@ class DailyReportView(APIView):
             date = datetime.strptime(date_str, '%Y-%m-%d').date()
         else:
             date = timezone.now().date()
-        
+
         data = get_report_data(date, date)
         data['date'] = date
-        
+
         return Response(data)
 
 
@@ -369,16 +369,16 @@ class WeeklyReportView(APIView):
 
     def get(self, request):
         today = timezone.now().date()
-        
+
         # Semaine demandée ou courante
         week_offset = int(request.query_params.get('week_offset', 0))
         end_date = today - timedelta(days=7 * week_offset)
         start_date = end_date - timedelta(days=6)
-        
+
         data = get_report_data(start_date, end_date)
         data['period_start'] = start_date
         data['period_end'] = end_date
-        
+
         return Response(data)
 
 
@@ -388,24 +388,24 @@ class MonthlyReportView(APIView):
 
     def get(self, request):
         today = timezone.now().date()
-        
+
         month = int(request.query_params.get('month', today.month))
         year = int(request.query_params.get('year', today.year))
-        
+
         start_date = today.replace(year=year, month=month, day=1)
-        
+
         # Dernier jour du mois
         if month == 12:
             end_date = start_date.replace(year=year+1, month=1, day=1) - timedelta(days=1)
         else:
             end_date = start_date.replace(month=month+1, day=1) - timedelta(days=1)
-        
+
         data = get_report_data(start_date, end_date)
         data['period_start'] = start_date
         data['period_end'] = end_date
         data['month'] = month
         data['year'] = year
-        
+
         return Response(data)
 
 
@@ -415,21 +415,21 @@ class StatsView(APIView):
 
     def get(self, request):
         today = timezone.now().date()
-        
+
         # Ventes du jour
         today_sales = Sale.objects.filter(created_at__date=today)
         today_revenue = today_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
-        
+
         # Ventes de la semaine
         week_start = today - timedelta(days=today.weekday())
         week_sales = Sale.objects.filter(created_at__date__gte=week_start)
         week_revenue = week_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
-        
+
         # Ventes du mois
         month_start = today.replace(day=1)
         month_sales = Sale.objects.filter(created_at__date__gte=month_start)
         month_revenue = month_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
-        
+
         # Top produits
         top_products = SaleItem.objects.filter(
             sale__created_at__date__gte=month_start
@@ -439,7 +439,7 @@ class StatsView(APIView):
             total_qty=Sum('quantity'),
             total_revenue=Sum('total_price_ht')
         ).order_by('-total_qty')[:5]
-        
+
         # Produits à réapprovisionner = stock <= min_stock (inclut ruptures)
         # On expose 3 chiffres pour qu'il n'y ait plus d'ambiguïté entre
         # "stock bas" (faible mais encore là) et "rupture" (zéro):
@@ -453,17 +453,17 @@ class StatsView(APIView):
         to_replenish_count = replenish_qs.count()
         low_stock_only_count = max(0, to_replenish_count - out_of_stock_count)
         low_stock = replenish_qs.values('id', 'name', 'stock', 'min_stock')[:10]
-        
+
         # Comparaison avec hier
         yesterday = today - timedelta(days=1)
         yesterday_revenue = Sale.objects.filter(
             created_at__date=yesterday
         ).aggregate(Sum('total_ttc'))['total_ttc__sum'] or Decimal('0')
-        
+
         revenue_change = 0
         if yesterday_revenue > 0:
             revenue_change = ((today_revenue - yesterday_revenue) / yesterday_revenue) * 100
-        
+
         # Série N derniers jours (pour AreaChart Dashboard).
         # ?days=7 (défaut) | 30 | 90, clamp 1..365.
         from django.db.models.functions import TruncDay, TruncHour, TruncWeek
@@ -561,7 +561,7 @@ class ReportSettingsView(generics.RetrieveUpdateAPIView):
     """Configuration des rapports automatiques"""
     serializer_class = ReportSettingsSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
-    
+
     def get_object(self):
         return ReportSettings.get_settings()
 
@@ -571,16 +571,16 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ReportLog.objects.all()
     serializer_class = ReportLogSerializer
     permission_classes = [IsAuthenticated, IsAdminRole]
-    
+
     def get_queryset(self):
         queryset = super().get_queryset()
-        
+
         report_type = self.request.query_params.get('type')
         if report_type:
             queryset = queryset.filter(report_type=report_type)
-        
+
         return queryset
-    
+
     @action(detail=False, methods=['post'])
     def test_email(self, request):
         """Envoyer un rapport de test SYNCHRONE.

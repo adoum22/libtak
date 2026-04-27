@@ -145,9 +145,9 @@ class SaleSerializer(serializers.ModelSerializer):
                     )
 
                 unit_price_ht = product.sale_price_ht
-                tva_rate = product.tva
+                tva_rate = Decimal('0.00')
                 line_ht = unit_price_ht * quantity
-                line_tva = line_ht * (tva_rate / 100)
+                line_tva = Decimal('0.00')
 
                 total_ht += line_ht
                 total_tva += line_tva
@@ -406,9 +406,7 @@ class ReturnSerializer(serializers.ModelSerializer):
 
             refund_amount = 0
             sale_gross_ttc = sum(
-                item.unit_price_ht
-                * (1 + item.tva_rate / 100)
-                * item.quantity
+                item.unit_price_ht * item.quantity
                 for item in SaleItem.objects.filter(sale=validated_data['sale'])
             )
             refund_ratio = Decimal('1.00')
@@ -418,7 +416,7 @@ class ReturnSerializer(serializers.ModelSerializer):
             for item_data in items_data:
                 sale_item = item_data['sale_item']
                 qty = item_data['quantity']
-                unit_ttc = sale_item.unit_price_ht * (1 + sale_item.tva_rate / 100)
+                unit_ttc = sale_item.unit_price_ht
                 refund_amount += unit_ttc * qty * refund_ratio
 
             validated_data['refund_amount'] = refund_amount.quantize(

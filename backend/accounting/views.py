@@ -74,7 +74,7 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         end = _date(year, month, last_day)
         gross_margin = float(gross_margin_for_period(start, end))
 
-        # Bénéfice net = marge brute (vente HT - achat) - dépenses d'exploitation.
+        # Bénéfice net = marge brute (vente - achat) - dépenses d'exploitation.
         # Le prélèvement gérant est une distribution de bénéfice, pas une charge :
         # on l'expose à part pour le suivi de trésorerie.
         data['gross_margin'] = gross_margin
@@ -287,7 +287,7 @@ class PeriodSummaryView(APIView):
         return {row['d']: row['total'] or Decimal('0') for row in rows}
 
     def _gross_margin_by_day(self, start, end):
-        # Marge brute = (vente HT - achat) - remise, agrégée par jour.
+        # Marge brute = (vente - achat) - remise, agrégée par jour.
         items = (
             SaleItem.objects.filter(
                 sale__created_at__date__gte=start,

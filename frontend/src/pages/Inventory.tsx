@@ -30,7 +30,6 @@ interface Product {
     purchase_price: number;
     sale_price_ht: number;
     price_ttc: number;
-    tva: number;
     stock: number;
     min_stock: number;
     category: number | null;
@@ -77,7 +76,6 @@ export default function Inventory() {
         description: '',
         purchase_price: '',
         sale_price_ht: '',
-        tva: '20',
         stock: '0',
         min_stock: '5',
         category: '',
@@ -132,7 +130,7 @@ export default function Inventory() {
         payload.append('description', data.description);
         payload.append('purchase_price', data.purchase_price || '0');
         payload.append('sale_price_ht', data.sale_price_ht);
-        payload.append('tva', data.tva);
+        payload.append('tva', '0');
         payload.append('stock', data.stock);
         payload.append('min_stock', data.min_stock);
 
@@ -223,7 +221,6 @@ export default function Inventory() {
             description: '',
             purchase_price: '',
             sale_price_ht: '',
-            tva: '20',
             stock: '0',
             min_stock: '5',
             category: '',
@@ -242,7 +239,6 @@ export default function Inventory() {
             description: product.description || '',
             purchase_price: product.purchase_price?.toString() || '',
             sale_price_ht: product.sale_price_ht?.toString() || '',
-            tva: product.tva?.toString() || '20',
             stock: product.stock?.toString() || '0',
             min_stock: product.min_stock?.toString() || '5',
             category: product.category?.toString() || '',
@@ -400,7 +396,7 @@ export default function Inventory() {
                                     <th>Code-barres</th>
                                     <th>Catégorie</th>
                                     {isAdmin && <th className="text-right">Prix Achat</th>}
-                                    <th className="text-right">Prix Vente TTC</th>
+                                    <th className="text-right">Prix Vente</th>
                                     {isAdmin && <th className="text-right">Marge</th>}
                                     <th className="text-center">Stock</th>
                                     <th className="text-center">Seuil</th>
@@ -709,7 +705,7 @@ export default function Inventory() {
                                         <div className="grid grid-cols-2 gap-4">
                                             {isAdmin && (
                                                 <div>
-                                                    <label className="block text-sm font-medium mb-2">Prix Achat HT</label>
+                                                    <label className="block text-sm font-medium mb-2">Prix Achat</label>
                                                     <div className="relative">
                                                         <input
                                                             type="number"
@@ -721,19 +717,10 @@ export default function Inventory() {
                                                     </div>
                                                 </div>
                                             )}
-                                            <div>
-                                                <label className="block text-sm font-medium mb-2">TVA (%)</label>
-                                                <input
-                                                    type="number"
-                                                    step="0.01"
-                                                    value={formData.tva}
-                                                    onChange={(e) => setFormData({ ...formData, tva: e.target.value })}
-                                                />
-                                            </div>
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-bold mb-2">Prix de Vente HT *</label>
+                                            <label className="block text-sm font-bold mb-2">Prix de Vente *</label>
                                             <div className="relative">
                                                 <input
                                                     type="number"
@@ -746,15 +733,6 @@ export default function Inventory() {
                                                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted font-bold">DH</span>
                                             </div>
                                         </div>
-
-                                        {formData.sale_price_ht && (
-                                            <div className="text-sm text-right p-2 bg-secondary rounded-lg border border-border">
-                                                <span className="text-muted">Prix TTC estimé : </span>
-                                                <span className="font-bold text-primary">
-                                                    {(parseFloat(formData.sale_price_ht) * (1 + parseFloat(formData.tva) / 100)).toFixed(2)} DH
-                                                </span>
-                                            </div>
-                                        )}
                                     </div>
                                 </div>
                             </div>

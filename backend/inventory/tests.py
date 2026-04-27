@@ -14,7 +14,7 @@ User = get_user_model()
 
 class ProductModelTest(TestCase):
     """Tests pour le modèle Product"""
-    
+
     def setUp(self):
         self.category = Category.objects.create(name='Livres', description='Tous les livres')
         self.supplier = Supplier.objects.create(name='Fournisseur Test', email='test@supplier.com')
@@ -29,35 +29,34 @@ class ProductModelTest(TestCase):
             category=self.category,
             supplier=self.supplier
         )
-    
+
     def test_product_creation(self):
         """Test création produit avec propriétés calculées"""
         self.assertEqual(self.product.name, 'Cahier 100 pages')
         self.assertEqual(self.product.barcode, '1234567890123')
         self.assertEqual(self.product.stock, 50)
-    
-    def test_price_ttc_calculation(self):
-        """Test calcul du prix TTC"""
-        expected_ttc = Decimal('10.00') * Decimal('1.20')  # 10 + 20%
-        self.assertEqual(self.product.price_ttc, expected_ttc)
-    
+
+    def test_price_ttc_is_public_sale_price_without_vat(self):
+        """Le prix public n'ajoute plus automatiquement la TVA."""
+        self.assertEqual(self.product.price_ttc, Decimal('10.00'))
+
     def test_profit_margin_calculation(self):
         """Test calcul de la marge bénéficiaire"""
         expected_margin = Decimal('10.00') - Decimal('6.00')  # 4.00
         self.assertEqual(self.product.profit_margin, expected_margin)
-    
+
     def test_profit_percentage_calculation(self):
         """Test calcul du pourcentage de marge"""
         expected_percentage = ((Decimal('10.00') - Decimal('6.00')) / Decimal('6.00')) * 100
         self.assertAlmostEqual(float(self.product.profit_percentage), float(expected_percentage), places=2)
-    
+
     def test_is_low_stock(self):
         """Test détection stock bas"""
         self.assertFalse(self.product.is_low_stock)  # 50 > 10
         self.product.stock = 5
         self.product.save()
         self.assertTrue(self.product.is_low_stock)  # 5 <= 10
-    
+
     def test_stock_value_calculation(self):
         """Test valeur du stock"""
         expected_value = 50 * Decimal('6.00')  # 300.00
@@ -66,7 +65,7 @@ class ProductModelTest(TestCase):
 
 class StockMovementTest(TestCase):
     """Tests pour les mouvements de stock"""
-    
+
     def setUp(self):
         self.user = User.objects.create_user(username='testuser', password='test123')
         self.product = Product.objects.create(
@@ -77,7 +76,7 @@ class StockMovementTest(TestCase):
             stock=100,
             min_stock=20
         )
-    
+
     def test_stock_in_movement(self):
         """Test entrée de stock"""
         initial_stock = self.product.stock
@@ -91,7 +90,7 @@ class StockMovementTest(TestCase):
         self.assertEqual(self.product.stock, initial_stock + 50)
         self.assertEqual(movement.stock_before, initial_stock)
         self.assertEqual(movement.stock_after, initial_stock + 50)
-    
+
     def test_stock_out_movement(self):
         """Test sortie de stock"""
         initial_stock = self.product.stock
@@ -103,7 +102,7 @@ class StockMovementTest(TestCase):
         )
         self.product.refresh_from_db()
         self.assertEqual(self.product.stock, initial_stock - 30)
-    
+
     def test_stock_adjust_movement(self):
         """Test ajustement de stock"""
         movement = StockMovement.objects.create(
@@ -118,7 +117,7 @@ class StockMovementTest(TestCase):
 
 class CategoryTest(TestCase):
     """Tests pour les catégories"""
-    
+
     def test_category_creation(self):
         category = Category.objects.create(
             name='Fournitures',
@@ -132,7 +131,7 @@ class CategoryTest(TestCase):
 
 class InventoryAPITest(APITestCase):
     """Tests API pour l'inventaire"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -140,7 +139,7 @@ class InventoryAPITest(APITestCase):
             role='ADMIN'
         )
         self.category = Category.objects.create(name='Test Category')
-        
+
         # Authentification
         response = self.client.post('/api/auth/login/', {
             'username': 'admin',
@@ -148,7 +147,7 @@ class InventoryAPITest(APITestCase):
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-    
+
     def test_list_products(self):
         """Test liste des produits"""
         Product.objects.create(
@@ -159,7 +158,7 @@ class InventoryAPITest(APITestCase):
         )
         response = self.client.get('/api/inventory/products/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_create_product(self):
         """Test création de produit via API"""
         data = {
@@ -174,7 +173,7 @@ class InventoryAPITest(APITestCase):
         response = self.client.post('/api/inventory/products/', data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(Product.objects.filter(barcode='2222222222222').exists())
-    
+
     def test_search_product_by_barcode(self):
         """Test recherche par code-barres"""
         Product.objects.create(
@@ -185,7 +184,7 @@ class InventoryAPITest(APITestCase):
         )
         response = self.client.get('/api/inventory/products/?barcode=3333333333333')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-    
+
     def test_product_stats(self):
         """Test endpoint stats produits"""
         response = self.client.get('/api/inventory/products/stats/')
@@ -304,7 +303,7 @@ class InventoryAPITest(APITestCase):
 
 class SupplierAPITest(APITestCase):
     """Tests API pour les fournisseurs"""
-    
+
     def setUp(self):
         self.admin = User.objects.create_user(
             username='admin',
@@ -317,7 +316,7 @@ class SupplierAPITest(APITestCase):
         })
         self.token = response.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
-    
+
     def test_create_supplier(self):
         """Test création fournisseur"""
         data = {
@@ -328,7 +327,7 @@ class SupplierAPITest(APITestCase):
         }
         response = self.client.post('/api/inventory/suppliers/', data)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-    
+
     def test_list_suppliers(self):
         """Test liste des fournisseurs"""
         Supplier.objects.create(name='Fournisseur A')

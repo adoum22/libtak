@@ -14,17 +14,17 @@ from .models import ReportSettings, ReportLog
 def get_report_data(start_date, end_date):
     """Calcule les données du rapport pour une période"""
     from sales.models import Return, ReturnItem
-    
+
     # Ventes de la période
     sales = Sale.objects.filter(
         created_at__date__gte=start_date,
         created_at__date__lte=end_date
     )
-    
+
     # Totaux
     total_sales = sales.count()
-    
-    # Articles vendus groupés - utiliser le prix HT (sans TVA)
+
+    # Articles vendus groupés - prix de vente simple, sans TVA automatique.
     items = SaleItem.objects.filter(
         sale__in=sales
     ).values(
@@ -35,7 +35,7 @@ def get_report_data(start_date, end_date):
         total_cost=Sum('total_purchase_cost'),
         avg_unit_price=Sum(F('unit_price_ht') * F('quantity')) / Sum('quantity')
     ).order_by('-total_qty')
-    
+
     # Calcul du bénéfice
     items_sold = []
     total_revenue = Decimal('0')
@@ -43,16 +43,16 @@ def get_report_data(start_date, end_date):
     total_discounts = sales.aggregate(
         total=Sum('discount_amount'),
     )['total'] or Decimal('0')
-    
+
     for item in items:
         cost = item['total_cost'] or Decimal('0')
         revenue = item['total_revenue'] or Decimal('0')
         profit = revenue - cost
         unit_price = item['avg_unit_price'] or Decimal('0')
-        
+
         total_revenue += revenue
         total_profit += profit
-        
+
         items_sold.append({
             'name': item['product__name'],
             'barcode': item['product__barcode'],
@@ -62,20 +62,20 @@ def get_report_data(start_date, end_date):
             'cost': float(cost),
             'profit': float(profit)
         })
-    
+
     # Calcul des retours COMPLÉTÉS de la période
     completed_returns = Return.objects.filter(
         status='COMPLETED',
         created_at__date__gte=start_date,
         created_at__date__lte=end_date
     )
-    
+
     total_returns = Decimal('0')
     returns_count = completed_returns.count()
-    
+
     for ret in completed_returns:
         total_returns += ret.refund_amount or Decimal('0')
-    
+
     # Dépenses d'exploitation rattachées à la période (loyer, salaires, etc.)
     from sales.aggregates import operating_expenses_for_period
     operating_expenses = operating_expenses_for_period(start_date, end_date)
@@ -84,12 +84,12 @@ def get_report_data(start_date, end_date):
     net_revenue = float(total_revenue) - float(total_discounts) - float(total_returns)
     gross_margin = float(total_profit) - float(total_discounts) - float(total_returns)
     net_profit = gross_margin - float(operating_expenses)
-    
+
     # Données pour le graphique
     from django.db.models.functions import TruncHour, TruncDay
-    
+
     chart_data = []
-    
+
     if start_date == end_date:
         # Vue journalière : par heure
         hourly_sales = sales.annotate(
@@ -98,7 +98,7 @@ def get_report_data(start_date, end_date):
             revenue=Sum('total_ttc'),
             count=Count('id')
         ).order_by('hour')
-        
+
         # Remplir les trous d'heures (8h à minuit)
         sales_by_hour = {item['hour'].hour: item for item in hourly_sales}
         for hour in range(8, 24): # De 8h à 23h
@@ -115,7 +115,7 @@ def get_report_data(start_date, end_date):
             'revenue': float(data_point['revenue'] or 0),
             'count': data_point['count'] or 0
         })
-            
+
     else:
         # Vue période : par jour
         daily_sales = sales.annotate(
@@ -124,7 +124,7 @@ def get_report_data(start_date, end_date):
             revenue=Sum('total_ttc'),
             count=Count('id')
         ).order_by('day')
-        
+
         # Convertir en liste
         for item in daily_sales:
             chart_data.append({
@@ -136,28 +136,28 @@ def get_report_data(start_date, end_date):
     result = {
         'total_sales': total_sales,
         'total_revenue': net_revenue,       # CA net (après retours)
-        'gross_margin': gross_margin,       # Marge brute = revenue HT - COGS - retours
+        'gross_margin': gross_margin,       # Marge brute = revenue - COGS - retours
         'operating_expenses': float(operating_expenses),
         'total_profit': net_profit,         # Bénéfice net = marge brute - dépenses
         'items_sold': items_sold,
         'chart_data': chart_data
     }
-    
+
     # Ajouter les retours seulement s'il y en a
     if returns_count > 0:
         result['returns_count'] = returns_count
         result['total_returns'] = float(total_returns)
         result['gross_revenue'] = float(total_revenue)  # CA brut (avant retours)
-    
+
     return result
 
 
 
 def send_report_email(report_type, start_date, end_date, data, recipients):
     """Envoie le rapport par email avec configuration SMTP dynamique"""
-    
+
     settings_obj = ReportSettings.get_settings()
-    
+
     subject_map = {
         'DAILY': f'Rapport Journalier - {end_date.strftime("%d/%m/%Y")}',
         'WEEKLY': f'Rapport Hebdomadaire - Semaine du {start_date.strftime("%d/%m/%Y")}',
@@ -165,9 +165,9 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
         'QUARTERLY': f'Rapport Trimestriel - Q{(start_date.month-1)//3+1} {start_date.year}',
         'YEARLY': f'Rapport Annuel - {start_date.year}'
     }
-    
+
     subject = f"[{settings.store_name if hasattr(settings, 'store_name') else 'Librairie'}] {subject_map.get(report_type, 'Rapport')}"
-    
+
     # Construction du message HTML
     html_message = f"""
     <html>
@@ -191,22 +191,22 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
         </div>
         <div class="content">
             <p>Période: <strong>{start_date.strftime("%d/%m/%Y")} - {end_date.strftime("%d/%m/%Y")}</strong></p>
-            
+
             <div class="stat">
                 <div>Nombre de ventes</div>
                 <div class="stat-value">{data['total_sales']}</div>
             </div>
-            
+
             <div class="stat">
                 <div>Chiffre d'affaires</div>
                 <div class="stat-value">{data['total_revenue']:.2f} DH</div>
             </div>
-            
+
             <div class="stat">
                 <div>Bénéfice</div>
                 <div class="stat-value profit">{data['total_profit']:.2f} DH</div>
             </div>
-            
+
             <h3>📦 Articles vendus</h3>
             <table>
                 <thead>
@@ -220,7 +220,7 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
                 </thead>
                 <tbody>
     """
-    
+
     for item in data['items_sold'][:20]:  # Top 20
         html_message += f"""
                     <tr>
@@ -231,20 +231,20 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
                         <td style="text-align: right;" class="profit">{item['profit']:.2f} DH</td>
                     </tr>
         """
-    
+
     html_message += """
                 </tbody>
             </table>
-            
+
             <p style="color: #6b7280; font-size: 12px;">
-                Ce rapport a été généré automatiquement. 
+                Ce rapport a été généré automatiquement.
                 Pour modifier les paramètres, connectez-vous à l'application.
             </p>
         </div>
     </body>
     </html>
     """
-    
+
     # SMTP credentials come from Django settings (env-driven).
     try:
         send_mail(
@@ -264,19 +264,19 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
 def send_daily_report():
     """Rapport journalier - tous les jours à 23h"""
     report_settings = ReportSettings.get_settings()
-    
+
     if not report_settings.daily_enabled:
         return "Daily report disabled"
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     today = timezone.now().date()
     data = get_report_data(today, today)
-    
+
     success, error = send_report_email('DAILY', today, today, data, recipients)
-    
+
     # Log
     ReportLog.objects.create(
         report_type='DAILY',
@@ -290,7 +290,7 @@ def send_daily_report():
         success=success,
         error_message=error
     )
-    
+
     return f"Daily report sent: {success}"
 
 
@@ -298,21 +298,21 @@ def send_daily_report():
 def send_weekly_report():
     """Rapport hebdomadaire - tous les dimanches à 23h30"""
     report_settings = ReportSettings.get_settings()
-    
+
     if not report_settings.weekly_enabled:
         return "Weekly report disabled"
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     today = timezone.now().date()
     start_date = today - timedelta(days=6)
-    
+
     data = get_report_data(start_date, today)
-    
+
     success, error = send_report_email('WEEKLY', start_date, today, data, recipients)
-    
+
     ReportLog.objects.create(
         report_type='WEEKLY',
         period_start=start_date,
@@ -325,7 +325,7 @@ def send_weekly_report():
         success=success,
         error_message=error
     )
-    
+
     return f"Weekly report sent: {success}"
 
 
@@ -333,21 +333,21 @@ def send_weekly_report():
 def send_monthly_report():
     """Rapport mensuel - dernier jour du mois à 23h45"""
     report_settings = ReportSettings.get_settings()
-    
+
     if not report_settings.monthly_enabled:
         return "Monthly report disabled"
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     today = timezone.now().date()
     start_date = today.replace(day=1)
-    
+
     data = get_report_data(start_date, today)
-    
+
     success, error = send_report_email('MONTHLY', start_date, today, data, recipients)
-    
+
     ReportLog.objects.create(
         report_type='MONTHLY',
         period_start=start_date,
@@ -360,7 +360,7 @@ def send_monthly_report():
         success=success,
         error_message=error
     )
-    
+
     return f"Monthly report sent: {success}"
 
 
@@ -368,23 +368,23 @@ def send_monthly_report():
 def send_quarterly_report():
     """Rapport trimestriel - dernier jour du trimestre à 23h50"""
     report_settings = ReportSettings.get_settings()
-    
+
     if not report_settings.quarterly_enabled:
         return "Quarterly report disabled"
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     today = timezone.now().date()
     quarter = (today.month - 1) // 3
     start_month = quarter * 3 + 1
     start_date = today.replace(month=start_month, day=1)
-    
+
     data = get_report_data(start_date, today)
-    
+
     success, error = send_report_email('QUARTERLY', start_date, today, data, recipients)
-    
+
     ReportLog.objects.create(
         report_type='QUARTERLY',
         period_start=start_date,
@@ -397,7 +397,7 @@ def send_quarterly_report():
         success=success,
         error_message=error
     )
-    
+
     return f"Quarterly report sent: {success}"
 
 
@@ -405,21 +405,21 @@ def send_quarterly_report():
 def send_yearly_report():
     """Rapport annuel - 31 décembre à 23h55"""
     report_settings = ReportSettings.get_settings()
-    
+
     if not report_settings.yearly_enabled:
         return "Yearly report disabled"
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     today = timezone.now().date()
     start_date = today.replace(month=1, day=1)
-    
+
     data = get_report_data(start_date, today)
-    
+
     success, error = send_report_email('YEARLY', start_date, today, data, recipients)
-    
+
     ReportLog.objects.create(
         report_type='YEARLY',
         period_start=start_date,
@@ -432,7 +432,7 @@ def send_yearly_report():
         success=success,
         error_message=error
     )
-    
+
     return f"Yearly report sent: {success}"
 
 
@@ -440,22 +440,22 @@ def send_yearly_report():
 def send_low_stock_alert():
     """Alerte stock bas - tous les jours à 9h"""
     from inventory.models import Product
-    
+
     report_settings = ReportSettings.get_settings()
-    
+
     recipients = report_settings.get_recipients_list()
     if not recipients:
         return "No recipients configured"
-    
+
     # Trouver les produits en stock bas
     low_stock_products = Product.objects.filter(
         stock__lte=models.F('min_stock'),
         active=True
     ).order_by('stock')
-    
+
     if not low_stock_products.exists():
         return "No low stock products"
-    
+
     # Construire le message HTML
     html_message = """
     <html>
@@ -478,7 +478,7 @@ def send_low_stock_alert():
         </div>
         <div class="content">
             <p>Les produits suivants nécessitent un réapprovisionnement :</p>
-            
+
             <table>
                 <thead>
                     <tr>
@@ -490,7 +490,7 @@ def send_low_stock_alert():
                 </thead>
                 <tbody>
     """
-    
+
     for product in low_stock_products:
         row_class = 'critical' if product.stock == 0 else 'warning' if product.stock <= product.min_stock / 2 else ''
         html_message += f"""
@@ -501,11 +501,11 @@ def send_low_stock_alert():
                         <td>{product.min_stock}</td>
                     </tr>
         """
-    
+
     html_message += """
                 </tbody>
             </table>
-            
+
             <p style="color: #6b7280; font-size: 12px;">
                 Cette alerte a été générée automatiquement.
                 Connectez-vous à l'application pour gérer votre stock.
@@ -514,7 +514,7 @@ def send_low_stock_alert():
     </body>
     </html>
     """
-    
+
     # SMTP credentials come from Django settings (env-driven).
     try:
         send_mail(
@@ -542,21 +542,21 @@ def daily_database_backup():
     from inventory.models import Product, Category, Supplier
     from sales.models import Sale, SaleItem
     from core.models import User
-    
+
     now = timezone.now()
     backup_dir = os.path.join(settings.BASE_DIR, 'backups')
     os.makedirs(backup_dir, exist_ok=True)
-    
+
     # Create timestamped backup filename
     timestamp = now.strftime('%Y-%m-%d_%H-%M-%S')
     backup_file = os.path.join(backup_dir, f'backup_{timestamp}.json')
-    
+
     try:
         backup_data = {
             'timestamp': now.isoformat(),
             'models': {}
         }
-        
+
         # Backup each model
         models_to_backup = [
             ('products', Product),
@@ -566,27 +566,27 @@ def daily_database_backup():
             ('sale_items', SaleItem),
             ('users', User),
         ]
-        
+
         for name, model in models_to_backup:
             try:
                 data = serializers.serialize('json', model.objects.all())
                 backup_data['models'][name] = json.loads(data)
             except Exception as e:
                 backup_data['models'][name] = {'error': str(e)}
-        
+
         # Write backup file
         with open(backup_file, 'w', encoding='utf-8') as f:
             json.dump(backup_data, f, ensure_ascii=False, indent=2)
-        
+
         # Log the backup
         ReportLog.objects.create(
             type='BACKUP',
             recipients='local',
             success=True
         )
-        
+
         return f"Backup created: {backup_file}"
-        
+
     except Exception as e:
         ReportLog.objects.create(
             type='BACKUP',

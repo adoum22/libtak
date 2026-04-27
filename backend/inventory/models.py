@@ -46,37 +46,37 @@ class Product(models.Model):
     name = models.CharField(_('Name'), max_length=200)
     barcode = models.CharField(_('Barcode'), max_length=50, unique=True, db_index=True)
     description = models.TextField(_('Description'), blank=True)
-    
+
     # Prix
     purchase_price = models.DecimalField(
-        _('Purchase Price'), 
-        max_digits=10, 
+        _('Purchase Price'),
+        max_digits=10,
         decimal_places=2,
         default=0,
         help_text=_('Cost price from supplier')
     )
     sale_price_ht = models.DecimalField(
-        _('Sale Price HT'), 
-        max_digits=10, 
+        _('Sale Price HT'),
+        max_digits=10,
         decimal_places=2,
         help_text=_('Selling price before tax')
     )
     tva = models.DecimalField(
-        _('VAT (%)'), 
-        max_digits=5, 
-        decimal_places=2, 
+        _('VAT (%)'),
+        max_digits=5,
+        decimal_places=2,
         default=20.00
     )
-    
+
     # Stock
     stock = models.IntegerField(_('Stock'), default=0)
     min_stock = models.IntegerField(_('Min Stock'), default=5)
-    
+
     # Relations
     category = models.ForeignKey(
-        Category, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        Category,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
         related_name='products'
     )
@@ -88,7 +88,7 @@ class Product(models.Model):
         related_name='products',
         verbose_name=_('Supplier')
     )
-    
+
     # Image
     image = models.ImageField(
         _('Image'),
@@ -96,7 +96,7 @@ class Product(models.Model):
         blank=True,
         null=True
     )
-    
+
     # Status
     active = models.BooleanField(_('Active'), default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -137,11 +137,13 @@ class Product(models.Model):
 
     @property
     def price_ttc(self):
-        """Prix de vente TTC"""
-        sp = self._safe_decimal(self.sale_price_ht)
-        tva = self._safe_decimal(self.tva)
-        from decimal import Decimal
-        return sp * (Decimal('1') + tva / Decimal('100'))
+        """Prix public affiche/vendu.
+
+        Le champ historique s'appelle encore `price_ttc` pour compatibilite
+        API, mais LibTak ne majore plus automatiquement les prix avec la TVA.
+        La TVA est reservee aux factures.
+        """
+        return self._safe_decimal(self.sale_price_ht)
 
     @property
     def profit_margin(self):
@@ -274,22 +276,22 @@ class StockMovement(models.Model):
         OUT = 'OUT', _('Stock Out')        # Sortie (vente)
         ADJUST = 'ADJUST', _('Adjustment') # Ajustement manuel
         RETURN = 'RETURN', _('Return')     # Retour client
-    
+
     product = models.ForeignKey(
-        Product, 
+        Product,
         on_delete=models.CASCADE,
         related_name='movements'
     )
     movement_type = models.CharField(
         _('Movement Type'),
-        max_length=10, 
+        max_length=10,
         choices=MovementType.choices
     )
     quantity = models.IntegerField(_('Quantity'))
     unit_cost = models.DecimalField(
         _('Unit Cost'),
-        max_digits=10, 
-        decimal_places=2, 
+        max_digits=10,
+        decimal_places=2,
         null=True,
         blank=True,
         help_text=_('Cost per unit for stock in')
@@ -298,7 +300,7 @@ class StockMovement(models.Model):
     stock_after = models.IntegerField(_('Stock After'))
     reference = models.CharField(
         _('Reference'),
-        max_length=100, 
+        max_length=100,
         blank=True,
         help_text=_('Invoice number, sale ID, etc.')
     )
@@ -311,8 +313,8 @@ class StockMovement(models.Model):
         verbose_name=_('Supplier')
     )
     created_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.SET_NULL, 
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
         null=True,
         verbose_name=_('Created By')
     )
@@ -417,12 +419,12 @@ class PriceHistory(models.Model):
 
     def __str__(self):
         return f"{self.product.name} - {self.changed_at.strftime('%Y-%m-%d')}"
-    
+
     @property
     def purchase_price_change(self):
         """Calcul du changement de prix d'achat"""
         return self.new_purchase_price - self.old_purchase_price
-    
+
     @property
     def sale_price_change(self):
         """Calcul du changement de prix de vente"""
@@ -437,7 +439,7 @@ class PurchaseOrder(models.Model):
         PARTIALLY_RECEIVED = 'PARTIAL', _('Partially Received')
         RECEIVED = 'RECEIVED', _('Received')
         CANCELLED = 'CANCELLED', _('Cancelled')
-    
+
     reference = models.CharField(_('Reference'), max_length=50, unique=True, blank=True)
     supplier = models.ForeignKey(
         Supplier,
@@ -469,7 +471,7 @@ class PurchaseOrder(models.Model):
 
     def __str__(self):
         return f"PO-{self.reference or self.id} ({self.supplier.name})"
-    
+
     def save(self, *args, **kwargs):
         if not self.reference:
             import uuid
@@ -477,12 +479,12 @@ class PurchaseOrder(models.Model):
             date_str = timezone.now().strftime('%Y%m%d')
             self.reference = f'PO-{date_str}-{uuid.uuid4().hex[:8].upper()}'
         super().save(*args, **kwargs)
-    
+
     @property
     def total_amount(self):
         """Montant total de la commande"""
         return sum(item.total for item in self.items.all())
-    
+
     @property
     def items_count(self):
         """Nombre d'articles dans la commande"""
@@ -504,18 +506,18 @@ class PurchaseOrderItem(models.Model):
     quantity = models.IntegerField(_('Quantity'))
     unit_cost = models.DecimalField(_('Unit Cost'), max_digits=10, decimal_places=2)
     received_quantity = models.IntegerField(_('Received'), default=0)
-    
+
     class Meta:
         verbose_name = _('Purchase Order Item')
         verbose_name_plural = _('Purchase Order Items')
-    
+
     def __str__(self):
         return f"{self.quantity}x {self.product.name}"
-    
+
     @property
     def total(self):
         return self.quantity * self.unit_cost
-    
+
     @property
     def is_fully_received(self):
         return self.received_quantity >= self.quantity
@@ -527,7 +529,7 @@ class InventoryCount(models.Model):
         IN_PROGRESS = 'IN_PROGRESS', _('In Progress')
         COMPLETED = 'COMPLETED', _('Completed')
         VALIDATED = 'VALIDATED', _('Validated')
-    
+
     name = models.CharField(_('Name'), max_length=100)
     status = models.CharField(
         _('Status'),
@@ -577,15 +579,15 @@ class InventoryCountItem(models.Model):
     )
     expected_quantity = models.IntegerField(_('Expected'))
     counted_quantity = models.IntegerField(_('Counted'), null=True, blank=True)
-    
+
     class Meta:
         verbose_name = _('Count Item')
         verbose_name_plural = _('Count Items')
         unique_together = ['count', 'product']
-    
+
     def __str__(self):
         return f"{self.product.name}: {self.counted_quantity}/{self.expected_quantity}"
-    
+
     @property
     def difference(self):
         if self.counted_quantity is None:

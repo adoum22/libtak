@@ -243,16 +243,7 @@ export default function Settings() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-3 gap-4">
-                                <div>
-                                    <label className="block text-sm font-medium mb-2">TVA par défaut (%)</label>
-                                    <input
-                                        type="number"
-                                        step="0.01"
-                                        value={storeForm.default_tva || ''}
-                                        onChange={(e) => setStoreForm({ ...storeForm, default_tva: parseFloat(e.target.value) })}
-                                    />
-                                </div>
+                            <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium mb-2">Devise</label>
                                     <input

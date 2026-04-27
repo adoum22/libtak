@@ -24,7 +24,6 @@ type ProductFormData = {
     description: string;
     purchase_price: number;
     sale_price_ht: number;
-    tva: number;
     stock: number;
     min_stock: number;
     category: string;
@@ -50,7 +49,6 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
         description: '',
         purchase_price: 0,
         sale_price_ht: 0,
-        tva: 20,
         stock: 0,
         min_stock: 5,
         category: '', // ID
@@ -86,6 +84,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                     formDataObj.append(key, String(value));
                 }
             });
+            formDataObj.append('tva', '0');
             if (image) {
                 formDataObj.append('image', image);
             }
@@ -221,7 +220,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label">Prix de vente HT (DH)</label>
+                            <label className="label">Prix de vente (DH)</label>
                             <input
                                 type="number"
                                 step="0.01"

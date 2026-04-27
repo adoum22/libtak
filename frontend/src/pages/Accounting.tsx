@@ -371,7 +371,7 @@ export default function Accounting() {
         const revenue = monthData.revenue ?? 0;
         const totalExp = monthData.total_expenses ?? 0;
         const wd = Number(monthData.manager_withdrawal) || 0;
-        // Source de vérité = backend (gross_margin = vente HT - achat).
+        // Source de vérité = backend (gross_margin = vente - achat).
         // Fallback safe si l'API ancienne ne renvoie pas le champ.
         const grossMargin = monthData.gross_margin ?? (monthData.net_profit + totalExp);
         const cogs = Math.max(0, revenue - grossMargin);

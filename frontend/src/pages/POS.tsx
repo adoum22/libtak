@@ -413,7 +413,7 @@ export default function POS() {
                                         {/* Price - Large and Prominent */}
                                         <div className="pt-2 border-t border-border">
                                             <div className="flex items-center justify-between">
-                                                <span className="text-xs text-muted uppercase font-medium">Prix TTC</span>
+                                                <span className="text-xs text-muted uppercase font-medium">Prix</span>
                                             </div>
                                             <div className="flex items-baseline gap-1 mt-1">
                                                 <span className="font-black text-3xl text-accent leading-none">
