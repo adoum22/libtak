@@ -309,8 +309,11 @@ SPECTACULAR_SETTINGS = {
 # For cloud server: set IS_CLOUD_SERVER=True
 CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-api.onrender.com/api'
 SYNC_TOKEN = os.environ.get('SYNC_TOKEN')  # Shared secret for sync authentication
-if not SYNC_TOKEN and not DEBUG:
-    raise RuntimeError("SYNC_TOKEN environment variable is required in production")
+# SYNC_TOKEN is only required when cloud sync is explicitly configured.
+# PythonAnywhere currently runs as the main app with SQLite and no sync, so
+# blocking startup on a missing token prevents migrations/reloads for no gain.
+if CLOUD_API_URL and not SYNC_TOKEN and not DEBUG:
+    raise RuntimeError("SYNC_TOKEN environment variable is required when CLOUD_API_URL is configured")
 IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
 
 # ===== SECURITY HEADERS (production only) =====
