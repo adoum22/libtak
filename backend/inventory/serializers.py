@@ -179,10 +179,19 @@ class StockInSerializer(serializers.Serializer):
 
 class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
-    
+    current_sale_price = serializers.DecimalField(
+        source='product.sale_price_ht',
+        max_digits=10,
+        decimal_places=2,
+        read_only=True,
+    )
+
     class Meta:
         model = PurchaseOrderItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'unit_cost', 'received_quantity']
+        fields = [
+            'id', 'product', 'product_name', 'quantity', 'unit_cost',
+            'sale_price', 'current_sale_price', 'received_quantity',
+        ]
         read_only_fields = ['received_quantity']
 
 
@@ -224,7 +233,8 @@ class PurchaseOrderCreateSerializer(serializers.ModelSerializer):
                 order=order,
                 product_id=item['product'],
                 quantity=item['quantity'],
-                unit_cost=item.get('unit_cost', 0)
+                unit_cost=item.get('unit_cost', 0),
+                sale_price=item.get('sale_price') or None,
             )
         
         return order

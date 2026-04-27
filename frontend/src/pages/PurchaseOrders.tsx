@@ -37,7 +37,7 @@ type PurchaseOrderForm = {
     supplier: number;
     notes: string;
     expected_date: string | null;
-    items: Array<{ product: number; quantity: number; unit_cost: number }>;
+    items: Array<{ product: number; quantity: number; unit_cost: number; sale_price?: number }>;
 };
 
 type ReceiveOrderItem = {
@@ -79,6 +79,8 @@ interface PurchaseOrderItem {
     product_name?: string;
     quantity: number;
     unit_cost: number;
+    sale_price?: number | null;
+    current_sale_price?: number | null;
     received_quantity: number;
     barcode?: string;
 }
@@ -111,7 +113,14 @@ export default function PurchaseOrders() {
         supplier: '',
         notes: '',
         expected_date: '',
-        items: [] as { product: number; quantity: number; unit_cost: number; productName?: string; barcode?: string }[]
+        items: [] as {
+            product: number;
+            quantity: number;
+            unit_cost: number;
+            sale_price: number;
+            productName?: string;
+            barcode?: string;
+        }[]
     });
     const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
     const [itemQty, setItemQty] = useState(1);
@@ -212,6 +221,7 @@ export default function PurchaseOrders() {
                     product: selectedProduct.id,
                     quantity: itemQty,
                     unit_cost: selectedProduct.purchase_price,
+                    sale_price: Number(selectedProduct.sale_price_ht) || 0,
                     productName: selectedProduct.name,
                     barcode: selectedProduct.barcode
                 }]
@@ -243,7 +253,12 @@ export default function PurchaseOrders() {
             supplier: parseInt(formData.supplier),
             notes: formData.notes,
             expected_date: formData.expected_date || null,
-            items: formData.items.map(({ product, quantity, unit_cost }) => ({ product, quantity, unit_cost }))
+            items: formData.items.map(({ product, quantity, unit_cost, sale_price }) => ({
+                product,
+                quantity,
+                unit_cost,
+                sale_price,
+            }))
         };
 
         createOrder.mutate(payload);
@@ -258,8 +273,7 @@ export default function PurchaseOrders() {
                 const remaining = Math.max(0, item.quantity - (item.received_quantity || 0));
                 // On essaie de récupérer le prix de vente actuel via la fiche produit
                 // si disponible (le serializer Product le renvoie en `sale_price_ht`)
-                const matchingProduct = products.find(p => p.id === item.product);
-                const currentSale = matchingProduct?.sale_price_ht ?? 0;
+                const currentSale = Number(item.current_sale_price ?? item.sale_price ?? 0);
                 return {
                     item_id: item.id,
                     product_name: item.product_name || `Produit #${item.product}`,
@@ -270,7 +284,7 @@ export default function PurchaseOrders() {
                     quantity: String(remaining),
                     unit_cost: String(item.unit_cost),
                     update_purchase_price: false,
-                    new_sale_price: '',
+                    new_sale_price: item.sale_price ? String(item.sale_price) : '',
                     current_sale_price: Number(currentSale) || 0,
                 };
             });
@@ -341,6 +355,7 @@ export default function PurchaseOrders() {
                 product: newProduct.id,
                 quantity: 1,
                 unit_cost: Number(newProduct.purchase_price) || 0,
+                sale_price: 0,
                 productName: newProduct.name,
                 barcode: newProduct.barcode
             }]
@@ -506,7 +521,8 @@ export default function PurchaseOrders() {
                             <div className="space-y-2 border rounded-lg overflow-hidden">
                                 <div className="bg-tertiary px-3 py-2 text-xs font-semibold uppercase text-muted flex">
                                     <div className="flex-1">Produit</div>
-                                    <div className="w-24 text-right">Prix Unit.</div>
+                                    <div className="w-24 text-right">Prix Achat</div>
+                                    <div className="w-24 text-right">Prix Vente</div>
                                     <div className="w-20 text-center">Qté</div>
                                     <div className="w-24 text-right">Total</div>
                                     <div className="w-10"></div>
@@ -540,6 +556,27 @@ export default function PurchaseOrders() {
                                                 title="Prix d'achat négocié pour cette commande (DH)"
                                             />
                                         </div>
+                                        <div className="w-24">
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                min="0"
+                                                value={item.sale_price}
+                                                onChange={(e) => {
+                                                    const newSalePrice = Number(e.target.value);
+                                                    setFormData({
+                                                        ...formData,
+                                                        items: formData.items.map(i =>
+                                                            i.product === item.product
+                                                                ? { ...i, sale_price: Number.isFinite(newSalePrice) ? newSalePrice : 0 }
+                                                                : i
+                                                        ),
+                                                    });
+                                                }}
+                                                className="w-full text-right text-sm py-1 px-2"
+                                                title="Prix de vente qui sera appliquÃ© au stock et Ã  la caisse Ã  la rÃ©ception"
+                                            />
+                                        </div>
                                         <div className="w-20">
                                             <input
                                                 type="number"
@@ -570,7 +607,7 @@ export default function PurchaseOrders() {
                                     </div>
                                 ))}
                                 <div className="bg-tertiary/50 p-3 flex justify-end items-center border-t border-border">
-                                    <span className="text-muted mr-3">Total Estimé:</span>
+                                    <span className="text-muted mr-3">Total achat estimé:</span>
                                     <span className="text-xl font-bold">{orderTotal.toFixed(2)} DH</span>
                                 </div>
                             </div>

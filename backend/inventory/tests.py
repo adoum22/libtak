@@ -300,6 +300,40 @@ class InventoryAPITest(APITestCase):
         self.assertEqual(order.status, 'RECEIVED')
         self.assertEqual(response.data['order']['status'], 'RECEIVED')
 
+    def test_purchase_order_receive_applies_planned_sale_price(self):
+        supplier = Supplier.objects.create(name='Fournisseur prix')
+        product = Product.objects.create(
+            name='Produit prix',
+            barcode='8888888888888',
+            sale_price_ht=Decimal('12.00'),
+            purchase_price=Decimal('4.00'),
+            stock=0,
+        )
+        order = PurchaseOrder.objects.create(
+            supplier=supplier,
+            status='SENT',
+            created_by=self.admin,
+        )
+        item = PurchaseOrderItem.objects.create(
+            order=order,
+            product=product,
+            quantity=5,
+            unit_cost=Decimal('5.00'),
+            sale_price=Decimal('15.00'),
+        )
+
+        response = self.client.post(
+            f'/api/inventory/purchase-orders/{order.id}/receive/',
+            {'items': [{'item_id': item.id, 'quantity': 5}]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        product.refresh_from_db()
+        self.assertEqual(product.purchase_price, Decimal('4.00'))
+        self.assertEqual(product.sale_price_ht, Decimal('15.00'))
+        self.assertEqual(response.data['results'][0]['updated_sale_price'], True)
+
 
 class SupplierAPITest(APITestCase):
     """Tests API pour les fournisseurs"""

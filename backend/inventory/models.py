@@ -505,6 +505,14 @@ class PurchaseOrderItem(models.Model):
     )
     quantity = models.IntegerField(_('Quantity'))
     unit_cost = models.DecimalField(_('Unit Cost'), max_digits=10, decimal_places=2)
+    sale_price = models.DecimalField(
+        _('Sale Price'),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Public sale price to apply when receiving this order'),
+    )
     received_quantity = models.IntegerField(_('Received'), default=0)
 
     class Meta:

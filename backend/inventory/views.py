@@ -651,8 +651,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
                 # Optionnel : propager comme nouveau prix d'achat par défaut sur le produit
                 update_default = bool(received.get('update_purchase_price'))
-                # Optionnel : nouveau prix de vente public
-                new_sale_price = parse_decimal(received.get('new_sale_price'))
+                # Prix de vente public a appliquer : priorite a la saisie de
+                # reception, sinon au prix prevu sur la commande fournisseur.
+                new_sale_price = (
+                    parse_decimal(received.get('new_sale_price'))
+                    or item.sale_price
+                )
 
                 # Création du mouvement de stock — déclenche automatiquement
                 # la création du ProductCostLayer FIFO via StockMovement.save()
