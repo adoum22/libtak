@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ExpenseCategory, MonthlyAccounting, Expense
+from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting, Expense
 
 
 @admin.register(ExpenseCategory)
@@ -29,3 +29,11 @@ class ExpenseAdmin(admin.ModelAdmin):
     list_filter = ('category', 'monthly__year', 'monthly__month')
     search_fields = ('description',)
     autocomplete_fields = ('category', 'monthly')
+
+
+@admin.register(CashRegisterAdjustment)
+class CashRegisterAdjustmentAdmin(admin.ModelAdmin):
+    list_display = ('adjustment_type', 'amount', 'counted_amount', 'created_by', 'created_at')
+    list_filter = ('adjustment_type', 'created_at')
+    search_fields = ('note', 'created_by__username')
+    autocomplete_fields = ('created_by',)

@@ -18,6 +18,7 @@ import {
     ClipboardList,
     ClipboardCheck,
     Calculator,
+    Wallet,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -83,7 +84,8 @@ export default function Layout() {
 
     const navItems = [
         { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: true },
-        { icon: ShoppingCart, label: t('POS'), path: '/pos', show: true },
+        { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true },
+        { icon: Wallet, label: 'Caisse', path: '/cash-register', show: isAdmin },
         {
             icon: Package,
             label: 'Stock',

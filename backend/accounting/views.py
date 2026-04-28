@@ -20,10 +20,11 @@ from sales.aggregates import (
     gross_margin_for_period,
     operating_expenses_for_period,
 )
-from sales.models import Sale, SaleItem
+from sales.models import Return, Sale, SaleItem
 
-from .models import ExpenseCategory, MonthlyAccounting, Expense
+from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting, Expense
 from .serializers import (
+    CashRegisterAdjustmentSerializer,
     ExpenseCategorySerializer,
     ExpenseSerializer,
     MonthlyAccountingSerializer,
@@ -99,6 +100,139 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         if month:
             qs = qs.filter(monthly__month=month)
         return qs
+
+
+class CashRegisterView(APIView):
+    """Solde theorique de la caisse physique.
+
+    Le solde est calcule sur toute la vie de la boutique :
+    fonds/reglages + ventes especes - retours rembourses - depenses.
+    """
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        return Response(self._summary())
+
+    def post(self, request):
+        action_name = request.data.get('action')
+        if action_name == 'set_opening':
+            return self._set_opening(request)
+        if action_name == 'count':
+            return self._count(request)
+        return Response(
+            {'detail': "Action inconnue. Utilisez 'set_opening' ou 'count'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def _set_opening(self, request):
+        opening_amount = self._money(request.data.get('opening_amount'))
+        if opening_amount is None or opening_amount < 0:
+            return Response(
+                {'opening_amount': ['Montant de depart invalide.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        existing_opening = self._adjustments_total(
+            adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
+        )
+        delta = opening_amount - existing_opening
+        note = request.data.get('note') or 'Fonds de caisse defini'
+
+        CashRegisterAdjustment.objects.create(
+            adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
+            amount=delta,
+            counted_amount=opening_amount,
+            note=note,
+            created_by=request.user,
+        )
+        return Response(self._summary(), status=status.HTTP_201_CREATED)
+
+    def _count(self, request):
+        counted_amount = self._money(request.data.get('counted_amount'))
+        if counted_amount is None or counted_amount < 0:
+            return Response(
+                {'counted_amount': ['Montant compte invalide.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        current_balance = self._balance()
+        delta = counted_amount - current_balance
+        note = request.data.get('note') or 'Reglage apres comptage reel'
+        CashRegisterAdjustment.objects.create(
+            adjustment_type=CashRegisterAdjustment.AdjustmentType.COUNT,
+            amount=delta,
+            counted_amount=counted_amount,
+            note=note,
+            created_by=request.user,
+        )
+        return Response(self._summary(), status=status.HTTP_201_CREATED)
+
+    def _summary(self):
+        cash_sales = self._cash_sales_total()
+        completed_returns = self._completed_returns_total()
+        expenses = self._expenses_total()
+        adjustments = self._adjustments_total()
+        opening = self._adjustments_total(
+            adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
+        )
+        balance = adjustments + cash_sales - completed_returns - expenses
+        last_adjustment = CashRegisterAdjustment.objects.order_by('-created_at').first()
+        recent_adjustments = CashRegisterAdjustment.objects.select_related(
+            'created_by'
+        ).order_by('-created_at')[:10]
+
+        return {
+            'balance': float(balance),
+            'opening_amount': float(opening),
+            'cash_sales_total': float(cash_sales),
+            'returns_total': float(completed_returns),
+            'expenses_total': float(expenses),
+            'adjustments_total': float(adjustments),
+            'last_adjustment': (
+                CashRegisterAdjustmentSerializer(last_adjustment).data
+                if last_adjustment else None
+            ),
+            'recent_adjustments': CashRegisterAdjustmentSerializer(
+                recent_adjustments, many=True
+            ).data,
+        }
+
+    def _balance(self):
+        return (
+            self._adjustments_total()
+            + self._cash_sales_total()
+            - self._completed_returns_total()
+            - self._expenses_total()
+        )
+
+    def _money(self, value):
+        try:
+            return Decimal(str(value)).quantize(Decimal('0.01'))
+        except Exception:
+            return None
+
+    def _cash_sales_total(self):
+        return (
+            Sale.objects.filter(payment_method=Sale.PaymentMethod.CASH)
+            .aggregate(total=Sum('total_ttc'))['total']
+            or Decimal('0')
+        )
+
+    def _completed_returns_total(self):
+        return (
+            Return.objects.filter(status=Return.ReturnStatus.COMPLETED)
+            .aggregate(total=Sum('refund_amount'))['total']
+            or Decimal('0')
+        )
+
+    def _expenses_total(self):
+        return Expense.objects.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+    def _adjustments_total(self, adjustment_type=None):
+        qs = CashRegisterAdjustment.objects.all()
+        if adjustment_type:
+            qs = qs.filter(adjustment_type=adjustment_type)
+        return qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
 
 class YearSummaryView(APIView):

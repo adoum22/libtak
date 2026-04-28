@@ -93,3 +93,51 @@ class Expense(models.Model):
 
     def __str__(self):
         return f"{self.category.name}: {self.amount}"
+
+
+class CashRegisterAdjustment(models.Model):
+    """Ajustements manuels pour aligner la caisse theorique au comptage reel."""
+
+    class AdjustmentType(models.TextChoices):
+        OPENING = 'OPENING', _('Opening float')
+        COUNT = 'COUNT', _('Physical count')
+        MANUAL = 'MANUAL', _('Manual adjustment')
+
+    adjustment_type = models.CharField(
+        _('Adjustment Type'),
+        max_length=20,
+        choices=AdjustmentType.choices,
+        default=AdjustmentType.MANUAL,
+    )
+    amount = models.DecimalField(
+        _('Amount'),
+        max_digits=12,
+        decimal_places=2,
+        help_text=_('Montant signe ajoute au solde de caisse'),
+    )
+    counted_amount = models.DecimalField(
+        _('Counted Amount'),
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Montant reel compte en caisse, si applicable'),
+    )
+    note = models.CharField(_('Note'), max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        'core.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cash_register_adjustments',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Cash Register Adjustment')
+        verbose_name_plural = _('Cash Register Adjustments')
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['adjustment_type', 'created_at'])]
+
+    def __str__(self):
+        return f"{self.adjustment_type}: {self.amount}"

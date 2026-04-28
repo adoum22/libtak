@@ -4,7 +4,8 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from core.models import User
-from .models import ExpenseCategory, MonthlyAccounting
+from sales.models import Return, Sale
+from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting
 
 
 class AccountingPermissionsTests(TestCase):
@@ -21,7 +22,8 @@ class AccountingPermissionsTests(TestCase):
         c = APIClient()
         c.force_authenticate(self.cashier)
         for url in ['/api/accounting/categories/', '/api/accounting/monthly/',
-                    '/api/accounting/expenses/', '/api/accounting/summary/']:
+                    '/api/accounting/expenses/', '/api/accounting/summary/',
+                    '/api/accounting/cash-register/']:
             r = c.get(url)
             self.assertEqual(r.status_code, 403, msg=url)
 
@@ -69,3 +71,81 @@ class MonthlySummaryTests(TestCase):
         april = next(m for m in r.data['months'] if m['month'] == 4)
         self.assertEqual(april['expenses'], 150.0)
         self.assertEqual(april['manager_withdrawal'], 500.0)
+
+
+class CashRegisterTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin3', password='pwd', role=User.Role.ADMIN
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.admin)
+        self.cat, _ = ExpenseCategory.objects.get_or_create(name='Fournitures')
+
+    def test_cash_register_balance_uses_opening_sales_returns_and_expenses(self):
+        self.client.post('/api/accounting/cash-register/', {
+            'action': 'set_opening',
+            'opening_amount': '500.00',
+        }, format='json')
+        Sale.objects.create(
+            user=self.admin,
+            total_ht=Decimal('120.00'),
+            total_tva=Decimal('0.00'),
+            total_ttc=Decimal('120.00'),
+            payment_method=Sale.PaymentMethod.CASH,
+        )
+        card_sale = Sale.objects.create(
+            user=self.admin,
+            total_ht=Decimal('80.00'),
+            total_tva=Decimal('0.00'),
+            total_ttc=Decimal('80.00'),
+            payment_method=Sale.PaymentMethod.CARD,
+        )
+        Return.objects.create(
+            sale=card_sale,
+            status=Return.ReturnStatus.COMPLETED,
+            reason='Test',
+            refund_amount=Decimal('20.00'),
+            processed_by=self.admin,
+        )
+        self.client.post('/api/accounting/expenses/', {
+            'year': 2026,
+            'month': 4,
+            'category': self.cat.id,
+            'amount': '30.00',
+        }, format='json')
+
+        response = self.client.get('/api/accounting/cash-register/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['opening_amount'], 500.0)
+        self.assertEqual(response.data['cash_sales_total'], 120.0)
+        self.assertEqual(response.data['returns_total'], 20.0)
+        self.assertEqual(response.data['expenses_total'], 30.0)
+        self.assertEqual(response.data['balance'], 570.0)
+
+    def test_count_creates_adjustment_to_real_amount(self):
+        CashRegisterAdjustment.objects.create(
+            adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
+            amount=Decimal('500.00'),
+            counted_amount=Decimal('500.00'),
+            created_by=self.admin,
+        )
+        Sale.objects.create(
+            user=self.admin,
+            total_ht=Decimal('100.00'),
+            total_tva=Decimal('0.00'),
+            total_ttc=Decimal('100.00'),
+            payment_method=Sale.PaymentMethod.CASH,
+        )
+
+        response = self.client.post('/api/accounting/cash-register/', {
+            'action': 'count',
+            'counted_amount': '590.00',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['balance'], 590.0)
+        adjustment = CashRegisterAdjustment.objects.latest('created_at')
+        self.assertEqual(adjustment.adjustment_type, CashRegisterAdjustment.AdjustmentType.COUNT)
+        self.assertEqual(adjustment.amount, Decimal('-10.00'))

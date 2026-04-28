@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import ExpenseCategory, MonthlyAccounting, Expense
+from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting, Expense
 
 
 class ExpenseCategorySerializer(serializers.ModelSerializer):
@@ -69,3 +69,15 @@ class MonthlyAccountingSerializer(serializers.ModelSerializer):
                 f"Une entrée existe déjà pour {year}-{month:02d}."
             )
         return attrs
+
+
+class CashRegisterAdjustmentSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.username', read_only=True)
+
+    class Meta:
+        model = CashRegisterAdjustment
+        fields = [
+            'id', 'adjustment_type', 'amount', 'counted_amount',
+            'note', 'created_by_name', 'created_at',
+        ]
+        read_only_fields = ['created_by_name', 'created_at']

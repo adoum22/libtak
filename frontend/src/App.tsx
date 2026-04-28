@@ -17,6 +17,7 @@ import PurchaseOrders from './pages/PurchaseOrders';
 import StockCount from './pages/StockCount';
 import Zakat from './pages/Zakat';
 import Accounting from './pages/Accounting';
+import CashRegister from './pages/CashRegister';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('token');
@@ -35,6 +36,7 @@ function App() {
           <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="pos" element={<POS />} />
+            <Route path="cash-register" element={<AdminRoute><CashRegister /></AdminRoute>} />
             <Route path="inventory" element={<Inventory />} />
             <Route path="suppliers" element={<AdminRoute><Suppliers /></AdminRoute>} />
             <Route path="reports" element={<AdminRoute><Reports /></AdminRoute>} />
