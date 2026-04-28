@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import client from '../api/client';
 import { useTranslation } from 'react-i18next';
 import {
@@ -90,6 +89,13 @@ export default function Dashboard() {
         { value: 90, label: '3 mois' },
     ];
 
+    const scrollToLowStock = () => {
+        document.getElementById('low-stock-section')?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+        });
+    };
+
     if (isLoading) {
         return (
             <div className="space-y-6">
@@ -169,9 +175,10 @@ export default function Dashboard() {
                 </div>
 
                 {/* À réapprovisionner = stock <= seuil (inclut ruptures) */}
-                <Link
-                    to="/inventory"
-                    className="stat-card cursor-pointer hover:scale-105 transition-transform block"
+                <button
+                    type="button"
+                    onClick={scrollToLowStock}
+                    className="stat-card cursor-pointer hover:scale-105 transition-transform text-left w-full"
                 >
                     <div className="stat-icon bg-danger-light">
                         <AlertTriangle size={24} className="text-danger" />
@@ -194,7 +201,7 @@ export default function Dashboard() {
                             )}
                         </p>
                     </div>
-                </Link>
+                </button>
             </div>
 
             {/* Charts */}

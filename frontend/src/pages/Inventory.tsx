@@ -39,6 +39,16 @@ interface Product {
     profit_margin: number;
     is_low_stock: boolean;
     image_url: string | null;
+    cost_layers?: StockLayer[];
+}
+
+interface StockLayer {
+    initial_quantity: number;
+    remaining_quantity: number;
+    unit_cost: string | number;
+    sale_price: string | number;
+    created_at: string;
+    note?: string;
 }
 
 interface Category {
@@ -440,6 +450,33 @@ export default function Inventory() {
                                                 </div>
                                                 <div>
                                                     <p className="font-medium">{product.name}</p>
+                                                    {isAdmin && product.cost_layers && product.cost_layers.length > 0 && (
+                                                        <div className="mt-2 space-y-1">
+                                                            <p className="text-[10px] uppercase font-semibold text-muted">Lots FIFO</p>
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {product.cost_layers.slice(0, 3).map((layer, idx) => (
+                                                                    <span
+                                                                        key={`${product.id}-layer-${idx}`}
+                                                                        className="inline-flex items-center gap-1 rounded-md bg-tertiary px-2 py-1 text-[11px] text-muted border border-border"
+                                                                        title={layer.note || `Lot du ${new Date(layer.created_at).toLocaleDateString('fr-FR')}`}
+                                                                    >
+                                                                        <strong className="text-primary">Lot {idx + 1}</strong>
+                                                                        Achat {Number(layer.unit_cost).toFixed(2)}
+                                                                        <span>→</span>
+                                                                        Vente {Number(layer.sale_price).toFixed(2)}
+                                                                        <span className="text-accent font-semibold">
+                                                                            {layer.remaining_quantity}/{layer.initial_quantity}
+                                                                        </span>
+                                                                    </span>
+                                                                ))}
+                                                                {product.cost_layers.length > 3 && (
+                                                                    <span className="text-[11px] text-muted px-2 py-1">
+                                                                        +{product.cost_layers.length - 3} lot(s)
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                         </td>

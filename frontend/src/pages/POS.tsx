@@ -463,10 +463,10 @@ export default function POS() {
             </div>
 
             {/* Right Panel (Cart Only - Success is Overlay now) */}
-            <div className="w-96 card flex flex-col shadow-xl border-t-4 border-t-accent">
+            <div className="w-[28rem] card flex flex-col shadow-xl border-t-4 border-t-accent">
                 <div className="card-header flex items-center gap-3 bg-tertiary/30">
-                    <ShoppingCart size={24} className="text-accent" />
-                    <h2 className="font-semibold text-lg">Panier en cours</h2>
+                    <ShoppingCart size={26} className="text-accent" />
+                    <h2 className="font-semibold text-xl">Panier en cours</h2>
                     {itemCount > 0 && (
                         <span className="badge badge-accent ml-auto">
                             {itemCount} article{itemCount > 1 ? 's' : ''}
@@ -475,7 +475,7 @@ export default function POS() {
                 </div>
 
                 {/* Cart Items */}
-                <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex-1 overflow-y-auto p-5">
                     {cart.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-muted opacity-60">
                             <ShoppingCart size={64} className="mb-4 text-tertiary-dark" />
@@ -485,18 +485,18 @@ export default function POS() {
                     ) : (
                         <div className="space-y-3">
                             {cart.map((item) => (
-                                <div key={item.product.id} className="bg-tertiary/50 rounded-xl p-3 border border-transparent hover:border-accent/20 transition-colors">
-                                    <div className="flex items-start gap-3 mb-2">
+                                <div key={item.product.id} className="bg-tertiary/50 rounded-xl p-4 border border-transparent hover:border-accent/20 transition-colors">
+                                    <div className="flex items-start gap-3 mb-3">
                                         <div className="flex-1 min-w-0">
-                                            <h4 className="font-bold text-sm truncate leading-tight">
+                                            <h4 className="font-bold text-base leading-tight line-clamp-2">
                                                 {item.product.name}
                                             </h4>
-                                            <div className="text-xs text-muted flex items-center gap-2 mt-1">
+                                            <div className="text-sm text-muted flex items-center gap-2 mt-1.5">
                                                 <span className="bg-secondary px-1.5 rounded">{item.product.barcode}</span>
                                                 <span>{item.product.price_ttc?.toFixed(2)} DH/u</span>
                                             </div>
                                         </div>
-                                        <span className="font-bold text-lg text-primary">
+                                        <span className="font-bold text-xl text-primary whitespace-nowrap">
                                             {getLineTotal(item.product, item.quantity).toFixed(2)}
                                         </span>
                                     </div>
@@ -509,14 +509,14 @@ export default function POS() {
                                             <Trash2 size={16} />
                                         </button>
 
-                                        <div className="flex items-center gap-1 bg-secondary rounded-lg shadow-sm border border-border p-0.5">
+                                        <div className="flex items-center gap-1 bg-secondary rounded-xl shadow-sm border border-border p-1">
                                             <button
                                                 onClick={() => updateQuantity(item.product.id, -1)}
                                                 className="w-8 h-8 flex items-center justify-center hover:bg-tertiary rounded-md transition-colors"
                                             >
                                                 <Minus size={16} />
                                             </button>
-                                            <span className="w-10 text-center font-bold text-lg">
+                                            <span className="w-12 text-center font-bold text-xl">
                                                 {item.quantity}
                                             </span>
                                             <button
