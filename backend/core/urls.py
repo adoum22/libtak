@@ -14,11 +14,13 @@ from .views import (
     DatabaseExportView,
     LogoutView,
     ChangePasswordView,
+    AuditLogViewSet,
 )
 from .sync_api import receive_sync_data, get_master_data, sync_status, trigger_sync
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
+router.register(r'audit-logs', AuditLogViewSet, basename='audit-logs')
 
 
 urlpatterns = [

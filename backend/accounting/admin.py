@@ -25,8 +25,8 @@ class MonthlyAccountingAdmin(admin.ModelAdmin):
 
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ('category', 'amount', 'monthly', 'incurred_on', 'created_at')
-    list_filter = ('category', 'monthly__year', 'monthly__month')
+    list_display = ('category', 'amount', 'paid_from_cash', 'monthly', 'incurred_on', 'created_at')
+    list_filter = ('category', 'paid_from_cash', 'monthly__year', 'monthly__month')
     search_fields = ('description',)
     autocomplete_fields = ('category', 'monthly')
 

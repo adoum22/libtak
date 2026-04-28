@@ -171,3 +171,16 @@ class AppSettingsSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(reverse('app_settings_logo'))
             return reverse('app_settings_logo')
         return None
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id', 'username', 'action', 'action_display',
+            'model_name', 'object_id', 'object_repr',
+            'changes', 'ip_address', 'timestamp',
+        ]

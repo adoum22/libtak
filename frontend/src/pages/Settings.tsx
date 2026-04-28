@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download } from 'lucide-react';
+import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download, Send, AlertCircle } from 'lucide-react';
 
 interface ReportSettings {
     email_recipients: string;
@@ -43,6 +43,32 @@ interface AppSettings {
     cashier_can_manage_stock: boolean;
 }
 
+interface ReportDiagnostic {
+    report_settings?: {
+        daily_enabled: boolean;
+        recipients_count: number;
+        daily_time: string;
+    };
+    smtp_config?: {
+        backend?: string;
+        host?: string;
+        port?: number;
+        user?: string;
+        user_set?: boolean;
+        password_set?: boolean;
+        from_email?: string;
+    };
+    last_daily_log?: {
+        sent_at: string | null;
+        success: boolean | null;
+        error_message: string | null;
+    } | null;
+    pythonanywhere_task?: string;
+    local_backup_sync_task?: string;
+    message?: string;
+    success?: boolean;
+}
+
 export default function Settings() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -50,6 +76,7 @@ export default function Settings() {
     const [activeTab, setActiveTab] = useState<'store' | 'reports' | 'permissions' | 'backup'>('store');
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
+    const [reportDiagnostic, setReportDiagnostic] = useState<ReportDiagnostic | null>(null);
 
     const { data: appSettings } = useQuery<AppSettings>({
         queryKey: ['appSettings'],
@@ -98,6 +125,16 @@ export default function Settings() {
             setShowSuccess(true);
             setTimeout(() => setShowSuccess(false), 3000);
         }
+    });
+
+    const testDailyReport = useMutation({
+        mutationFn: () => client.post('/reporting/logs/test_email/'),
+        onSuccess: (res) => setReportDiagnostic(res.data),
+    });
+
+    const diagnoseReports = useMutation({
+        mutationFn: () => client.get('/reporting/logs/diagnose/'),
+        onSuccess: (res) => setReportDiagnostic(res.data),
     });
 
     const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -331,6 +368,69 @@ export default function Settings() {
                                 <code className="ml-1">EMAIL_USE_TLS</code>.
                                 Contactez votre administrateur pour les modifier.
                             </p>
+                        </div>
+
+                        <div className="space-y-4 border-b pb-6">
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                                <div>
+                                    <h3 className="font-medium text-primary flex items-center gap-2">
+                                        <AlertCircle size={18} />
+                                        Diagnostic rapport journalier
+                                    </h3>
+                                    <p className="text-sm text-muted">
+                                        Verifie les destinataires, SMTP, dernier envoi et commande PythonAnywhere.
+                                    </p>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => diagnoseReports.mutate()}
+                                        disabled={diagnoseReports.isPending}
+                                    >
+                                        <AlertCircle size={16} />
+                                        Diagnostiquer
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn-primary"
+                                        onClick={() => testDailyReport.mutate()}
+                                        disabled={testDailyReport.isPending}
+                                    >
+                                        <Send size={16} />
+                                        Envoyer test
+                                    </button>
+                                </div>
+                            </div>
+                            {reportDiagnostic && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                    <div className="p-3 bg-tertiary/40 rounded-lg">
+                                        <p className="font-semibold mb-1">Email</p>
+                                        <p>Backend: {reportDiagnostic.smtp_config?.backend || '-'}</p>
+                                        <p>SMTP: {reportDiagnostic.smtp_config?.host || '-'}:{reportDiagnostic.smtp_config?.port || '-'}</p>
+                                        <p>Utilisateur: {reportDiagnostic.smtp_config?.user_set || reportDiagnostic.smtp_config?.user ? 'OK' : 'Manquant'}</p>
+                                        <p>Mot de passe: {reportDiagnostic.smtp_config?.password_set ? 'OK' : 'Manquant'}</p>
+                                    </div>
+                                    <div className="p-3 bg-tertiary/40 rounded-lg">
+                                        <p className="font-semibold mb-1">Rapport</p>
+                                        <p>Actif: {reportDiagnostic.report_settings?.daily_enabled ? 'Oui' : 'Non'}</p>
+                                        <p>Destinataires: {reportDiagnostic.report_settings?.recipients_count ?? '-'}</p>
+                                        <p>Heure: {reportDiagnostic.report_settings?.daily_time || '-'}</p>
+                                        <p>Dernier statut: {reportDiagnostic.last_daily_log?.success === true ? 'OK' : reportDiagnostic.last_daily_log ? 'Erreur' : '-'}</p>
+                                    </div>
+                                    {reportDiagnostic.last_daily_log?.error_message && (
+                                        <div className="md:col-span-2 p-3 bg-danger-light text-danger rounded-lg">
+                                            {reportDiagnostic.last_daily_log.error_message}
+                                        </div>
+                                    )}
+                                    {reportDiagnostic.pythonanywhere_task && (
+                                        <div className="md:col-span-2 p-3 bg-tertiary/40 rounded-lg">
+                                            <p className="font-semibold mb-1">Commande PythonAnywhere 23h</p>
+                                            <code className="text-xs">{reportDiagnostic.pythonanywhere_task}</code>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Recipients */}
@@ -642,6 +742,13 @@ export default function Settings() {
                         <p className="text-xs text-muted text-center">
                             Le fichier sera au format Excel (.xlsx) avec plusieurs feuilles. Ouvrez-le avec Excel ou Google Sheets.
                         </p>
+                        <div className="p-4 bg-tertiary/40 rounded-lg text-sm">
+                            <p className="font-semibold mb-2">Sauvegarde locale automatique</p>
+                            <p className="text-muted mb-2">
+                                Pour un serveur local/offline, planifiez cette commande toutes les 30 minutes. Elle cree d'abord une sauvegarde locale, puis tente une synchronisation cloud si elle est configuree.
+                            </p>
+                            <code className="text-xs">cd ~/libtak/backend && python manage.py local_backup_sync</code>
+                        </div>
                     </div>
                 </div>
             )}

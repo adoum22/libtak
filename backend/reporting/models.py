@@ -83,6 +83,7 @@ class ReportLog(models.Model):
         MONTHLY = 'MONTHLY', _('Monthly')
         QUARTERLY = 'QUARTERLY', _('Quarterly')
         YEARLY = 'YEARLY', _('Yearly')
+        BACKUP = 'BACKUP', _('Backup')
     
     report_type = models.CharField(
         _('Report Type'),

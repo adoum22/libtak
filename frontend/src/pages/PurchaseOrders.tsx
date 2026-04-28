@@ -32,6 +32,16 @@ interface Product {
     sale_price_ht?: number;
     price_ttc?: number;
     stock: number;
+    cost_layers?: StockLayer[];
+}
+
+interface StockLayer {
+    initial_quantity: number;
+    remaining_quantity: number;
+    unit_cost: number;
+    sale_price: number;
+    created_at: string;
+    note?: string;
 }
 
 type PurchaseOrderForm = {
@@ -84,6 +94,7 @@ interface PurchaseOrderItem {
     current_sale_price?: number | null;
     received_quantity: number;
     barcode?: string;
+    product_layers?: StockLayer[];
 }
 
 interface PurchaseOrder {
@@ -693,8 +704,9 @@ export default function PurchaseOrders() {
                                             )}
                                             <div className="space-y-1">
                                                 {order.items?.map(item => (
-                                                    <div key={item.id} className="flex justify-between text-sm py-1 border-b border-border/50 last:border-0 items-center">
-                                                        <div>
+                                                    <div key={item.id} className="py-2 border-b border-border/50 last:border-0">
+                                                        <div className="flex justify-between text-sm items-center">
+                                                            <div>
                                                             <span>{item.product_name}</span>
                                                             {/* Show verification progress if received > 0 */}
                                                             {(item.received_quantity > 0 || order.status === 'PARTIAL') && (
@@ -707,8 +719,25 @@ export default function PurchaseOrders() {
                                                             {!(item.received_quantity > 0 || order.status === 'PARTIAL') && (
                                                                 <span className="text-xs text-muted ml-2">x {item.quantity}</span>
                                                             )}
+                                                            </div>
+                                                            <span>{item.unit_cost} DH</span>
                                                         </div>
-                                                        <span>{item.unit_cost} DH</span>
+                                                        {!!item.product_layers?.length && (
+                                                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                                {item.product_layers.map((layer, idx) => (
+                                                                    <div key={`${item.id}-${idx}`} className="rounded-lg bg-secondary border border-border px-3 py-2 text-xs">
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            <span className="font-semibold">Lot FIFO #{idx + 1}</span>
+                                                                            <span className="badge badge-accent">{layer.remaining_quantity}/{layer.initial_quantity} pcs</span>
+                                                                        </div>
+                                                                        <div className="mt-1 flex justify-between text-muted">
+                                                                            <span>Achat {Number(layer.unit_cost).toFixed(2)} DH</span>
+                                                                            <span>Vente {Number(layer.sale_price).toFixed(2)} DH</span>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>

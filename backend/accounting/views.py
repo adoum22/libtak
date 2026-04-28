@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.models import AuditLog
 from core.permissions import IsAdminRole
 from calendar import monthrange
 from datetime import date as _date
@@ -101,6 +102,41 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             qs = qs.filter(monthly__month=month)
         return qs
 
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='Expense',
+            object_id=instance.id,
+            object_repr=str(instance),
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='Expense',
+            object_id=instance.id,
+            object_repr=str(instance),
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        obj_id = instance.id
+        obj_repr = str(instance)
+        super().perform_destroy(instance)
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.DELETE,
+            model_name='Expense',
+            object_id=obj_id,
+            object_repr=obj_repr,
+            request=self.request,
+        )
+
 
 class CashRegisterView(APIView):
     """Solde theorique de la caisse physique.
@@ -138,12 +174,20 @@ class CashRegisterView(APIView):
         delta = opening_amount - existing_opening
         note = request.data.get('note') or 'Fonds de caisse defini'
 
-        CashRegisterAdjustment.objects.create(
+        adjustment = CashRegisterAdjustment.objects.create(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
             amount=delta,
             counted_amount=opening_amount,
             note=note,
             created_by=request.user,
+        )
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='CashRegisterAdjustment',
+            object_id=adjustment.id,
+            object_repr=f"Fonds caisse: {opening_amount}",
+            request=request,
         )
         return Response(self._summary(), status=status.HTTP_201_CREATED)
 
@@ -158,12 +202,21 @@ class CashRegisterView(APIView):
         current_balance = self._balance()
         delta = counted_amount - current_balance
         note = request.data.get('note') or 'Reglage apres comptage reel'
-        CashRegisterAdjustment.objects.create(
+        adjustment = CashRegisterAdjustment.objects.create(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.COUNT,
             amount=delta,
             counted_amount=counted_amount,
             note=note,
             created_by=request.user,
+        )
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='CashRegisterAdjustment',
+            object_id=adjustment.id,
+            object_repr=f"Comptage caisse: {counted_amount}",
+            changes={'delta': str(delta)},
+            request=request,
         )
         return Response(self._summary(), status=status.HTTP_201_CREATED)
 
@@ -226,7 +279,11 @@ class CashRegisterView(APIView):
         )
 
     def _expenses_total(self):
-        return Expense.objects.aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        return (
+            Expense.objects.filter(paid_from_cash=True)
+            .aggregate(total=Sum('amount'))['total']
+            or Decimal('0')
+        )
 
     def _adjustments_total(self, adjustment_type=None):
         qs = CashRegisterAdjustment.objects.all()

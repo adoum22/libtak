@@ -31,6 +31,7 @@ interface Category { id: number; name: string; is_default: boolean; }
 interface Expense {
     id: number; category: number; category_name: string;
     amount: string | number; description: string; incurred_on: string | null;
+    paid_from_cash: boolean;
 }
 interface MonthData {
     id: number; year: number; month: number;
@@ -133,13 +134,14 @@ export default function Accounting() {
     });
 
     const addExpense = useMutation({
-        mutationFn: (payload: { category: number; amount: number; description: string; incurred_on?: string; year?: number; month?: number }) =>
+        mutationFn: (payload: { category: number; amount: number; description: string; paid_from_cash: boolean; incurred_on?: string; year?: number; month?: number }) =>
             client.post('/accounting/expenses/', { ...payload, year: payload.year ?? year, month: payload.month ?? month }),
         onSuccess: () => {
             toast.success('Dépense ajoutée');
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
             qc.invalidateQueries({ queryKey: ['acc-period'] });
+            qc.invalidateQueries({ queryKey: ['cashRegister'] });
         },
         onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
     });
@@ -150,6 +152,7 @@ export default function Accounting() {
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
             qc.invalidateQueries({ queryKey: ['acc-period'] });
+            qc.invalidateQueries({ queryKey: ['cashRegister'] });
         },
     });
 
@@ -174,7 +177,7 @@ export default function Accounting() {
         withdrawal: '',
         notes: '',
     });
-    const [newExp, setNewExp] = useState({ category: '', amount: '', description: '' });
+    const [newExp, setNewExp] = useState({ category: '', amount: '', description: '', paid_from_cash: true });
     const [newCatName, setNewCatName] = useState('');
 
     const currentMonthId = monthData?.id ?? null;
@@ -272,7 +275,7 @@ export default function Accounting() {
                         <h2 className="text-lg font-semibold">Ajouter une dépense datée</h2>
                         <span className="text-sm text-muted">{periodLabel}</span>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
                         <input
                             type="date"
                             value={selectedDate}
@@ -297,6 +300,15 @@ export default function Accounting() {
                             value={newExp.description}
                             onChange={(e) => setNewExp({ ...newExp, description: e.target.value })}
                         />
+                        <label className="flex items-center gap-2 px-3 py-2 bg-tertiary/40 rounded-lg text-sm font-medium">
+                            <input
+                                type="checkbox"
+                                checked={newExp.paid_from_cash}
+                                onChange={(e) => setNewExp({ ...newExp, paid_from_cash: e.target.checked })}
+                                className="w-4 h-4"
+                            />
+                            Sortie caisse
+                        </label>
                         <button
                             className="btn-primary flex items-center justify-center gap-2"
                             disabled={!newExp.category || !newExp.amount || addExpense.isPending}
@@ -306,6 +318,7 @@ export default function Accounting() {
                                     category: Number(newExp.category),
                                     amount: Number(newExp.amount),
                                     description: newExp.description,
+                                    paid_from_cash: newExp.paid_from_cash,
                                     incurred_on: selectedDate,
                                     year: dateParts[0],
                                     month: dateParts[1],
@@ -314,7 +327,7 @@ export default function Accounting() {
                                     setYear(dateParts[0]);
                                     setMonth(dateParts[1]);
                                 }
-                                setNewExp({ category: '', amount: '', description: '' });
+                                setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
                             }}
                         >
                             <Plus size={18} /> Ajouter
@@ -333,6 +346,7 @@ export default function Accounting() {
                                     <th>Date</th>
                                     <th>Catégorie</th>
                                     <th>Description</th>
+                                    <th>Caisse</th>
                                     <th className="text-right">Montant</th>
                                     <th></th>
                                 </tr>
@@ -345,6 +359,11 @@ export default function Accounting() {
                                         <td>{e.incurred_on || '-'}</td>
                                         <td><span className="badge badge-accent">{e.category_name}</span></td>
                                         <td>{e.description || '-'}</td>
+                                        <td>
+                                            <span className={`badge ${e.paid_from_cash ? 'badge-warning' : 'badge-accent'}`}>
+                                                {e.paid_from_cash ? 'Oui' : 'Non'}
+                                            </span>
+                                        </td>
                                         <td className="text-right">{fmt(Number(e.amount))} DH</td>
                                         <td className="text-right">
                                             <button
@@ -532,7 +551,7 @@ export default function Accounting() {
                 {/* Add expense */}
                 <div className="card p-6">
                     <h2 className="text-lg font-semibold mb-4">Ajouter une dépense</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                         <select
                             value={newExp.category}
                             onChange={(e) => setNewExp({ ...newExp, category: e.target.value })}
@@ -552,6 +571,15 @@ export default function Accounting() {
                             value={newExp.description}
                             onChange={(e) => setNewExp({ ...newExp, description: e.target.value })}
                         />
+                        <label className="flex items-center gap-2 px-3 py-2 bg-tertiary/40 rounded-lg text-sm font-medium">
+                            <input
+                                type="checkbox"
+                                checked={newExp.paid_from_cash}
+                                onChange={(e) => setNewExp({ ...newExp, paid_from_cash: e.target.checked })}
+                                className="w-4 h-4"
+                            />
+                            Sortie caisse
+                        </label>
                         <button
                             className="btn-primary flex items-center justify-center gap-2"
                             disabled={!newExp.category || !newExp.amount || addExpense.isPending}
@@ -560,8 +588,9 @@ export default function Accounting() {
                                     category: Number(newExp.category),
                                     amount: Number(newExp.amount),
                                     description: newExp.description,
+                                    paid_from_cash: newExp.paid_from_cash,
                                 });
-                                setNewExp({ category: '', amount: '', description: '' });
+                                setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
                             }}
                         >
                             <Plus size={18} /> Ajouter
@@ -580,6 +609,7 @@ export default function Accounting() {
                                 <tr>
                                     <th>Catégorie</th>
                                     <th>Description</th>
+                                    <th>Caisse</th>
                                     <th className="text-right">Montant</th>
                                     <th></th>
                                 </tr>
@@ -591,6 +621,11 @@ export default function Accounting() {
                                     <tr key={e.id}>
                                         <td><span className="badge badge-accent">{e.category_name}</span></td>
                                         <td>{e.description || '—'}</td>
+                                        <td>
+                                            <span className={`badge ${e.paid_from_cash ? 'badge-warning' : 'badge-accent'}`}>
+                                                {e.paid_from_cash ? 'Oui' : 'Non'}
+                                            </span>
+                                        </td>
                                         <td className="text-right">{fmt(Number(e.amount))} DH</td>
                                         <td className="text-right">
                                             <button

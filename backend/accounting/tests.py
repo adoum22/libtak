@@ -114,6 +114,13 @@ class CashRegisterTests(TestCase):
             'category': self.cat.id,
             'amount': '30.00',
         }, format='json')
+        self.client.post('/api/accounting/expenses/', {
+            'year': 2026,
+            'month': 4,
+            'category': self.cat.id,
+            'amount': '70.00',
+            'paid_from_cash': False,
+        }, format='json')
 
         response = self.client.get('/api/accounting/cash-register/')
 

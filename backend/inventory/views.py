@@ -62,7 +62,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 class ProductViewSet(viewsets.ModelViewSet):
     """API pour les produits"""
-    queryset = Product.objects.select_related('category', 'supplier').all()
+    queryset = Product.objects.select_related('category', 'supplier').prefetch_related('cost_layers').all()
     permission_classes = [IsAuthenticated, CanManageInventory]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -560,7 +560,11 @@ class StockMovementViewSet(viewsets.ModelViewSet):
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     """API pour les commandes fournisseurs"""
-    queryset = PurchaseOrder.objects.select_related('supplier', 'created_by').prefetch_related('items__product').all()
+    queryset = (
+        PurchaseOrder.objects.select_related('supplier', 'created_by')
+        .prefetch_related('items__product__cost_layers')
+        .all()
+    )
     permission_classes = [IsAuthenticated, IsAdminRole]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['supplier', 'status']

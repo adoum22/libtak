@@ -19,6 +19,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'monthly', 'category', 'category_name',
             'amount', 'description', 'incurred_on',
+            'paid_from_cash',
             'year', 'month', 'created_at',
         ]
         read_only_fields = ['created_at', 'category_name']

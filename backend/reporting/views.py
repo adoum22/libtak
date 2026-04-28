@@ -608,10 +608,11 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                     'success': bool(log.success) if log else None,
                     'error_message': log.error_message if log else None,
                 } if log else None,
-                'smtp_config': {
-                    'host': getattr(dj_settings, 'EMAIL_HOST', None),
-                    'port': getattr(dj_settings, 'EMAIL_PORT', None),
-                    'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
+            'smtp_config': {
+                'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
+                'host': getattr(dj_settings, 'EMAIL_HOST', None),
+                'port': getattr(dj_settings, 'EMAIL_PORT', None),
+                'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
                     'password_set': bool(getattr(dj_settings, 'EMAIL_HOST_PASSWORD', None)),
                     'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
                     'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
@@ -699,6 +700,7 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                 'daily_time': str(rs.daily_time),
             },
             'smtp_config': {
+                'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
                 'host': getattr(dj_settings, 'EMAIL_HOST', None),
                 'port': getattr(dj_settings, 'EMAIL_PORT', None),
                 'user': getattr(dj_settings, 'EMAIL_HOST_USER', None),
@@ -706,6 +708,12 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                 'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
                 'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
             },
+            'pythonanywhere_task': (
+                'cd ~/libtak/backend && python manage.py send_scheduled_reports'
+            ),
+            'local_backup_sync_task': (
+                'cd ~/libtak/backend && python manage.py local_backup_sync'
+            ),
             'last_daily_log': {
                 'sent_at': last_log.sent_at.isoformat() if last_log else None,
                 'period_start': last_log.period_start.isoformat() if last_log else None,

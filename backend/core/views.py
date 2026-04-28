@@ -16,6 +16,7 @@ from .serializers import (
     UserUpdateSerializer,
     ChangePasswordSerializer,
     AppSettingsSerializer,
+    AuditLogSerializer,
     CustomTokenObtainPairSerializer
 )
 from .models import AppSettings, AuditLog
@@ -146,8 +147,36 @@ class UserViewSet(viewsets.ModelViewSet):
             'message': f'Mot de passe réinitialisé pour {user.username}'
         })
 
+
     @action(detail=True, methods=['post'])
     def toggle_active(self, request, pk=None):
+        """Activer/Desactiver un utilisateur"""
+        user = self.get_object()
+        user.is_active = not user.is_active
+        user.save()
+        return Response({
+            'message': f'Utilisateur {"active" if user.is_active else "desactive"}',
+            'is_active': user.is_active
+        })
+
+
+class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """Journal d'activite admin en lecture seule."""
+    serializer_class = AuditLogSerializer
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get_queryset(self):
+        queryset = AuditLog.objects.select_related('user').all()
+        action_name = self.request.query_params.get('action')
+        model_name = self.request.query_params.get('model')
+        if action_name:
+            queryset = queryset.filter(action=action_name)
+        if model_name:
+            queryset = queryset.filter(model_name__icontains=model_name)
+        return queryset
+
+    # Kept private to avoid exposing a meaningless action on audit log rows.
+    def _legacy_toggle_active(self, request, pk=None):
         """Activer/Désactiver un utilisateur"""
         user = self.get_object()
         user.is_active = not user.is_active

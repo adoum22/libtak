@@ -83,6 +83,11 @@ class Expense(models.Model):
     )
     description = models.CharField(_('Description'), max_length=255, blank=True)
     incurred_on = models.DateField(_('Incurred On'), null=True, blank=True)
+    paid_from_cash = models.BooleanField(
+        _('Paid From Cash Register'),
+        default=True,
+        help_text=_('Si oui, cette depense est soustraite de la caisse physique.'),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

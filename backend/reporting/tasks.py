@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from sales.models import Sale, SaleItem
 from .models import ReportSettings, ReportLog
+from core.models import AppSettings
 
 
 def get_report_data(start_date, end_date):
@@ -166,7 +167,8 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
         'YEARLY': f'Rapport Annuel - {start_date.year}'
     }
 
-    subject = f"[{settings.store_name if hasattr(settings, 'store_name') else 'Librairie'}] {subject_map.get(report_type, 'Rapport')}"
+    store_name = AppSettings.get_settings().store_name or 'Librairie'
+    subject = f"[{store_name}] {subject_map.get(report_type, 'Rapport')}"
 
     # Construction du message HTML
     html_message = f"""
@@ -270,6 +272,18 @@ def send_daily_report():
 
     recipients = report_settings.get_recipients_list()
     if not recipients:
+        ReportLog.objects.create(
+            report_type='DAILY',
+            period_start=timezone.localdate(),
+            period_end=timezone.localdate(),
+            total_sales=0,
+            total_revenue=0,
+            total_profit=0,
+            items_sold=[],
+            recipients='',
+            success=False,
+            error_message='No recipients configured',
+        )
         return "No recipients configured"
 
     today = timezone.now().date()
@@ -449,7 +463,7 @@ def send_low_stock_alert():
 
     # Trouver les produits en stock bas
     low_stock_products = Product.objects.filter(
-        stock__lte=models.F('min_stock'),
+        stock__lte=F('min_stock'),
         active=True
     ).order_by('stock')
 
@@ -580,7 +594,13 @@ def daily_database_backup():
 
         # Log the backup
         ReportLog.objects.create(
-            type='BACKUP',
+            report_type='BACKUP',
+            period_start=now.date(),
+            period_end=now.date(),
+            total_sales=0,
+            total_revenue=0,
+            total_profit=0,
+            items_sold=[],
             recipients='local',
             success=True
         )
@@ -589,7 +609,13 @@ def daily_database_backup():
 
     except Exception as e:
         ReportLog.objects.create(
-            type='BACKUP',
+            report_type='BACKUP',
+            period_start=timezone.localdate(),
+            period_end=timezone.localdate(),
+            total_sales=0,
+            total_revenue=0,
+            total_profit=0,
+            items_sold=[],
             recipients='local',
             success=False,
             error_message=str(e)

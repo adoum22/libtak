@@ -53,6 +53,7 @@ class ProductSerializer(serializers.ModelSerializer):
     is_low_stock = serializers.BooleanField(read_only=True)
     image_url = serializers.SerializerMethodField()
     price_layers = serializers.SerializerMethodField()
+    cost_layers = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -61,7 +62,7 @@ class ProductSerializer(serializers.ModelSerializer):
             'purchase_price', 'sale_price_ht', 'tva', 'price_ttc',
             'profit_margin', 'profit_percentage',
             'stock', 'min_stock', 'stock_value', 'is_low_stock',
-            'price_layers',
+            'price_layers', 'cost_layers',
             'category', 'category_name',
             'supplier', 'supplier_name',
             'image', 'image_url',
@@ -85,6 +86,21 @@ class ProductSerializer(serializers.ModelSerializer):
             {
                 'remaining_quantity': layer.remaining_quantity,
                 'sale_price': layer.sale_price or obj.sale_price_ht,
+            }
+            for layer in obj.cost_layers.filter(
+                remaining_quantity__gt=0,
+            ).order_by('created_at', 'id')[:10]
+        ]
+
+    def get_cost_layers(self, obj):
+        return [
+            {
+                'initial_quantity': layer.initial_quantity,
+                'remaining_quantity': layer.remaining_quantity,
+                'unit_cost': layer.unit_cost,
+                'sale_price': layer.sale_price or obj.sale_price_ht,
+                'created_at': layer.created_at,
+                'note': layer.note,
             }
             for layer in obj.cost_layers.filter(
                 remaining_quantity__gt=0,
@@ -202,14 +218,31 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
         decimal_places=2,
         read_only=True,
     )
+    product_layers = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseOrderItem
         fields = [
             'id', 'product', 'product_name', 'quantity', 'unit_cost',
             'sale_price', 'current_sale_price', 'received_quantity',
+            'product_layers',
         ]
         read_only_fields = ['received_quantity']
+
+    def get_product_layers(self, obj):
+        return [
+            {
+                'initial_quantity': layer.initial_quantity,
+                'remaining_quantity': layer.remaining_quantity,
+                'unit_cost': layer.unit_cost,
+                'sale_price': layer.sale_price or obj.product.sale_price_ht,
+                'created_at': layer.created_at,
+                'note': layer.note,
+            }
+            for layer in obj.product.cost_layers.filter(
+                remaining_quantity__gt=0,
+            ).order_by('created_at', 'id')[:10]
+        ]
 
 
 class PurchaseOrderSerializer(serializers.ModelSerializer):
