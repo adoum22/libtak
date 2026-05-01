@@ -293,6 +293,20 @@ class ProductViewSet(viewsets.ModelViewSet):
         raise ValueError('Format non supporte. Utilise CSV, XLSX ou ZIP.')
 
     def _zip_product_file(self, archive):
+        preferred_names = (
+            'produits.csv',
+            'products.csv',
+            'produits.xlsx',
+            'products.xlsx',
+        )
+        members_by_name = {
+            member.lower().replace('\\', '/').rsplit('/', 1)[-1]: member
+            for member in archive.namelist()
+        }
+        for preferred_name in preferred_names:
+            if preferred_name in members_by_name:
+                return members_by_name[preferred_name]
+
         for member in archive.namelist():
             lower_member = member.lower()
             if lower_member.endswith(('.csv', '.xlsx', '.xlsm')):
@@ -377,6 +391,8 @@ class ProductViewSet(viewsets.ModelViewSet):
                 )
 
             created_count = 0
+            updated_count = 0
+            images_count = 0
             skipped_count = 0
             errors = []
 
@@ -388,8 +404,24 @@ class ProductViewSet(viewsets.ModelViewSet):
                         skipped_count += 1
                         continue
 
-                    if Product.objects.filter(barcode=barcode).exists():
-                        skipped_count += 1
+                    existing_product = Product.objects.filter(barcode=barcode).first()
+                    if existing_product:
+                        image_name, image_content = self._zip_image_for_row(
+                            archive,
+                            image_maps,
+                            barcode,
+                            row.get('image'),
+                        )
+                        if image_name and image_content and not existing_product.image:
+                            existing_product.image.save(
+                                image_name,
+                                image_content,
+                                save=True,
+                            )
+                            updated_count += 1
+                            images_count += 1
+                        else:
+                            skipped_count += 1
                         continue
 
                     category_name = self._import_text(row.get('category'), 'General')
@@ -428,6 +460,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     )
                     if image_name and image_content:
                         product.image.save(image_name, image_content, save=False)
+                        images_count += 1
 
                     product.save()
                     ProductCostLayer.create_layer(
@@ -444,6 +477,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             return Response(
                 {
                     'created': created_count,
+                    'updated': updated_count,
+                    'images': images_count,
                     'skipped': skipped_count,
                     'errors': errors,
                 },

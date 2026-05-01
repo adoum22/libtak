@@ -233,6 +233,7 @@ class InventoryAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['errors'], [])
         self.assertEqual(response.data['created'], 1)
+        self.assertEqual(response.data['images'], 1)
         product = Product.objects.get(barcode='5555555555555')
         self.addCleanup(product.image.delete, False)
         self.assertTrue(product.image.name.endswith('.png'))

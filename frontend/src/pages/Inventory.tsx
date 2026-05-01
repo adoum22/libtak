@@ -197,9 +197,9 @@ export default function Inventory() {
                 headers: { 'Content-Type': 'multipart/form-data' }
             });
         },
-        onSuccess: (data: { data: { created: number; errors: unknown[] } }) => {
+        onSuccess: (data: { data: { created: number; updated?: number; images?: number; skipped?: number; errors: unknown[] } }) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });
-            toast.success(`Import terminé ! ${data.data.created} produits créés. ${data.data.errors.length} erreurs.`);
+            toast.success(`Import termine ! ${data.data.created} produits crees, ${data.data.images || 0} photo(s) importee(s), ${data.data.updated || 0} produit(s) existant(s) complete(s), ${data.data.skipped || 0} ignore(s). ${data.data.errors.length} erreur(s).`);
         },
         onError: (error: unknown) => {
             console.error("Import Error Details:", error);
@@ -311,7 +311,7 @@ export default function Inventory() {
                     <div className="flex gap-2">
                         <input
                             type="file"
-                            accept=".xlsx,.xls,.csv"
+                            accept=".xlsx,.xls,.csv,.zip,application/zip"
                             className="hidden"
                             ref={importExcelFileRef}
                             onChange={(e) => {
@@ -327,7 +327,7 @@ export default function Inventory() {
                             disabled={importMutation.isPending}
                         >
                             <Upload size={20} />
-                            <span>{importMutation.isPending ? t('Loading') : t('ImportExcel')}</span>
+                            <span>{importMutation.isPending ? t('Loading') : 'Importer CSV/ZIP'}</span>
                         </button>
 
                         <button onClick={openCreateModal} className="btn-primary flex items-center gap-2">
