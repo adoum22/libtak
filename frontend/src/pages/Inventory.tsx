@@ -231,10 +231,18 @@ export default function Inventory() {
                 ? `/inventory/products/${data.productId}/cost-layers/${data.id}/`
                 : `/inventory/products/${data.productId}/cost-layers/by-position/${data.index}/`;
             const payload = {
+                layer_id: data.id,
+                index: data.index,
                 unit_cost: normalizeMoney(data.unit_cost) || '0',
                 sale_price: normalizeMoney(data.sale_price) || null,
                 note: data.note || '',
             };
+
+            try {
+                return await client.patch(`/inventory/products/${data.productId}/update-cost-layer/`, payload);
+            } catch (error) {
+                if (getApiErrorStatus(error) !== 404) throw error;
+            }
 
             try {
                 return await client.patch(url, payload);

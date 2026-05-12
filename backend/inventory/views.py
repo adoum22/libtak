@@ -1,11 +1,12 @@
 from rest_framework import viewsets, filters, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import CanManageInventory, CanViewInventory, IsAdminRole, IsAdminOrReadOnly
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.core.files.base import ContentFile
+from django.shortcuts import get_object_or_404
 from django.db.models import DecimalField, Sum, F, Q
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
@@ -32,6 +33,46 @@ from .serializers import (
     InventoryCountCreateSerializer,
     InventoryCountItemSerializer
 )
+
+
+def update_product_cost_layer_for_request(request, product_id):
+    product = get_object_or_404(Product, pk=product_id)
+    layer_id = request.data.get('layer_id') or request.data.get('id')
+
+    if layer_id:
+        try:
+            layer = product.cost_layers.get(id=layer_id)
+        except ProductCostLayer.DoesNotExist:
+            return Response({'detail': 'Lot FIFO introuvable pour ce produit.'}, status=404)
+    else:
+        layers = list(product.cost_layers.filter(
+            remaining_quantity__gt=0,
+        ).order_by('created_at', 'id'))
+        index = int(request.data.get('index', 0) or 0)
+        if index < 0 or index >= len(layers):
+            return Response({'detail': 'Lot FIFO introuvable pour cette position.'}, status=404)
+        layer = layers[index]
+
+    serializer = ProductCostLayerSerializer(
+        layer,
+        data=request.data,
+        partial=True,
+        context={'request': request},
+    )
+    serializer.is_valid(raise_exception=True)
+    serializer.save()
+    product.refresh_from_db()
+    return Response({
+        'layer': serializer.data,
+        'product': ProductSerializer(product, context={'request': request}).data,
+    })
+
+
+@api_view(['PATCH', 'POST'])
+@permission_classes([IsAuthenticated, CanManageInventory])
+def update_product_cost_layer(request, product_id):
+    """Endpoint explicite et stable pour corriger un lot FIFO produit."""
+    return update_product_cost_layer_for_request(request, product_id)
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -192,14 +233,8 @@ class ProductViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path=r'cost-layers/by-position/(?P<position>[0-9]+)')
     def update_cost_layer_by_position(self, request, pk=None, position=None):
         """Fallback: corriger un lot FIFO actif par sa position dans la liste."""
-        product = self.get_object()
-        layers = list(product.cost_layers.filter(
-            remaining_quantity__gt=0,
-        ).order_by('created_at', 'id'))
-        index = int(position or 0)
-        if index < 0 or index >= len(layers):
-            return Response({'detail': 'Lot FIFO introuvable pour cette position.'}, status=404)
-        return self._update_cost_layer(product, layers[index], request)
+        request.data['index'] = position
+        return update_product_cost_layer_for_request(request, pk)
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
