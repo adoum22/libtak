@@ -608,8 +608,9 @@ export default function Inventory() {
                                             <td>
                                                 <div className="flex items-center gap-1">
                                                     <button
-                                                        onClick={() => openEditModal(product)}
+                                                        onClick={() => openProductDetails(product)}
                                                         className="btn-ghost p-2 text-accent hover:bg-accent-light"
+                                                        title="Ouvrir la fiche prix & lots"
                                                     >
                                                         <Edit size={18} />
                                                     </button>
@@ -682,12 +683,12 @@ export default function Inventory() {
                         <form onSubmit={handleSubmit} className="p-6 space-y-8">
 
                             {/* Top Section: Image & Basic Info */}
-                            <div className="flex flex-col md:flex-row gap-8">
+                            <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-8">
                                 {/* Image Upload Column - Reduced Size */}
-                                <div className="w-full md:w-1/4 flex flex-col items-center">
+                                <div className="w-full flex flex-col items-center">
                                     <div
                                         onClick={() => fileInputRef.current?.click()}
-                                        className="w-40 h-40 bg-tertiary rounded-2xl border-2 border-dashed border-border hover:border-accent hover:bg-accent-light/10 transition-colors flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group shrink-0"
+                                        className="w-full max-w-[300px] aspect-square bg-tertiary rounded-2xl border-2 border-dashed border-border hover:border-accent hover:bg-accent-light/10 transition-colors flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group shrink-0"
                                     >
                                         {imagePreview ? (
                                             <>
@@ -812,7 +813,13 @@ export default function Inventory() {
                                                     value={formData.stock}
                                                     onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
                                                     className="font-bold"
+                                                    disabled={!!editingProduct}
                                                 />
+                                                {editingProduct && (
+                                                    <p className="text-[10px] text-muted mt-1">
+                                                        Le stock se corrige via Inventaire, commandes ou caisse pour garder les lots FIFO propres.
+                                                    </p>
+                                                )}
                                             </div>
                                             <div>
                                                 <label className="block text-sm font-medium mb-2 text-danger flex items-center gap-1">
