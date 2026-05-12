@@ -111,10 +111,27 @@ export default function Inventory() {
     });
 
     const isPaginated = productsData && !Array.isArray(productsData);
-    const products: Product[] = isPaginated
+    const rawProducts: Product[] = isPaginated
         ? (productsData as { results?: Product[] }).results ?? []
         : (productsData as Product[]) ?? [];
-    const totalCount: number = isPaginated ? (productsData as { count?: number }).count ?? products.length : products.length;
+    const purchasePriceTarget = purchasePriceFilter.trim() === ''
+        ? null
+        : Number(purchasePriceFilter.replace(',', '.'));
+    const priceMatches = (value: string | number | null | undefined) =>
+        purchasePriceTarget === null || (
+            Number.isFinite(purchasePriceTarget)
+            && Math.abs(Number(value ?? 0) - purchasePriceTarget) < 0.005
+        );
+    const productMatchesPurchasePrice = (product: Product) =>
+        purchasePriceTarget === null
+        || priceMatches(product.purchase_price)
+        || Boolean(product.cost_layers?.some(layer => priceMatches(layer.unit_cost)));
+    const layerMatchesPurchasePrice = (layer: StockLayer) =>
+        purchasePriceTarget !== null && priceMatches(layer.unit_cost);
+    const products = rawProducts.filter(productMatchesPurchasePrice);
+    const totalCount: number = purchasePriceTarget !== null
+        ? products.length
+        : isPaginated ? (productsData as { count?: number }).count ?? products.length : products.length;
     const hasNext: boolean = isPaginated ? Boolean((productsData as { next?: string | null }).next) : false;
     const hasPrev: boolean = isPaginated ? Boolean((productsData as { previous?: string | null }).previous) : false;
     const PAGE_SIZE = 50;
@@ -556,7 +573,11 @@ export default function Inventory() {
                                                                 {product.cost_layers.slice(0, 3).map((layer, idx) => (
                                                                     <span
                                                                         key={`${product.id}-layer-${idx}`}
-                                                                        className="inline-flex items-center gap-1 rounded-md bg-tertiary px-2 py-1 text-[11px] text-muted border border-border"
+                                                                        className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] border ${
+                                                                            layerMatchesPurchasePrice(layer)
+                                                                                ? 'bg-accent-light text-accent border-accent/40'
+                                                                                : 'bg-tertiary text-muted border-border'
+                                                                        }`}
                                                                         title={layer.note || `Lot du ${new Date(layer.created_at).toLocaleDateString('fr-FR')}`}
                                                                     >
                                                                         <strong className="text-primary">Lot {idx + 1}</strong>
@@ -688,7 +709,7 @@ export default function Inventory() {
                                 <div className="w-full flex flex-col items-center">
                                     <div
                                         onClick={() => fileInputRef.current?.click()}
-                                        className="w-full max-w-[300px] aspect-square bg-tertiary rounded-2xl border-2 border-dashed border-border hover:border-accent hover:bg-accent-light/10 transition-colors flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group shrink-0"
+                                        className="w-full max-w-[220px] aspect-square bg-tertiary rounded-2xl border-2 border-dashed border-border hover:border-accent hover:bg-accent-light/10 transition-colors flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group shrink-0"
                                     >
                                         {imagePreview ? (
                                             <>
@@ -935,9 +956,9 @@ export default function Inventory() {
                         </div>
 
                         <div className="overflow-y-auto max-h-[calc(92vh-84px)]">
-                            <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-0">
-                                <div className="bg-tertiary/40 p-6 border-r border-border">
-                                    <div className="aspect-square rounded-2xl bg-secondary overflow-hidden border border-border flex items-center justify-center">
+                            <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-0">
+                                <div className="bg-tertiary/40 p-5 border-r border-border">
+                                    <div className="w-full max-w-[240px] aspect-square mx-auto rounded-2xl bg-secondary overflow-hidden border border-border flex items-center justify-center">
                                         {viewingProduct.image_url ? (
                                             <img
                                                 src={viewingProduct.image_url}
@@ -1082,7 +1103,12 @@ export default function Inventory() {
                                                             note: layer.note || '',
                                                         };
                                                         return (
-                                                            <div key={layer.id} className="p-5 grid grid-cols-1 xl:grid-cols-[160px_1fr_auto] gap-4 items-end">
+                                                            <div
+                                                                key={layer.id}
+                                                                className={`p-5 grid grid-cols-1 xl:grid-cols-[160px_1fr_auto] gap-4 items-end ${
+                                                                    layerMatchesPurchasePrice(layer) ? 'bg-accent-light/40' : ''
+                                                                }`}
+                                                            >
                                                                 <div>
                                                                     <p className="text-xs uppercase font-semibold text-muted">Lot {idx + 1}</p>
                                                                     <p className="font-bold">
