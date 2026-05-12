@@ -95,6 +95,7 @@ class ProductSerializer(serializers.ModelSerializer):
     def get_cost_layers(self, obj):
         return [
             {
+                'id': layer.id,
                 'initial_quantity': layer.initial_quantity,
                 'remaining_quantity': layer.remaining_quantity,
                 'unit_cost': layer.unit_cost,
@@ -105,6 +106,22 @@ class ProductSerializer(serializers.ModelSerializer):
             for layer in obj.cost_layers.filter(
                 remaining_quantity__gt=0,
             ).order_by('created_at', 'id')[:10]
+        ]
+
+
+class ProductCostLayerSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta:
+        model = ProductCostLayer
+        fields = [
+            'id', 'product', 'product_name', 'initial_quantity',
+            'remaining_quantity', 'unit_cost', 'sale_price', 'note',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id', 'product', 'product_name', 'initial_quantity',
+            'remaining_quantity', 'created_at',
         ]
 
 

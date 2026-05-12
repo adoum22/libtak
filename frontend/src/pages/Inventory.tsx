@@ -43,6 +43,7 @@ interface Product {
 }
 
 interface StockLayer {
+    id: number;
     initial_quantity: number;
     remaining_quantity: number;
     unit_cost: string | number;
@@ -68,10 +69,14 @@ export default function Inventory() {
     const toast = useToast();
     const { t } = useTranslation();
     const [search, setSearch] = useState('');
+    const [purchasePriceFilter, setPurchasePriceFilter] = useState('');
     const [stockFilter, setStockFilter] = useState<StockFilter>('all');
     const [page, setPage] = useState(1);
     const [showModal, setShowModal] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+    const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
+    const [priceDraft, setPriceDraft] = useState({ purchase_price: '', sale_price_ht: '' });
+    const [layerDrafts, setLayerDrafts] = useState<Record<number, { unit_cost: string; sale_price: string; note: string }>>({});
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,10 +98,11 @@ export default function Inventory() {
     });
 
     const { data: productsData, isLoading, error } = useQuery<{ results?: Product[]; count?: number; next?: string | null; previous?: string | null } | Product[]>({
-        queryKey: ['products', search, stockFilter, page],
+        queryKey: ['products', search, stockFilter, purchasePriceFilter, page],
         queryFn: () => {
             const params = new URLSearchParams();
             if (search) params.set('search', search);
+            if (purchasePriceFilter) params.set('purchase_price', purchasePriceFilter.replace(',', '.'));
             if (stockFilter === 'low') params.set('low_stock', 'true');
             if (stockFilter === 'out') params.set('stock_status', 'out');
             params.set('page', String(page));
@@ -118,6 +124,7 @@ export default function Inventory() {
     // Reset à la page 1 quand on change de filtre/recherche
     const setStockFilterReset = (f: StockFilter) => { setStockFilter(f); setPage(1); };
     const setSearchReset = (s: string) => { setSearch(s); setPage(1); };
+    const setPurchasePriceFilterReset = (s: string) => { setPurchasePriceFilter(s); setPage(1); };
 
     const { data: categoriesData } = useQuery({
         queryKey: ['categories'],
@@ -179,6 +186,50 @@ export default function Inventory() {
             console.error("Update Error:", error);
             const detail = getApiErrorMessage(error);
             toast.error(`Erreur lors de la modification : ${detail}`);
+        }
+    });
+
+    const priceMutation = useMutation({
+        mutationFn: (data: { id: number; purchase_price: string; sale_price_ht: string }) =>
+            client.patch(`/inventory/products/${data.id}/`, {
+                purchase_price: data.purchase_price || '0',
+                sale_price_ht: data.sale_price_ht || '0',
+            }),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+            setViewingProduct(response.data);
+            openProductDetails(response.data);
+            toast.success('Prix du produit mis a jour');
+        },
+        onError: (error: unknown) => {
+            toast.error('Erreur prix produit : ' + getApiErrorMessage(error));
+        }
+    });
+
+    const layerMutation = useMutation({
+        mutationFn: (data: { id: number; unit_cost: string; sale_price: string; note: string }) =>
+            client.patch(`/inventory/product-cost-layers/${data.id}/`, {
+                unit_cost: data.unit_cost || '0',
+                sale_price: data.sale_price || null,
+                note: data.note || '',
+            }),
+        onSuccess: (_response, variables) => {
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+            setViewingProduct(prev => {
+                if (!prev?.cost_layers) return prev;
+                return {
+                    ...prev,
+                    cost_layers: prev.cost_layers.map(layer =>
+                        layer.id === variables.id
+                            ? { ...layer, unit_cost: variables.unit_cost, sale_price: variables.sale_price, note: variables.note }
+                            : layer
+                    ),
+                };
+            });
+            toast.success('Lot FIFO mis a jour');
+        },
+        onError: (error: unknown) => {
+            toast.error('Erreur lot FIFO : ' + getApiErrorMessage(error));
         }
     });
 
@@ -255,6 +306,31 @@ export default function Inventory() {
             supplier: product.supplier?.toString() || ''
         });
         setShowModal(true);
+    };
+
+    const openProductDetails = (product: Product) => {
+        setViewingProduct(product);
+        setPriceDraft({
+            purchase_price: product.purchase_price?.toString() || '0',
+            sale_price_ht: product.sale_price_ht?.toString() || '0',
+        });
+        const drafts: Record<number, { unit_cost: string; sale_price: string; note: string }> = {};
+        product.cost_layers?.forEach((layer) => {
+            drafts[layer.id] = {
+                unit_cost: Number(layer.unit_cost).toString(),
+                sale_price: Number(layer.sale_price).toString(),
+                note: layer.note || '',
+            };
+        });
+        setLayerDrafts(drafts);
+    };
+
+    const openAdjacentProduct = (direction: -1 | 1) => {
+        if (!viewingProduct || products.length === 0) return;
+        const currentIndex = products.findIndex(product => product.id === viewingProduct.id);
+        if (currentIndex === -1) return;
+        const nextProduct = products[currentIndex + direction];
+        if (nextProduct) openProductDetails(nextProduct);
     };
 
     const closeModal = () => {
@@ -350,6 +426,22 @@ export default function Inventory() {
                         onChange={(e) => setSearchReset(e.target.value)}
                     />
                 </div>
+                {isAdmin && (
+                    <div className="relative w-full sm:w-52">
+                        <Banknote className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
+                        <input
+                            type="number"
+                            step="0.01"
+                            inputMode="decimal"
+                            placeholder="Prix achat"
+                            className="pr-10"
+                            style={{ paddingLeft: '2.75rem' }}
+                            value={purchasePriceFilter}
+                            onChange={(e) => setPurchasePriceFilterReset(e.target.value)}
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted">DH</span>
+                    </div>
+                )}
                 <div className="flex bg-tertiary rounded-lg p-1">
                     <button
                         type="button"
@@ -449,7 +541,14 @@ export default function Inventory() {
                                                     )}
                                                 </div>
                                                 <div>
-                                                    <p className="font-medium">{product.name}</p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => openProductDetails(product)}
+                                                        className="font-medium text-left hover:text-accent transition-colors"
+                                                        title="Ouvrir la fiche produit"
+                                                    >
+                                                        {product.name}
+                                                    </button>
                                                     {isAdmin && product.cost_layers && product.cost_layers.length > 0 && (
                                                         <div className="mt-2 space-y-1">
                                                             <p className="text-[10px] uppercase font-semibold text-muted">Lots FIFO</p>
@@ -789,6 +888,294 @@ export default function Inventory() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Product Details Modal */}
+            {viewingProduct && (
+                <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setViewingProduct(null)} />
+                    <div className="relative card w-full max-w-6xl max-h-[92vh] overflow-hidden animate-slideUp p-0">
+                        <div className="p-5 border-b flex items-center justify-between bg-secondary">
+                            <div>
+                                <h2 className="text-xl font-bold">{viewingProduct.name}</h2>
+                                <p className="text-sm text-muted font-mono">{viewingProduct.barcode}</p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => openAdjacentProduct(-1)}
+                                    disabled={products.findIndex(product => product.id === viewingProduct.id) <= 0}
+                                    className="btn-ghost btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                                    aria-label="Produit precedent"
+                                >
+                                    <ChevronLeft size={20} />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => openAdjacentProduct(1)}
+                                    disabled={products.findIndex(product => product.id === viewingProduct.id) === -1 || products.findIndex(product => product.id === viewingProduct.id) >= products.length - 1}
+                                    className="btn-ghost btn-icon disabled:opacity-30 disabled:cursor-not-allowed"
+                                    aria-label="Produit suivant"
+                                >
+                                    <ChevronRight size={20} />
+                                </button>
+                                <button onClick={() => setViewingProduct(null)} className="btn-ghost p-2">
+                                    <X size={24} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="overflow-y-auto max-h-[calc(92vh-84px)]">
+                            <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-0">
+                                <div className="bg-tertiary/40 p-6 border-r border-border">
+                                    <div className="aspect-square rounded-2xl bg-secondary overflow-hidden border border-border flex items-center justify-center">
+                                        {viewingProduct.image_url ? (
+                                            <img
+                                                src={viewingProduct.image_url}
+                                                alt={viewingProduct.name}
+                                                className="w-full h-full object-contain"
+                                            />
+                                        ) : (
+                                            <div className="text-center text-muted">
+                                                <Package size={64} className="mx-auto mb-3" />
+                                                <p className="font-medium">Aucune photo</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {canManageStock && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                handleListUploadClick(viewingProduct.id);
+                                                setViewingProduct(null);
+                                            }}
+                                            className="btn-secondary w-full mt-4 flex items-center justify-center gap-2"
+                                        >
+                                            <Upload size={18} />
+                                            Changer la photo
+                                        </button>
+                                    )}
+                                </div>
+
+                                <div className="p-6 space-y-6">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                        <div className="rounded-xl border border-border p-4 bg-secondary">
+                                            <p className="text-xs uppercase font-semibold text-muted">Stock</p>
+                                            <p className="text-2xl font-bold">{viewingProduct.stock}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-border p-4 bg-secondary">
+                                            <p className="text-xs uppercase font-semibold text-muted">Seuil</p>
+                                            <p className="text-2xl font-bold">{viewingProduct.min_stock}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-border p-4 bg-secondary">
+                                            <p className="text-xs uppercase font-semibold text-muted">Categorie</p>
+                                            <p className="font-bold truncate">{viewingProduct.category_name || '-'}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-border p-4 bg-secondary">
+                                            <p className="text-xs uppercase font-semibold text-muted">Fournisseur</p>
+                                            <p className="font-bold truncate">{viewingProduct.supplier_name || '-'}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+                                        {isAdmin && (
+                                            <div className="rounded-2xl border border-border p-5 bg-secondary">
+                                                <h3 className="flex items-center gap-2 font-bold mb-4">
+                                                    <Banknote size={20} />
+                                                    Prix par defaut du produit
+                                                </h3>
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-sm font-medium mb-2">Prix achat</label>
+                                                        <div className="relative">
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                value={priceDraft.purchase_price}
+                                                                onChange={(e) => setPriceDraft({ ...priceDraft, purchase_price: e.target.value })}
+                                                            />
+                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-sm font-medium mb-2">Prix vente</label>
+                                                        <div className="relative">
+                                                            <input
+                                                                type="number"
+                                                                step="0.01"
+                                                                value={priceDraft.sale_price_ht}
+                                                                onChange={(e) => setPriceDraft({ ...priceDraft, sale_price_ht: e.target.value })}
+                                                            />
+                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => priceMutation.mutate({
+                                                        id: viewingProduct.id,
+                                                        purchase_price: priceDraft.purchase_price,
+                                                        sale_price_ht: priceDraft.sale_price_ht,
+                                                    })}
+                                                    disabled={priceMutation.isPending}
+                                                    className="btn-primary mt-4 flex items-center gap-2"
+                                                >
+                                                    <Save size={18} />
+                                                    Enregistrer les prix du produit
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        <div className="rounded-2xl border border-border p-5 bg-secondary">
+                                            <h3 className="font-bold mb-4">Informations</h3>
+                                            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                                                <div>
+                                                    <dt className="text-muted">Prix achat affiche</dt>
+                                                    <dd className="font-bold">{Number(viewingProduct.purchase_price || 0).toFixed(2)} DH</dd>
+                                                </div>
+                                                <div>
+                                                    <dt className="text-muted">Prix vente affiche</dt>
+                                                    <dd className="font-bold">{Number(viewingProduct.price_ttc || 0).toFixed(2)} DH</dd>
+                                                </div>
+                                                {isAdmin && (
+                                                    <div>
+                                                        <dt className="text-muted">Marge par defaut</dt>
+                                                        <dd className={viewingProduct.profit_margin > 0 ? 'font-bold text-success' : 'font-bold text-danger'}>
+                                                            {Number(viewingProduct.profit_margin || 0).toFixed(2)} DH
+                                                        </dd>
+                                                    </div>
+                                                )}
+                                                <div>
+                                                    <dt className="text-muted">Statut</dt>
+                                                    <dd className="font-bold">{viewingProduct.is_low_stock ? 'Stock bas' : 'Stock OK'}</dd>
+                                                </div>
+                                            </dl>
+                                            {viewingProduct.description && (
+                                                <p className="text-sm text-muted mt-4 whitespace-pre-wrap">{viewingProduct.description}</p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {isAdmin && (
+                                        <div className="rounded-2xl border border-border bg-secondary overflow-hidden">
+                                            <div className="p-5 border-b">
+                                                <h3 className="font-bold">Lots FIFO actifs</h3>
+                                                <p className="text-sm text-muted">
+                                                    Chaque lot garde son propre prix d'achat et prix de vente. La quantite est en lecture seule pour proteger le stock.
+                                                </p>
+                                            </div>
+                                            {viewingProduct.cost_layers && viewingProduct.cost_layers.length > 0 ? (
+                                                <div className="divide-y divide-border">
+                                                    {viewingProduct.cost_layers.map((layer, idx) => {
+                                                        const draft = layerDrafts[layer.id] || {
+                                                            unit_cost: Number(layer.unit_cost).toString(),
+                                                            sale_price: Number(layer.sale_price).toString(),
+                                                            note: layer.note || '',
+                                                        };
+                                                        return (
+                                                            <div key={layer.id} className="p-5 grid grid-cols-1 xl:grid-cols-[160px_1fr_auto] gap-4 items-end">
+                                                                <div>
+                                                                    <p className="text-xs uppercase font-semibold text-muted">Lot {idx + 1}</p>
+                                                                    <p className="font-bold">
+                                                                        {layer.remaining_quantity}/{layer.initial_quantity} restant
+                                                                    </p>
+                                                                    <p className="text-xs text-muted">
+                                                                        {new Date(layer.created_at).toLocaleDateString('fr-FR')}
+                                                                    </p>
+                                                                </div>
+                                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                                    <div>
+                                                                        <label className="block text-sm font-medium mb-2">Prix achat lot</label>
+                                                                        <div className="relative">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                value={draft.unit_cost}
+                                                                                onChange={(e) => setLayerDrafts({
+                                                                                    ...layerDrafts,
+                                                                                    [layer.id]: { ...draft, unit_cost: e.target.value },
+                                                                                })}
+                                                                            />
+                                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div>
+                                                                        <label className="block text-sm font-medium mb-2">Prix vente lot</label>
+                                                                        <div className="relative">
+                                                                            <input
+                                                                                type="number"
+                                                                                step="0.01"
+                                                                                value={draft.sale_price}
+                                                                                onChange={(e) => setLayerDrafts({
+                                                                                    ...layerDrafts,
+                                                                                    [layer.id]: { ...draft, sale_price: e.target.value },
+                                                                                })}
+                                                                            />
+                                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div>
+                                                                        <label className="block text-sm font-medium mb-2">Note</label>
+                                                                        <input
+                                                                            type="text"
+                                                                            value={draft.note}
+                                                                            onChange={(e) => setLayerDrafts({
+                                                                                ...layerDrafts,
+                                                                                [layer.id]: { ...draft, note: e.target.value },
+                                                                            })}
+                                                                            placeholder="Ex: corrige inventaire"
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => layerMutation.mutate({
+                                                                        id: layer.id,
+                                                                        unit_cost: draft.unit_cost,
+                                                                        sale_price: draft.sale_price,
+                                                                        note: draft.note,
+                                                                    })}
+                                                                    disabled={layerMutation.isPending}
+                                                                    className="btn-secondary flex items-center gap-2 justify-center"
+                                                                >
+                                                                    <Save size={18} />
+                                                                    Lot
+                                                                </button>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="p-6 text-center text-muted">
+                                                    Aucun lot actif pour ce produit.
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    <div className="flex justify-end gap-3 pt-2">
+                                        {canManageStock && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setViewingProduct(null);
+                                                    openEditModal(viewingProduct);
+                                                }}
+                                                className="btn-secondary flex items-center gap-2"
+                                            >
+                                                <Edit size={18} />
+                                                Modifier toute la fiche
+                                            </button>
+                                        )}
+                                        <button type="button" onClick={() => setViewingProduct(null)} className="btn-primary">
+                                            Fermer
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

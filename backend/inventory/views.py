@@ -6,7 +6,7 @@ from core.permissions import CanManageInventory, CanViewInventory, IsAdminRole, 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.core.files.base import ContentFile
-from django.db.models import DecimalField, Sum, F
+from django.db.models import DecimalField, Sum, F, Q
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, StringIO
@@ -21,6 +21,7 @@ from .models import Category, Product, ProductCostLayer, Supplier, StockMovement
 from .serializers import (
     CategorySerializer,
     ProductSerializer,
+    ProductCostLayerSerializer,
     ProductCreateSerializer,
     SupplierSerializer,
     StockMovementSerializer,
@@ -71,6 +72,15 @@ class ProductViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'stock', 'sale_price_ht', 'created_at']
     ordering = ['name']
 
+    def _parse_decimal_param(self, name):
+        value = self.request.query_params.get(name)
+        if value in (None, ''):
+            return None
+        try:
+            return Decimal(str(value).replace(',', '.'))
+        except (InvalidOperation, TypeError):
+            return None
+
     def get_serializer_class(self):
         if self.action == 'create':
             return ProductCreateSerializer
@@ -95,6 +105,37 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(stock__lte=0)
         elif stock_status == 'low':
             queryset = queryset.filter(stock__lte=F('min_stock'), stock__gt=0)
+
+        purchase_price = self._parse_decimal_param('purchase_price')
+        purchase_price_min = self._parse_decimal_param('purchase_price_min')
+        purchase_price_max = self._parse_decimal_param('purchase_price_max')
+
+        # Recherche prix achat sur le prix par defaut du produit OU sur les lots
+        # FIFO actifs. Utile pour retrouver les produits inventaires a 0 / 1000 DH.
+        if purchase_price is not None:
+            queryset = queryset.filter(
+                Q(purchase_price=purchase_price)
+                | Q(
+                    cost_layers__remaining_quantity__gt=0,
+                    cost_layers__unit_cost=purchase_price,
+                )
+            ).distinct()
+        if purchase_price_min is not None:
+            queryset = queryset.filter(
+                Q(purchase_price__gte=purchase_price_min)
+                | Q(
+                    cost_layers__remaining_quantity__gt=0,
+                    cost_layers__unit_cost__gte=purchase_price_min,
+                )
+            ).distinct()
+        if purchase_price_max is not None:
+            queryset = queryset.filter(
+                Q(purchase_price__lte=purchase_price_max)
+                | Q(
+                    cost_layers__remaining_quantity__gt=0,
+                    cost_layers__unit_cost__lte=purchase_price_max,
+                )
+            ).distinct()
 
         return queryset
 
@@ -591,6 +632,24 @@ class StockMovementViewSet(viewsets.ModelViewSet):
             'total_success': len(results),
             'total_errors': len(errors)
         })
+
+
+class ProductCostLayerViewSet(viewsets.ModelViewSet):
+    """API pour consulter et corriger les lots FIFO actifs."""
+    queryset = ProductCostLayer.objects.select_related('product').all()
+    serializer_class = ProductCostLayerSerializer
+    permission_classes = [IsAuthenticated, CanManageInventory]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['product']
+    ordering_fields = ['created_at', 'unit_cost', 'sale_price']
+    ordering = ['created_at', 'id']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        active_only = self.request.query_params.get('active_only')
+        if active_only and active_only.lower() == 'true':
+            queryset = queryset.filter(remaining_quantity__gt=0)
+        return queryset
 
 
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
