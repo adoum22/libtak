@@ -226,15 +226,34 @@ export default function Inventory() {
     const normalizeMoney = (value: string) => value.trim().replace(',', '.');
 
     const layerMutation = useMutation({
-        mutationFn: (data: { productId: number; id?: number; index: number; unit_cost: string; sale_price: string; note: string }) => {
+        mutationFn: async (data: { productId: number; id?: number; index: number; unit_cost: string; sale_price: string; note: string }) => {
             const url = data.id
                 ? `/inventory/products/${data.productId}/cost-layers/${data.id}/`
                 : `/inventory/products/${data.productId}/cost-layers/by-position/${data.index}/`;
-            return client.patch(url, {
+            const payload = {
                 unit_cost: normalizeMoney(data.unit_cost) || '0',
                 sale_price: normalizeMoney(data.sale_price) || null,
                 note: data.note || '',
-            });
+            };
+
+            try {
+                return await client.patch(url, payload);
+            } catch (error) {
+                if (getApiErrorStatus(error) !== 404) throw error;
+            }
+
+            if (data.id) {
+                try {
+                    return await client.patch(`/inventory/product-cost-layers/${data.id}/`, payload);
+                } catch (error) {
+                    if (getApiErrorStatus(error) !== 404) throw error;
+                }
+            }
+
+            return client.patch(
+                `/inventory/products/${data.productId}/cost-layers/by-position/${data.index}/`,
+                payload,
+            );
         },
         onSuccess: (_response, variables) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });
