@@ -245,6 +245,66 @@ class InventoryAPITest(APITestCase):
         self.assertEqual(layer.sale_price, Decimal('7.00'))
         self.assertEqual(layer.remaining_quantity, 3)
 
+    def test_update_product_cost_layer_through_product_endpoint(self):
+        product = Product.objects.create(
+            name='Lot editable produit',
+            barcode='4444444444443',
+            purchase_price=Decimal('0.00'),
+            sale_price_ht=Decimal('8.00'),
+            stock=3,
+        )
+        layer = ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('0.00'),
+            sale_price=Decimal('8.00'),
+            initial_quantity=3,
+            remaining_quantity=3,
+        )
+
+        response = self.client.patch(
+            f'/api/inventory/products/{product.id}/cost-layers/{layer.id}/',
+            {'unit_cost': '3.50', 'sale_price': '7.00'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        layer.refresh_from_db()
+        self.assertEqual(layer.unit_cost, Decimal('3.50'))
+        self.assertEqual(response.data['product']['id'], product.id)
+
+    def test_update_product_cost_layer_by_position(self):
+        product = Product.objects.create(
+            name='Lot editable position',
+            barcode='4444444444444',
+            purchase_price=Decimal('0.00'),
+            sale_price_ht=Decimal('8.00'),
+            stock=3,
+        )
+        first_layer = ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('0.00'),
+            sale_price=Decimal('8.00'),
+            initial_quantity=1,
+            remaining_quantity=1,
+        )
+        ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('2.00'),
+            sale_price=Decimal('8.00'),
+            initial_quantity=2,
+            remaining_quantity=2,
+        )
+
+        response = self.client.patch(
+            f'/api/inventory/products/{product.id}/cost-layers/by-position/0/',
+            {'unit_cost': '1.25'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        first_layer.refresh_from_db()
+        self.assertEqual(first_layer.unit_cost, Decimal('1.25'))
+
     def test_product_stats(self):
         """Test endpoint stats produits"""
         response = self.client.get('/api/inventory/products/stats/')

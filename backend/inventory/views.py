@@ -164,6 +164,43 @@ class ProductViewSet(viewsets.ModelViewSet):
         elif delta < 0:
             ProductCostLayer.consume_fifo(product, abs(delta))
 
+    def _update_cost_layer(self, product, layer, request):
+        serializer = ProductCostLayerSerializer(
+            layer,
+            data=request.data,
+            partial=True,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        product.refresh_from_db()
+        return Response({
+            'layer': serializer.data,
+            'product': ProductSerializer(product, context={'request': request}).data,
+        })
+
+    @action(detail=True, methods=['patch'], url_path=r'cost-layers/(?P<layer_id>[^/.]+)')
+    def update_cost_layer(self, request, pk=None, layer_id=None):
+        """Corriger un lot FIFO actif appartenant au produit."""
+        product = self.get_object()
+        try:
+            layer = product.cost_layers.get(id=layer_id)
+        except ProductCostLayer.DoesNotExist:
+            return Response({'detail': 'Lot FIFO introuvable pour ce produit.'}, status=404)
+        return self._update_cost_layer(product, layer, request)
+
+    @action(detail=True, methods=['patch'], url_path=r'cost-layers/by-position/(?P<position>[0-9]+)')
+    def update_cost_layer_by_position(self, request, pk=None, position=None):
+        """Fallback: corriger un lot FIFO actif par sa position dans la liste."""
+        product = self.get_object()
+        layers = list(product.cost_layers.filter(
+            remaining_quantity__gt=0,
+        ).order_by('created_at', 'id'))
+        index = int(position or 0)
+        if index < 0 or index >= len(layers):
+            return Response({'detail': 'Lot FIFO introuvable pour cette position.'}, status=404)
+        return self._update_cost_layer(product, layers[index], request)
+
     @action(detail=False, methods=['get'])
     def stats(self, request):
         """Statistiques globales des produits"""

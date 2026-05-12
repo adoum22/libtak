@@ -223,22 +223,28 @@ export default function Inventory() {
         }
     });
 
+    const normalizeMoney = (value: string) => value.trim().replace(',', '.');
+
     const layerMutation = useMutation({
-        mutationFn: (data: { id: number; unit_cost: string; sale_price: string; note: string }) =>
-            client.patch(`/inventory/product-cost-layers/${data.id}/`, {
-                unit_cost: data.unit_cost || '0',
-                sale_price: data.sale_price || null,
+        mutationFn: (data: { productId: number; id?: number; index: number; unit_cost: string; sale_price: string; note: string }) => {
+            const url = data.id
+                ? `/inventory/products/${data.productId}/cost-layers/${data.id}/`
+                : `/inventory/products/${data.productId}/cost-layers/by-position/${data.index}/`;
+            return client.patch(url, {
+                unit_cost: normalizeMoney(data.unit_cost) || '0',
+                sale_price: normalizeMoney(data.sale_price) || null,
                 note: data.note || '',
-            }),
+            });
+        },
         onSuccess: (_response, variables) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });
             setViewingProduct(prev => {
                 if (!prev?.cost_layers) return prev;
                 return {
                     ...prev,
-                    cost_layers: prev.cost_layers.map(layer =>
-                        layer.id === variables.id
-                            ? { ...layer, unit_cost: variables.unit_cost, sale_price: variables.sale_price, note: variables.note }
+                    cost_layers: prev.cost_layers.map((layer, index) =>
+                        (variables.id ? layer.id === variables.id : index === variables.index)
+                            ? { ...layer, unit_cost: normalizeMoney(variables.unit_cost), sale_price: normalizeMoney(variables.sale_price), note: variables.note }
                             : layer
                     ),
                 };
@@ -246,7 +252,7 @@ export default function Inventory() {
             toast.success('Lot FIFO mis a jour');
         },
         onError: (error: unknown) => {
-            toast.error('Erreur lot FIFO : ' + getApiErrorMessage(error));
+            toast.error('Erreur lot FIFO : ' + getApiErrorMessage(error, 'Verifie que PythonAnywhere est bien a jour puis recharge la page.'));
         }
     });
 
@@ -1165,7 +1171,9 @@ export default function Inventory() {
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => layerMutation.mutate({
+                                                                        productId: viewingProduct.id,
                                                                         id: layer.id,
+                                                                        index: idx,
                                                                         unit_cost: draft.unit_cost,
                                                                         sale_price: draft.sale_price,
                                                                         note: draft.note,
