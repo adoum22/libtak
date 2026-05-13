@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage, getApiErrorStatus } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
+import { normalizeDecimalInput } from '../utils/numberInput';
 import {
     Plus,
     Search,
@@ -141,7 +142,7 @@ export default function Inventory() {
     // Reset à la page 1 quand on change de filtre/recherche
     const setStockFilterReset = (f: StockFilter) => { setStockFilter(f); setPage(1); };
     const setSearchReset = (s: string) => { setSearch(s); setPage(1); };
-    const setPurchasePriceFilterReset = (s: string) => { setPurchasePriceFilter(s); setPage(1); };
+    const setPurchasePriceFilterReset = (s: string) => { setPurchasePriceFilter(normalizeDecimalInput(s)); setPage(1); };
 
     const { data: categoriesData } = useQuery({
         queryKey: ['categories'],
@@ -162,8 +163,8 @@ export default function Inventory() {
         payload.append('name', data.name);
         payload.append('barcode', data.barcode);
         payload.append('description', data.description);
-        payload.append('purchase_price', data.purchase_price || '0');
-        payload.append('sale_price_ht', data.sale_price_ht);
+        payload.append('purchase_price', normalizeMoney(data.purchase_price) || '0');
+        payload.append('sale_price_ht', normalizeMoney(data.sale_price_ht));
         payload.append('tva', '0');
         payload.append('stock', data.stock);
         payload.append('min_stock', data.min_stock);
@@ -223,7 +224,7 @@ export default function Inventory() {
         }
     });
 
-    const normalizeMoney = (value: string) => value.trim().replace(',', '.');
+    const normalizeMoney = (value: string) => normalizeDecimalInput(value).trim();
 
     const layerMutation = useMutation({
         mutationFn: async (data: { productId: number; id?: number; index: number; unit_cost: string; sale_price: string; note: string }) => {
@@ -484,7 +485,7 @@ export default function Inventory() {
                     <div className="relative w-full sm:w-52">
                         <Banknote className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                         <input
-                            type="number"
+                            type="text"
                             step="0.01"
                             inputMode="decimal"
                             placeholder="Prix achat"
@@ -909,10 +910,10 @@ export default function Inventory() {
                                                     <label className="block text-sm font-medium mb-2">Prix Achat</label>
                                                     <div className="relative">
                                                         <input
-                                                            type="number"
+                                                            type="text"
                                                             step="0.01"
                                                             value={formData.purchase_price}
-                                                            onChange={(e) => setFormData({ ...formData, purchase_price: e.target.value })}
+                                                            onChange={(e) => setFormData({ ...formData, purchase_price: normalizeDecimalInput(e.target.value) })}
                                                         />
                                                         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
                                                     </div>
@@ -924,11 +925,11 @@ export default function Inventory() {
                                             <label className="block text-sm font-bold mb-2">Prix de Vente *</label>
                                             <div className="relative">
                                                 <input
-                                                    type="number"
+                                                    type="text"
                                                     step="0.01"
                                                     className="text-lg font-bold border-accent"
                                                     value={formData.sale_price_ht}
-                                                    onChange={(e) => setFormData({ ...formData, sale_price_ht: e.target.value })}
+                                                    onChange={(e) => setFormData({ ...formData, sale_price_ht: normalizeDecimalInput(e.target.value) })}
                                                     required
                                                 />
                                                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted font-bold">DH</span>
@@ -1056,10 +1057,10 @@ export default function Inventory() {
                                                         <label className="block text-sm font-medium mb-2">Prix achat</label>
                                                         <div className="relative">
                                                             <input
-                                                                type="number"
+                                                                 type="text"
                                                                 step="0.01"
                                                                 value={priceDraft.purchase_price}
-                                                                onChange={(e) => setPriceDraft({ ...priceDraft, purchase_price: e.target.value })}
+                                                                onChange={(e) => setPriceDraft({ ...priceDraft, purchase_price: normalizeDecimalInput(e.target.value) })}
                                                             />
                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
                                                         </div>
@@ -1068,10 +1069,10 @@ export default function Inventory() {
                                                         <label className="block text-sm font-medium mb-2">Prix vente</label>
                                                         <div className="relative">
                                                             <input
-                                                                type="number"
+                                                                 type="text"
                                                                 step="0.01"
                                                                 value={priceDraft.sale_price_ht}
-                                                                onChange={(e) => setPriceDraft({ ...priceDraft, sale_price_ht: e.target.value })}
+                                                                onChange={(e) => setPriceDraft({ ...priceDraft, sale_price_ht: normalizeDecimalInput(e.target.value) })}
                                                             />
                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
                                                         </div>
@@ -1160,12 +1161,12 @@ export default function Inventory() {
                                                                         <label className="block text-sm font-medium mb-2">Prix achat lot</label>
                                                                         <div className="relative">
                                                                             <input
-                                                                                type="number"
+                                                                                 type="text"
                                                                                 step="0.01"
                                                                                 value={draft.unit_cost}
                                                                                 onChange={(e) => setLayerDrafts({
                                                                                     ...layerDrafts,
-                                                                                    [layer.id]: { ...draft, unit_cost: e.target.value },
+                                                                                    [layer.id]: { ...draft, unit_cost: normalizeDecimalInput(e.target.value) },
                                                                                 })}
                                                                             />
                                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
@@ -1175,12 +1176,12 @@ export default function Inventory() {
                                                                         <label className="block text-sm font-medium mb-2">Prix vente lot</label>
                                                                         <div className="relative">
                                                                             <input
-                                                                                type="number"
+                                                                                 type="text"
                                                                                 step="0.01"
                                                                                 value={draft.sale_price}
                                                                                 onChange={(e) => setLayerDrafts({
                                                                                     ...layerDrafts,
-                                                                                    [layer.id]: { ...draft, sale_price: e.target.value },
+                                                                                    [layer.id]: { ...draft, sale_price: normalizeDecimalInput(e.target.value) },
                                                                                 })}
                                                                             />
                                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>

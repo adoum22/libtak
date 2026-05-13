@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import { useToast } from '../components/ToastContext';
+import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
 import {
     Search,
     Plus,
@@ -58,9 +59,7 @@ export default function POS() {
 
     const searchInputRef = useRef<HTMLInputElement>(null);
 
-    const parseMoneyInput = (value: string) => (
-        Number.parseFloat(value.replace(',', '.')) || 0
-    );
+    const parseMoneyInput = (value: string) => parseDecimalInput(value) || 0;
 
     const getLineTotal = (product: Product, quantity: number) => {
         let remaining = quantity;
@@ -320,7 +319,7 @@ export default function POS() {
                                         className="money-input text-2xl font-bold py-3 pl-4 pr-3 w-full"
                                         placeholder="0.00"
                                         value={amountGiven}
-                                        onChange={e => setAmountGiven(e.target.value)}
+                                        onChange={e => setAmountGiven(normalizeDecimalInput(e.target.value))}
                                         onKeyDown={e => {
                                             if (e.key === 'Enter' && changeAmount >= 0) handleCheckout();
                                         }}
@@ -578,7 +577,7 @@ export default function POS() {
                                         className="money-input w-full min-w-0 px-3 py-2 text-right font-bold"
                                         placeholder="0.00"
                                         value={discountInput}
-                                        onChange={(e) => setDiscountInput(e.target.value)}
+                                        onChange={(e) => setDiscountInput(normalizeDecimalInput(e.target.value))}
                                     />
                                     <span className="px-3 flex items-center text-xs font-bold text-muted border-l border-border">DH</span>
                                 </div>

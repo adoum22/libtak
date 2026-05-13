@@ -3,6 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { X, Upload, Save } from 'lucide-react';
 import { useToast } from './ToastContext';
+import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
 
 interface ProductCreateModalProps {
     onClose: () => void;
@@ -211,22 +212,24 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         <div className="form-group">
                             <label className="label">Prix d'achat (DH)</label>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 step="0.01"
                                 className="input w-full"
                                 value={formData.purchase_price}
-                                onChange={e => setFormData({ ...formData, purchase_price: parseFloat(e.target.value) || 0 })}
+                                onChange={e => setFormData({ ...formData, purchase_price: parseDecimalInput(normalizeDecimalInput(e.target.value)) || 0 })}
                             />
                         </div>
 
                         <div className="form-group">
                             <label className="label">Prix de vente (DH)</label>
                             <input
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 step="0.01"
                                 className="input w-full"
                                 value={formData.sale_price_ht}
-                                onChange={e => setFormData({ ...formData, sale_price_ht: parseFloat(e.target.value) || 0 })}
+                                onChange={e => setFormData({ ...formData, sale_price_ht: parseDecimalInput(normalizeDecimalInput(e.target.value)) || 0 })}
                             />
                         </div>
 

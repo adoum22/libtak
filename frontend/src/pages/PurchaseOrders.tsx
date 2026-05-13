@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import ProductCreateModal from '../components/ProductCreateModal';
+import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
 import {
     ClipboardList,
     Plus,
@@ -342,8 +343,8 @@ export default function PurchaseOrders() {
         const items: ReceiveOrderItem[] = receiveDrafts
             .map(d => {
                 const qty = Number(d.quantity) || 0;
-                const cost = Number(d.unit_cost);
-                const newSale = Number(d.new_sale_price);
+                const cost = parseDecimalInput(d.unit_cost);
+                const newSale = parseDecimalInput(d.new_sale_price);
                 if (qty <= 0) return null;
                 const payload: ReceiveOrderItem = {
                     item_id: d.item_id,
@@ -572,9 +573,10 @@ export default function PurchaseOrders() {
                                                 type="number"
                                                 step="0.01"
                                                 min="0"
-                                                value={item.unit_cost}
+                                                    inputMode="decimal"
+                                                    value={item.unit_cost}
                                                 onChange={(e) => {
-                                                    const newCost = Number(e.target.value);
+                                                    const newCost = parseDecimalInput(e.target.value);
                                                     setFormData({
                                                         ...formData,
                                                         items: formData.items.map(i =>
@@ -590,12 +592,13 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div className="w-24">
                                             <input
-                                                type="number"
+                                                type="text"
                                                 step="0.01"
                                                 min="0"
-                                                value={item.sale_price}
+                                                    inputMode="decimal"
+                                                    value={item.sale_price}
                                                 onChange={(e) => {
-                                                    const newSalePrice = Number(e.target.value);
+                                                    const newSalePrice = parseDecimalInput(e.target.value);
                                                     setFormData({
                                                         ...formData,
                                                         items: formData.items.map(i =>
@@ -611,7 +614,7 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div className="w-20">
                                             <input
-                                                type="number"
+                                                type="text"
                                                 min="1"
                                                 value={item.quantity}
                                                 onChange={(e) => {
@@ -875,7 +878,7 @@ export default function PurchaseOrders() {
                                                     Quantité reçue
                                                 </label>
                                                 <input
-                                                    type="number"
+                                                type="text"
                                                     min="0"
                                                     max={draft.remaining}
                                                     value={draft.quantity}
@@ -893,11 +896,12 @@ export default function PurchaseOrders() {
                                                     Prix d'achat appliqué (DH)
                                                 </label>
                                                 <input
-                                                    type="number"
+                                                    type="text"
                                                     step="0.01"
                                                     min="0"
+                                                    inputMode="decimal"
                                                     value={draft.unit_cost}
-                                                    onChange={(e) => updateDraft(draft.item_id, { unit_cost: e.target.value })}
+                                                    onChange={(e) => updateDraft(draft.item_id, { unit_cost: normalizeDecimalInput(e.target.value) })}
                                                     className="w-full text-right"
                                                 />
                                                 <p className="text-xs text-muted mt-1">
@@ -909,11 +913,12 @@ export default function PurchaseOrders() {
                                                     Nouveau prix de vente (optionnel)
                                                 </label>
                                                 <input
-                                                    type="number"
+                                                    type="text"
                                                     step="0.01"
                                                     min="0"
+                                                    inputMode="decimal"
                                                     value={draft.new_sale_price}
-                                                    onChange={(e) => updateDraft(draft.item_id, { new_sale_price: e.target.value })}
+                                                    onChange={(e) => updateDraft(draft.item_id, { new_sale_price: normalizeDecimalInput(e.target.value) })}
                                                     placeholder={`actuel : ${draft.current_sale_price.toFixed(2)}`}
                                                     className="w-full text-right"
                                                 />

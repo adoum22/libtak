@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
+import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
 
 interface CashAdjustment {
     id: number;
@@ -39,7 +40,7 @@ const fmt = (value: number | string | null | undefined) =>
         maximumFractionDigits: 2,
     });
 
-const parseMoney = (value: string) => Number.parseFloat(value.replace(',', '.'));
+const parseMoney = (value: string) => parseDecimalInput(value);
 
 const adjustmentLabel = (type: CashAdjustment['adjustment_type']) => {
     if (type === 'OPENING') return 'Fonds de depart';
@@ -179,7 +180,7 @@ export default function CashRegister() {
                                     className="money-input text-2xl font-bold py-3 pl-4 pr-3"
                                     placeholder="0.00"
                                     value={openingAmount}
-                                    onChange={(event) => setOpeningAmount(event.target.value)}
+                                    onChange={(event) => setOpeningAmount(normalizeDecimalInput(event.target.value))}
                                 />
                                 <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
                             </div>
@@ -213,7 +214,7 @@ export default function CashRegister() {
                                     className="money-input text-2xl font-bold py-3 pl-4 pr-3"
                                     placeholder="0.00"
                                     value={countedAmount}
-                                    onChange={(event) => setCountedAmount(event.target.value)}
+                                    onChange={(event) => setCountedAmount(normalizeDecimalInput(event.target.value))}
                                 />
                                 <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
                             </div>

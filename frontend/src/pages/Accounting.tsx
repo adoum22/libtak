@@ -12,6 +12,7 @@ import {
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import PremiumChartTooltip from '../components/PremiumChartTooltip';
+import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
 
 const MONTHS_FR = [
     'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
@@ -456,9 +457,9 @@ export default function Accounting() {
                             ))}
                         </select>
                         <input
-                            type="number" step="0.01" min="0" placeholder="Montant"
+                            type="text" inputMode="decimal" placeholder="Montant"
                             value={newExp.amount}
-                            onChange={(e) => setNewExp({ ...newExp, amount: e.target.value })}
+                            onChange={(e) => setNewExp({ ...newExp, amount: normalizeDecimalInput(e.target.value) })}
                         />
                         <input
                             type="text" placeholder="Description"
@@ -563,7 +564,7 @@ export default function Accounting() {
         const cogs = Math.max(0, revenue - grossMargin);
         const net = monthData.net_profit ?? (grossMargin - totalExp);
         const cashAfter = monthData.cash_after_withdrawal ?? net;
-        const withdrawalAmount = Number.parseFloat(withdrawalDraft.amount.replace(',', '.'));
+        const withdrawalAmount = parseDecimalInput(withdrawalDraft.amount);
         const canAddWithdrawal = Number.isFinite(withdrawalAmount) && withdrawalAmount > 0;
         const monthExpenseDate = toLocalDateInputValue(new Date(
             year,
@@ -694,9 +695,9 @@ export default function Accounting() {
                         <div className="rounded-xl border border-border p-4 bg-tertiary/20">
                             <label className="block text-sm font-medium mb-1">Nouveau retrait (DH)</label>
                             <input
-                                type="number" step="0.01" min="0"
+                                type="text" inputMode="decimal"
                                 value={withdrawalDraft.amount}
-                                onChange={(e) => setWithdrawalDraft({ ...withdrawalDraft, amount: e.target.value })}
+                                onChange={(e) => setWithdrawalDraft({ ...withdrawalDraft, amount: normalizeDecimalInput(e.target.value) })}
                                 placeholder="0.00"
                             />
                             <label className="block text-sm font-medium mt-3 mb-1">Note du retrait</label>
@@ -750,9 +751,9 @@ export default function Accounting() {
                             ))}
                         </select>
                         <input
-                            type="number" step="0.01" min="0" placeholder="Montant"
+                            type="text" inputMode="decimal" placeholder="Montant"
                             value={newExp.amount}
-                            onChange={(e) => setNewExp({ ...newExp, amount: e.target.value })}
+                            onChange={(e) => setNewExp({ ...newExp, amount: normalizeDecimalInput(e.target.value) })}
                         />
                         <input
                             type="text" placeholder="Description (optionnel)"
