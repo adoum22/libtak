@@ -112,6 +112,24 @@ interface PurchaseOrder {
     created_at: string;
 }
 
+const asArray = <T,>(value: unknown): T[] => {
+    if (Array.isArray(value)) return value as T[];
+    if (
+        value &&
+        typeof value === 'object' &&
+        'results' in value &&
+        Array.isArray((value as { results?: unknown }).results)
+    ) {
+        return (value as { results: T[] }).results;
+    }
+    return [];
+};
+
+const normalizeOrder = (order: PurchaseOrder): PurchaseOrder => ({
+    ...order,
+    items: asArray<PurchaseOrderItem>(order.items),
+});
+
 export default function PurchaseOrders() {
     const queryClient = useQueryClient();
     const toast = useToast();
@@ -141,22 +159,23 @@ export default function PurchaseOrders() {
     // Fetch orders
     const { data: orders = [], isLoading } = useQuery<PurchaseOrder[]>({
         queryKey: ['purchaseOrders'],
-        queryFn: () => client.get('/inventory/purchase-orders/').then(res => res.data.results || res.data)
+        queryFn: () => client
+            .get('/inventory/purchase-orders/')
+            .then(res => asArray<PurchaseOrder>(res.data).map(normalizeOrder))
     });
 
     // Fetch suppliers
     const { data: suppliers = [] } = useQuery<Supplier[]>({
         queryKey: ['suppliers'],
-        queryFn: () => client.get('/inventory/suppliers/').then(res => {
-            const data = res.data;
-            return Array.isArray(data) ? data : (data.results || []);
-        })
+        queryFn: () => client.get('/inventory/suppliers/').then(res => asArray<Supplier>(res.data))
     });
 
     // Search products
     const { data: products = [] } = useQuery<Product[]>({
         queryKey: ['products', searchProduct],
-        queryFn: () => client.get(`/inventory/products/?search=${searchProduct}`).then(res => res.data.results || res.data),
+        queryFn: () => client
+            .get(`/inventory/products/?search=${searchProduct}`)
+            .then(res => asArray<Product>(res.data)),
         enabled: searchProduct.length > 1
     });
 
@@ -279,7 +298,8 @@ export default function PurchaseOrders() {
     const handleReceiveClick = (order: PurchaseOrder) => {
         // Construit le draft initial : 1 ligne par article, pré-rempli avec
         // la quantité restante et le prix de la commande comme défauts.
-        const drafts: ReceiveDraft[] = order.items
+        const orderItems = asArray<PurchaseOrderItem>(order.items);
+        const drafts: ReceiveDraft[] = orderItems
             .filter(item => (item.quantity - (item.received_quantity || 0)) > 0)
             .map(item => {
                 const remaining = Math.max(0, item.quantity - (item.received_quantity || 0));
@@ -703,7 +723,7 @@ export default function PurchaseOrders() {
                                                 </div>
                                             )}
                                             <div className="space-y-1">
-                                                {order.items?.map(item => (
+                                                {asArray<PurchaseOrderItem>(order.items).map(item => (
                                                     <div key={item.id} className="py-2 border-b border-border/50 last:border-0">
                                                         <div className="flex justify-between text-sm items-center">
                                                             <div>
@@ -722,9 +742,9 @@ export default function PurchaseOrders() {
                                                             </div>
                                                             <span>{item.unit_cost} DH</span>
                                                         </div>
-                                                        {!!item.product_layers?.length && (
+                                                        {asArray<StockLayer>(item.product_layers).length > 0 && (
                                                             <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                                {item.product_layers.map((layer, idx) => (
+                                                                {asArray<StockLayer>(item.product_layers).map((layer, idx) => (
                                                                     <div key={`${item.id}-${idx}`} className="rounded-lg bg-secondary border border-border px-3 py-2 text-xs">
                                                                         <div className="flex items-center justify-between gap-2">
                                                                             <span className="font-semibold">Lot FIFO #{idx + 1}</span>
