@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import F, Sum
@@ -47,16 +47,24 @@ def sync_manager_withdrawal(monthly):
     return total
 
 
+def local_datetime_bounds(start, end):
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(datetime.combine(start, time.min), tz)
+    end_dt = timezone.make_aware(datetime.combine(end, time.max), tz)
+    return start_dt, end_dt
+
+
 def sales_margin_analytics(start, end):
     """Detail ventes + articles vendus pour une periode.
 
     Les remises sont reparties au prorata des lignes afin que la marge article
     reste coherente avec la marge vente.
     """
+    start_dt, end_dt = local_datetime_bounds(start, end)
     sales = (
         Sale.objects.filter(
-            created_at__date__gte=start,
-            created_at__date__lte=end,
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
         )
         .prefetch_related('items')
         .order_by('-created_at', '-id')
@@ -622,12 +630,14 @@ class PeriodSummaryView(APIView):
     # ---- Helpers agrégés ----
 
     def _revenue_by_day(self, start, end):
+        start_dt, end_dt = local_datetime_bounds(start, end)
+        tz = timezone.get_current_timezone()
         rows = (
             Sale.objects.filter(
-                created_at__date__gte=start,
-                created_at__date__lte=end,
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
             )
-            .annotate(d=TruncDate('created_at'))
+            .annotate(d=TruncDate('created_at', tzinfo=tz))
             .values('d')
             .annotate(total=Sum('total_ttc'))
         )
@@ -635,12 +645,14 @@ class PeriodSummaryView(APIView):
 
     def _gross_margin_by_day(self, start, end):
         # Marge brute = (vente - achat) - remise, agrégée par jour.
+        start_dt, end_dt = local_datetime_bounds(start, end)
+        tz = timezone.get_current_timezone()
         items = (
             SaleItem.objects.filter(
-                sale__created_at__date__gte=start,
-                sale__created_at__date__lte=end,
+                sale__created_at__gte=start_dt,
+                sale__created_at__lte=end_dt,
             )
-            .annotate(d=TruncDate('sale__created_at'))
+            .annotate(d=TruncDate('sale__created_at', tzinfo=tz))
             .values('d')
             .annotate(
                 revenue=Sum(F('unit_price_ht') * F('quantity')),
@@ -654,10 +666,10 @@ class PeriodSummaryView(APIView):
         # Soustraire les remises par jour
         discounts = (
             Sale.objects.filter(
-                created_at__date__gte=start,
-                created_at__date__lte=end,
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
             )
-            .annotate(d=TruncDate('created_at'))
+            .annotate(d=TruncDate('created_at', tzinfo=tz))
             .values('d')
             .annotate(total=Sum('discount_amount'))
         )

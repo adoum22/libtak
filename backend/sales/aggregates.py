@@ -1,10 +1,18 @@
 from calendar import monthrange
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Sum, F
+from django.utils import timezone
 
 from .models import Sale, SaleItem
+
+
+def local_datetime_bounds(start_date, end_date):
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+    end_dt = timezone.make_aware(datetime.combine(end_date, time.max), tz)
+    return start_dt, end_dt
 
 
 def revenue_for_month(year: int, month: int) -> Decimal:
@@ -15,9 +23,13 @@ def revenue_for_month(year: int, month: int) -> Decimal:
     this returns gross sales only.
     """
     last_day = monthrange(year, month)[1]
+    start_dt, end_dt = local_datetime_bounds(
+        date(year, month, 1),
+        date(year, month, last_day),
+    )
     qs = Sale.objects.filter(
-        created_at__date__gte=date(year, month, 1),
-        created_at__date__lte=date(year, month, last_day),
+        created_at__gte=start_dt,
+        created_at__lte=end_dt,
     )
     return qs.aggregate(total=Sum('total_ttc'))['total'] or Decimal('0')
 
@@ -29,17 +41,18 @@ def gross_margin_for_period(start_date, end_date) -> Decimal:
     d'exploitation. Utilisée par accounting et reporting pour garantir la
     cohérence du chiffre.
     """
+    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
     items = SaleItem.objects.filter(
-        sale__created_at__date__gte=start_date,
-        sale__created_at__date__lte=end_date,
+        sale__created_at__gte=start_dt,
+        sale__created_at__lte=end_dt,
     )
     agg = items.aggregate(
         revenue=Sum(F('unit_price_ht') * F('quantity')),
         cost=Sum('total_purchase_cost'),
     )
     discounts = Sale.objects.filter(
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
+        created_at__gte=start_dt,
+        created_at__lte=end_dt,
     ).aggregate(total=Sum('discount_amount'))['total'] or Decimal('0')
     return (
         (agg['revenue'] or Decimal('0'))
