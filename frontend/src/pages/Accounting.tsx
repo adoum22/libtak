@@ -28,6 +28,13 @@ const categoryLabel = (entry: unknown) => {
     return '';
 };
 
+const toLocalDateInputValue = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
 interface Category { id: number; name: string; is_default: boolean; }
 interface Expense {
     id: number; category: number; category_name: string;
@@ -121,7 +128,7 @@ export default function Accounting() {
     const now = new Date();
     const [year, setYear] = useState(now.getFullYear());
     const [month, setMonth] = useState(now.getMonth() + 1);
-    const [selectedDate, setSelectedDate] = useState(now.toISOString().slice(0, 10));
+    const [selectedDate, setSelectedDate] = useState(toLocalDateInputValue(now));
     const [tab, setTab] = useState<'day' | 'week' | 'month' | 'year' | 'categories'>('day');
 
     // ---------- Queries ----------
@@ -136,11 +143,13 @@ export default function Accounting() {
     const { data: monthData, isLoading: monthLoading } = useQuery<MonthData>({
         queryKey: ['acc-month', year, month],
         queryFn: () => client.get(`/accounting/monthly/by-period/${year}/${month}/`).then(r => r.data),
+        staleTime: 0,
     });
 
     const { data: summary } = useQuery<YearSummary>({
         queryKey: ['acc-summary', year],
         queryFn: () => client.get(`/accounting/summary/?year=${year}`).then(r => r.data),
+        staleTime: 0,
     });
 
     const { data: periodSummary, isLoading: periodLoading, isError: periodIsError, error: periodError } = useQuery<PeriodSummary>({
@@ -150,6 +159,7 @@ export default function Accounting() {
             .then(r => r.data),
         enabled: tab === 'day' || tab === 'week',
         retry: 1,
+        staleTime: 0,
     });
 
     // ---------- Mutations ----------

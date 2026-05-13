@@ -141,6 +141,10 @@ export default function POS() {
             // 2. Invalidate queries (stock update)
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-period'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-month'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
 
             // Ticket printing is intentionally disabled while no thermal printer
             // is connected. The sale remains validated and the cashier returns
