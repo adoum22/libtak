@@ -162,6 +162,18 @@ export default function POS() {
         }));
     };
 
+    const setItemQuantity = (productId: number, value: string) => {
+        const parsed = Number.parseInt(value, 10);
+        setCart(cart.map(item => {
+            if (item.product.id !== productId) return item;
+            if (!Number.isFinite(parsed)) {
+                return { ...item, quantity: 1 };
+            }
+            const newQty = Math.max(1, Math.min(parsed, item.product.stock));
+            return { ...item, quantity: newQty };
+        }));
+    };
+
     const removeFromCart = (productId: number) => {
         setCart(cart.filter(item => item.product.id !== productId));
     };
@@ -520,9 +532,16 @@ export default function POS() {
                                             >
                                                 <Minus size={16} />
                                             </button>
-                                            <span className="w-12 text-center font-bold text-xl">
-                                                {item.quantity}
-                                            </span>
+                                            <input
+                                                type="text"
+                                                inputMode="numeric"
+                                                pattern="[0-9]*"
+                                                aria-label={`Quantite ${item.product.name}`}
+                                                className="w-14 h-8 text-center font-bold text-xl bg-transparent rounded-md focus:bg-tertiary focus:outline-none focus:ring-2 focus:ring-accent/30"
+                                                value={String(item.quantity)}
+                                                onChange={(e) => setItemQuantity(item.product.id, e.target.value)}
+                                                onFocus={(e) => e.target.select()}
+                                            />
                                             <button
                                                 onClick={() => updateQuantity(item.product.id, 1)}
                                                 className="w-8 h-8 flex items-center justify-center hover:bg-tertiary rounded-md transition-colors"
