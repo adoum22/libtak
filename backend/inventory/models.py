@@ -154,13 +154,26 @@ class Product(models.Model):
     @property
     def profit_margin(self):
         """Marge bénéficiaire par unité"""
+        current_layer = self.cost_layers.filter(
+            remaining_quantity__gt=0,
+        ).order_by('created_at', 'id').first()
+        if current_layer:
+            sale_price = current_layer.sale_price or self.sale_price_ht
+            return self._safe_decimal(sale_price) - self._safe_decimal(current_layer.unit_cost)
         return self._safe_decimal(self.sale_price_ht) - self._safe_decimal(self.purchase_price)
 
     @property
     def profit_percentage(self):
         """Pourcentage de marge"""
-        pp = self._safe_decimal(self.purchase_price)
-        sp = self._safe_decimal(self.sale_price_ht)
+        current_layer = self.cost_layers.filter(
+            remaining_quantity__gt=0,
+        ).order_by('created_at', 'id').first()
+        if current_layer:
+            pp = self._safe_decimal(current_layer.unit_cost)
+            sp = self._safe_decimal(current_layer.sale_price or self.sale_price_ht)
+        else:
+            pp = self._safe_decimal(self.purchase_price)
+            sp = self._safe_decimal(self.sale_price_ht)
         if pp > 0:
             from decimal import Decimal
             return ((sp - pp) / pp) * Decimal('100')

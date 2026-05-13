@@ -61,6 +61,14 @@ def update_product_cost_layer_for_request(request, product_id):
     )
     serializer.is_valid(raise_exception=True)
     serializer.save()
+    first_active_layer = product.cost_layers.filter(
+        remaining_quantity__gt=0,
+    ).order_by('created_at', 'id').first()
+    if first_active_layer and first_active_layer.id == layer.id:
+        product.purchase_price = layer.unit_cost
+        if layer.sale_price is not None:
+            product.sale_price_ht = layer.sale_price
+        product.save(update_fields=['purchase_price', 'sale_price_ht', 'updated_at'])
     product.refresh_from_db()
     return Response({
         'layer': serializer.data,
@@ -194,6 +202,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         old_product = Product.objects.get(pk=serializer.instance.pk)
         product = serializer.save()
         delta = product.stock - old_product.stock
+        purchase_price_changed = product.purchase_price != old_product.purchase_price
+        sale_price_changed = product.sale_price_ht != old_product.sale_price_ht
         if delta > 0:
             ProductCostLayer.create_layer(
                 product=product,
@@ -204,6 +214,20 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
         elif delta < 0:
             ProductCostLayer.consume_fifo(product, abs(delta))
+        elif purchase_price_changed or sale_price_changed:
+            current_layer = product.cost_layers.filter(
+                remaining_quantity__gt=0,
+            ).order_by('created_at', 'id').first()
+            if current_layer:
+                update_fields = []
+                if purchase_price_changed:
+                    current_layer.unit_cost = product.purchase_price
+                    update_fields.append('unit_cost')
+                if sale_price_changed:
+                    current_layer.sale_price = product.sale_price_ht
+                    update_fields.append('sale_price')
+                if update_fields:
+                    current_layer.save(update_fields=update_fields)
 
     def _update_cost_layer(self, product, layer, request):
         serializer = ProductCostLayerSerializer(

@@ -331,6 +331,48 @@ class InventoryAPITest(APITestCase):
         layer.refresh_from_db()
         self.assertEqual(layer.unit_cost, Decimal('2.75'))
         self.assertEqual(layer.sale_price, Decimal('5.00'))
+        product.refresh_from_db()
+        self.assertEqual(product.purchase_price, Decimal('2.75'))
+        self.assertEqual(product.sale_price_ht, Decimal('5.00'))
+        self.assertEqual(response.data['product']['price_ttc'], Decimal('5.00'))
+
+    def test_product_price_update_updates_current_fifo_layer(self):
+        product = Product.objects.create(
+            name='Produit prix courant',
+            barcode='4444444444446',
+            purchase_price=Decimal('1.00'),
+            sale_price_ht=Decimal('2.00'),
+            stock=3,
+        )
+        current_layer = ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('1.00'),
+            sale_price=Decimal('2.00'),
+            initial_quantity=2,
+            remaining_quantity=2,
+        )
+        later_layer = ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('1.50'),
+            sale_price=Decimal('3.00'),
+            initial_quantity=1,
+            remaining_quantity=1,
+        )
+
+        response = self.client.patch(
+            f'/api/inventory/products/{product.id}/',
+            {'purchase_price': '1.25', 'sale_price_ht': '2.50'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        current_layer.refresh_from_db()
+        later_layer.refresh_from_db()
+        self.assertEqual(current_layer.unit_cost, Decimal('1.25'))
+        self.assertEqual(current_layer.sale_price, Decimal('2.50'))
+        self.assertEqual(later_layer.unit_cost, Decimal('1.50'))
+        self.assertEqual(later_layer.sale_price, Decimal('3.00'))
+        self.assertEqual(response.data['price_ttc'], Decimal('2.50'))
 
     def test_product_stats(self):
         """Test endpoint stats produits"""

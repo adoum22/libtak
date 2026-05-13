@@ -263,19 +263,23 @@ export default function Inventory() {
                 payload,
             );
         },
-        onSuccess: (_response, variables) => {
+        onSuccess: (response, variables) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });
-            setViewingProduct(prev => {
-                if (!prev?.cost_layers) return prev;
-                return {
-                    ...prev,
-                    cost_layers: prev.cost_layers.map((layer, index) =>
-                        (variables.id ? layer.id === variables.id : index === variables.index)
-                            ? { ...layer, unit_cost: normalizeMoney(variables.unit_cost), sale_price: normalizeMoney(variables.sale_price), note: variables.note }
-                            : layer
-                    ),
-                };
-            });
+            if (response.data?.product) {
+                openProductDetails(response.data.product);
+            } else {
+                setViewingProduct(prev => {
+                    if (!prev?.cost_layers) return prev;
+                    return {
+                        ...prev,
+                        cost_layers: prev.cost_layers.map((layer, index) =>
+                            (variables.id ? layer.id === variables.id : index === variables.index)
+                                ? { ...layer, unit_cost: normalizeMoney(variables.unit_cost), sale_price: normalizeMoney(variables.sale_price), note: variables.note }
+                                : layer
+                        ),
+                    };
+                });
+            }
             toast.success('Lot FIFO mis a jour');
         },
         onError: (error: unknown) => {
