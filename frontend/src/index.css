@@ -1100,6 +1100,7 @@ input:disabled {
 .nav-item:hover {
   background-color: var(--color-bg-hover);
   color: var(--color-text-primary);
+  transform: translateX(2px);
 }
 
 .nav-item.active {
@@ -1108,10 +1109,64 @@ input:disabled {
   font-weight: 500;
 }
 
-.nav-item svg {
-  width: 20px;
-  height: 20px;
+.nav-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
   flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #64748b 0%, #334155 100%);
+  box-shadow:
+    0 10px 18px -12px rgba(15, 23, 42, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -10px 18px rgba(15, 23, 42, 0.15);
+}
+
+.nav-icon::before {
+  content: "";
+  position: absolute;
+  inset: 3px 4px auto 4px;
+  height: 42%;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+
+.nav-icon svg {
+  width: 19px;
+  height: 19px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+  stroke-width: 2.35;
+  filter: drop-shadow(0 2px 2px rgba(15, 23, 42, 0.18));
+}
+
+.nav-icon-dashboard { background: linear-gradient(135deg, #22c55e 0%, #0ea5e9 100%); }
+.nav-icon-sale { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); }
+.nav-icon-cash { background: linear-gradient(135deg, #14b8a6 0%, #0f766e 100%); }
+.nav-icon-stock { background: linear-gradient(135deg, #f59e0b 0%, #e11d48 100%); }
+.nav-icon-suppliers { background: linear-gradient(135deg, #38bdf8 0%, #2563eb 100%); }
+.nav-icon-orders { background: linear-gradient(135deg, #fb7185 0%, #f97316 100%); }
+.nav-icon-returns { background: linear-gradient(135deg, #a78bfa 0%, #7c3aed 100%); }
+.nav-icon-inventory { background: linear-gradient(135deg, #34d399 0%, #059669 100%); }
+.nav-icon-reports { background: linear-gradient(135deg, #60a5fa 0%, #1d4ed8 100%); }
+.nav-icon-users { background: linear-gradient(135deg, #f472b6 0%, #db2777 100%); }
+.nav-icon-zakat { background: linear-gradient(135deg, #facc15 0%, #16a34a 100%); }
+.nav-icon-accounting { background: linear-gradient(135deg, #06b6d4 0%, #0f766e 100%); }
+.nav-icon-activity { background: linear-gradient(135deg, #f97316 0%, #dc2626 100%); }
+.nav-icon-settings { background: linear-gradient(135deg, #94a3b8 0%, #475569 100%); }
+
+.nav-item.active .nav-icon {
+  box-shadow:
+    0 12px 22px -12px color-mix(in srgb, var(--color-accent) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    inset 0 -10px 18px rgba(15, 23, 42, 0.12);
 }
 
 .sidebar-footer {

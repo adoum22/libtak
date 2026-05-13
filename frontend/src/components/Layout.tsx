@@ -17,9 +17,10 @@ import {
     RotateCcw,
     ClipboardList,
     ClipboardCheck,
-    Calculator,
     Wallet,
     Activity,
+    HandCoins,
+    Landmark,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -84,25 +85,26 @@ export default function Layout() {
     };
 
     const navItems = [
-        { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: true },
-        { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true },
-        { icon: Wallet, label: 'Caisse', path: '/cash-register', show: isAdmin },
+        { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: true, tone: 'dashboard' },
+        { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true, tone: 'sale' },
+        { icon: Wallet, label: 'Caisse', path: '/cash-register', show: isAdmin, tone: 'cash' },
         {
             icon: Package,
             label: 'Stock',
             path: '/inventory',
-            show: isAdmin || currentUser?.can_view_stock === true
+            show: isAdmin || currentUser?.can_view_stock === true,
+            tone: 'stock',
         },
-        { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin },
-        { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin },
-        { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin },
-        { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin },
-        { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin },
-        { icon: Users, label: t('Users'), path: '/users', show: isAdmin },
-        { icon: Calculator, label: 'Zakat', path: '/zakat', show: isAdmin },
-        { icon: Calculator, label: 'Comptabilité', path: '/accounting', show: isAdmin },
-        { icon: Activity, label: 'Activité', path: '/activity', show: isAdmin },
-        { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin },
+        { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin, tone: 'suppliers' },
+        { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin, tone: 'orders' },
+        { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin, tone: 'returns' },
+        { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin, tone: 'inventory' },
+        { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin, tone: 'reports' },
+        { icon: Users, label: t('Users'), path: '/users', show: isAdmin, tone: 'users' },
+        { icon: HandCoins, label: 'Zakat', path: '/zakat', show: isAdmin, tone: 'zakat' },
+        { icon: Landmark, label: 'Comptabilité', path: '/accounting', show: isAdmin, tone: 'accounting' },
+        { icon: Activity, label: 'Activité', path: '/activity', show: isAdmin, tone: 'activity' },
+        { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin, tone: 'settings' },
     ];
 
     const filteredNavItems = navItems.filter(item => item.show);
@@ -144,7 +146,9 @@ export default function Layout() {
                                 className={`nav-item ${isActive ? 'active' : ''}`}
                                 onClick={() => setSidebarOpen(false)}
                             >
-                                <Icon size={20} />
+                                <span className={`nav-icon nav-icon-${item.tone}`}>
+                                    <Icon size={19} />
+                                </span>
                                 <span>{item.label}</span>
                             </Link>
                         );
