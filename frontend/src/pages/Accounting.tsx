@@ -7,6 +7,7 @@ import {
 import {
     Calculator, DollarSign, TrendingUp, TrendingDown,
     Plus, Trash2, ChevronLeft, ChevronRight, CalendarDays, CalendarRange,
+    Receipt, Package,
 } from 'lucide-react';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
@@ -41,6 +42,7 @@ interface MonthData {
     gross_margin?: number;
     net_profit: number;
     cash_after_withdrawal?: number;
+    sales_margin_detail?: SalesMarginDetail;
 }
 interface YearSummary {
     year: number;
@@ -55,10 +57,38 @@ interface YearSummary {
         expenses: number; net_profit: number;
     }>;
     category_breakdown: Array<{ category: string; total: number }>;
+    sales_margin_detail?: SalesMarginDetail;
     totals: {
         revenue: number; manager_withdrawal: number;
         expenses: number; net_profit: number;
     };
+}
+
+interface SaleMarginRow {
+    id: number;
+    created_at: string;
+    payment_method: string;
+    items_count: number;
+    revenue: number;
+    gross_revenue: number;
+    discount: number;
+    purchase_cost: number;
+    margin: number;
+}
+
+interface ProductMarginRow {
+    product_id: number | null;
+    product_name: string;
+    quantity: number;
+    revenue: number;
+    discount: number;
+    purchase_cost: number;
+    margin: number;
+}
+
+interface SalesMarginDetail {
+    sales: SaleMarginRow[];
+    products: ProductMarginRow[];
 }
 
 interface PeriodSummary {
@@ -82,6 +112,7 @@ interface PeriodSummary {
         expenses: number;
         net_profit: number;
     }>;
+    sales_margin_detail?: SalesMarginDetail;
 }
 
 export default function Accounting() {
@@ -197,6 +228,93 @@ export default function Accounting() {
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     // ---------- Render helpers ----------
+    const renderSalesMarginDetail = (detail?: SalesMarginDetail) => {
+        const sales = detail?.sales ?? [];
+        const products = detail?.products ?? [];
+
+        return (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div className="card">
+                    <div className="card-header flex items-center gap-2">
+                        <Receipt size={20} className="text-accent" />
+                        <h2 className="font-semibold text-lg">Marge par vente</h2>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Vente</th>
+                                    <th>Articles</th>
+                                    <th className="text-right">CA</th>
+                                    <th className="text-right">Achat</th>
+                                    <th className="text-right">Remise</th>
+                                    <th className="text-right">Marge</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sales.length === 0 ? (
+                                    <tr><td colSpan={6} className="text-center py-8 text-muted">Aucune vente sur cette periode</td></tr>
+                                ) : sales.map(sale => (
+                                    <tr key={sale.id}>
+                                        <td>
+                                            <p className="font-medium">#{sale.id}</p>
+                                            <p className="text-xs text-muted">
+                                                {new Date(sale.created_at).toLocaleString('fr-FR')}
+                                            </p>
+                                        </td>
+                                        <td>{sale.items_count}</td>
+                                        <td className="text-right">{fmt(sale.revenue)} DH</td>
+                                        <td className="text-right">{fmt(sale.purchase_cost)} DH</td>
+                                        <td className="text-right">{fmt(sale.discount)} DH</td>
+                                        <td className={`text-right font-semibold ${sale.margin >= 0 ? 'text-success' : 'text-red-500'}`}>
+                                            {fmt(sale.margin)} DH
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div className="card">
+                    <div className="card-header flex items-center gap-2">
+                        <Package size={20} className="text-accent" />
+                        <h2 className="font-semibold text-lg">Articles vendus</h2>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Produit</th>
+                                    <th className="text-right">Qte</th>
+                                    <th className="text-right">CA net</th>
+                                    <th className="text-right">Achat</th>
+                                    <th className="text-right">Marge</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {products.length === 0 ? (
+                                    <tr><td colSpan={5} className="text-center py-8 text-muted">Aucun article vendu sur cette periode</td></tr>
+                                ) : products.map(product => (
+                                    <tr key={`${product.product_id ?? product.product_name}`}>
+                                        <td className="font-medium">{product.product_name}</td>
+                                        <td className="text-right font-semibold">{product.quantity}</td>
+                                        <td className="text-right">{fmt(product.revenue)} DH</td>
+                                        <td className="text-right">{fmt(product.purchase_cost)} DH</td>
+                                        <td className={`text-right font-semibold ${product.margin >= 0 ? 'text-success' : 'text-red-500'}`}>
+                                            {fmt(product.margin)} DH
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+        );
+    };
+
     const renderPeriodTab = () => {
         if (periodLoading) return <div className="text-center py-12 text-muted">Chargement...</div>;
         if (periodIsError) {
@@ -380,6 +498,8 @@ export default function Accounting() {
                         </table>
                     </div>
                 </div>
+
+                {renderSalesMarginDetail(periodSummary.sales_margin_detail)}
             </div>
         );
     };
@@ -642,6 +762,8 @@ export default function Accounting() {
                         </table>
                     </div>
                 </div>
+
+                {renderSalesMarginDetail(monthData.sales_margin_detail)}
             </div>
         );
     };
@@ -789,6 +911,8 @@ export default function Accounting() {
                         </table>
                     </div>
                 </div>
+
+                {renderSalesMarginDetail(summary.sales_margin_detail)}
             </div>
         );
     };

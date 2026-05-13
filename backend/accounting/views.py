@@ -32,6 +32,91 @@ from .serializers import (
 )
 
 
+def sales_margin_analytics(start, end):
+    """Detail ventes + articles vendus pour une periode.
+
+    Les remises sont reparties au prorata des lignes afin que la marge article
+    reste coherente avec la marge vente.
+    """
+    sales = (
+        Sale.objects.filter(
+            created_at__date__gte=start,
+            created_at__date__lte=end,
+        )
+        .prefetch_related('items')
+        .order_by('-created_at', '-id')
+    )
+
+    sale_rows = []
+    product_map = {}
+
+    for sale in sales:
+        items = list(sale.items.all())
+        gross_revenue = sum(
+            (item.unit_price_ht or Decimal('0')) * item.quantity
+            for item in items
+        )
+        total_cost = sum(item.total_purchase_cost or Decimal('0') for item in items)
+        discount = sale.discount_amount or Decimal('0')
+        sale_margin = gross_revenue - total_cost - discount
+
+        sale_rows.append({
+            'id': sale.id,
+            'created_at': sale.created_at,
+            'payment_method': sale.payment_method,
+            'items_count': sum(item.quantity for item in items),
+            'revenue': float(sale.total_ttc or Decimal('0')),
+            'gross_revenue': float(gross_revenue),
+            'discount': float(discount),
+            'purchase_cost': float(total_cost),
+            'margin': float(sale_margin),
+        })
+
+        for item in items:
+            line_revenue = (item.unit_price_ht or Decimal('0')) * item.quantity
+            discount_share = Decimal('0')
+            if gross_revenue > 0 and discount > 0:
+                discount_share = (discount * line_revenue / gross_revenue).quantize(
+                    Decimal('0.01'), rounding=ROUND_HALF_UP,
+                )
+            net_revenue = line_revenue - discount_share
+            cost = item.total_purchase_cost or Decimal('0')
+            key = item.product_id or f"name:{item.product_name}"
+            row = product_map.setdefault(key, {
+                'product_id': item.product_id,
+                'product_name': item.product_name,
+                'quantity': 0,
+                'revenue': Decimal('0'),
+                'discount': Decimal('0'),
+                'purchase_cost': Decimal('0'),
+                'margin': Decimal('0'),
+            })
+            row['quantity'] += item.quantity
+            row['revenue'] += net_revenue
+            row['discount'] += discount_share
+            row['purchase_cost'] += cost
+            row['margin'] += net_revenue - cost
+
+    product_rows = [
+        {
+            'product_id': row['product_id'],
+            'product_name': row['product_name'],
+            'quantity': row['quantity'],
+            'revenue': float(row['revenue']),
+            'discount': float(row['discount']),
+            'purchase_cost': float(row['purchase_cost']),
+            'margin': float(row['margin']),
+        }
+        for row in product_map.values()
+    ]
+    product_rows.sort(key=lambda row: (-row['quantity'], row['product_name']))
+
+    return {
+        'sales': sale_rows,
+        'products': product_rows,
+    }
+
+
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.all()
     serializer_class = ExpenseCategorySerializer
@@ -84,6 +169,7 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         data['cash_after_withdrawal'] = (
             data['net_profit'] - float(monthly.manager_withdrawal)
         )
+        data['sales_margin_detail'] = sales_margin_analytics(start, end)
         return Response(data)
 
 
@@ -367,6 +453,9 @@ class YearSummaryView(APIView):
             'quarters': quarters,
             'category_breakdown': category_breakdown,
             'totals': totals,
+            'sales_margin_detail': sales_margin_analytics(
+                date(year, 1, 1), date(year, 12, 31)
+            ),
         })
 
 
@@ -461,6 +550,7 @@ class PeriodSummaryView(APIView):
             'expenses_detail': expenses_detail,
             'category_breakdown': category_breakdown,
             'daily': daily,
+            'sales_margin_detail': sales_margin_analytics(start, end),
         })
 
     # ---- Helpers agrégés ----

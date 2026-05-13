@@ -4,7 +4,8 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from core.models import User
-from sales.models import Return, Sale
+from inventory.models import Product
+from sales.models import Return, Sale, SaleItem
 from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting
 
 
@@ -71,6 +72,54 @@ class MonthlySummaryTests(TestCase):
         april = next(m for m in r.data['months'] if m['month'] == 4)
         self.assertEqual(april['expenses'], 150.0)
         self.assertEqual(april['manager_withdrawal'], 500.0)
+
+    def test_margin_detail_is_returned_for_day_month_and_year(self):
+        product = Product.objects.create(
+            name='Stylo',
+            barcode='STYLO-TEST',
+            purchase_price=Decimal('1.00'),
+            sale_price_ht=Decimal('2.00'),
+            stock=20,
+        )
+        sale = Sale.objects.create(
+            user=self.admin,
+            total_ht=Decimal('20.00'),
+            total_tva=Decimal('0.00'),
+            total_ttc=Decimal('18.00'),
+            discount_amount=Decimal('2.00'),
+            payment_method=Sale.PaymentMethod.CASH,
+        )
+        SaleItem.objects.create(
+            sale=sale,
+            product=product,
+            product_name=product.name,
+            quantity=10,
+            unit_price_ht=Decimal('2.00'),
+            total_price_ht=Decimal('20.00'),
+            tva_rate=Decimal('0.00'),
+            unit_purchase_price=Decimal('1.00'),
+            total_purchase_cost=Decimal('10.00'),
+        )
+        Sale.objects.filter(pk=sale.pk).update(created_at='2026-04-24T10:00:00Z')
+
+        period = self.client.get('/api/accounting/period-summary/?type=day&date=2026-04-24')
+        self.assertEqual(period.status_code, 200)
+        detail = period.data['sales_margin_detail']
+        self.assertEqual(detail['sales'][0]['items_count'], 10)
+        self.assertEqual(detail['sales'][0]['revenue'], 18.0)
+        self.assertEqual(detail['sales'][0]['margin'], 8.0)
+        self.assertEqual(detail['products'][0]['product_name'], 'Stylo')
+        self.assertEqual(detail['products'][0]['quantity'], 10)
+        self.assertEqual(detail['products'][0]['revenue'], 18.0)
+        self.assertEqual(detail['products'][0]['margin'], 8.0)
+
+        month = self.client.get('/api/accounting/monthly/by-period/2026/4/')
+        self.assertEqual(month.status_code, 200)
+        self.assertEqual(month.data['sales_margin_detail']['products'][0]['quantity'], 10)
+
+        year = self.client.get('/api/accounting/summary/?year=2026')
+        self.assertEqual(year.status_code, 200)
+        self.assertEqual(year.data['sales_margin_detail']['sales'][0]['margin'], 8.0)
 
 
 class CashRegisterTests(TestCase):
