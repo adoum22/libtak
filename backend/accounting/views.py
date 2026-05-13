@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import F, Sum
 from django.db.models.functions import TruncDate
+from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -30,6 +31,20 @@ from .serializers import (
     ExpenseSerializer,
     MonthlyAccountingSerializer,
 )
+
+MANAGER_WITHDRAWAL_CATEGORY = 'Retrait gérant'
+
+
+def sync_manager_withdrawal(monthly):
+    total = (
+        monthly.expenses.filter(category__name=MANAGER_WITHDRAWAL_CATEGORY)
+        .aggregate(total=Sum('amount'))['total']
+        or Decimal('0')
+    )
+    if monthly.manager_withdrawal != total:
+        monthly.manager_withdrawal = total
+        monthly.save(update_fields=['manager_withdrawal', 'updated_at'])
+    return total
 
 
 def sales_margin_analytics(start, end):
@@ -152,6 +167,7 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         """Récupère ou crée l'entrée mensuelle, avec totaux et CA."""
         year, month = int(year), int(month)
         monthly, _ = MonthlyAccounting.objects.get_or_create(year=year, month=month)
+        sync_manager_withdrawal(monthly)
         data = self.get_serializer(monthly).data
         data['revenue'] = float(revenue_for_month(year, month))
 
@@ -161,16 +177,61 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         end = _date(year, month, last_day)
         gross_margin = float(gross_margin_for_period(start, end))
 
-        # Bénéfice net = marge brute (vente - achat) - dépenses d'exploitation.
-        # Le prélèvement gérant est une distribution de bénéfice, pas une charge :
-        # on l'expose à part pour le suivi de trésorerie.
+        # Benefice net = marge brute (vente - achat) - depenses d'exploitation.
+        # Les retraits gerant sont maintenant de vraies depenses payees depuis
+        # la caisse, donc ils sont deja inclus dans total_expenses.
         data['gross_margin'] = gross_margin
         data['net_profit'] = gross_margin - data['total_expenses']
-        data['cash_after_withdrawal'] = (
-            data['net_profit'] - float(monthly.manager_withdrawal)
-        )
+        data['cash_after_withdrawal'] = data['net_profit']
         data['sales_margin_detail'] = sales_margin_analytics(start, end)
         return Response(data)
+
+    @action(detail=True, methods=['post'], url_path='withdraw')
+    def withdraw(self, request, pk=None):
+        """Enregistre un retrait gérant comme dépense payée depuis la caisse."""
+        monthly = self.get_object()
+        try:
+            amount = Decimal(str(request.data.get('amount', '0'))).quantize(Decimal('0.01'))
+        except Exception:
+            return Response(
+                {'detail': 'Montant invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if amount <= 0:
+            return Response(
+                {'detail': 'Le montant doit être positif.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        category, _ = ExpenseCategory.objects.get_or_create(
+            name=MANAGER_WITHDRAWAL_CATEGORY,
+        )
+        note = request.data.get('note') or 'Retrait gérant'
+        incurred_on_value = request.data.get('incurred_on')
+        incurred_on = parse_date(incurred_on_value) if incurred_on_value else timezone.localdate()
+        if incurred_on_value and incurred_on is None:
+            return Response(
+                {'detail': 'Date invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        expense = Expense.objects.create(
+            monthly=monthly,
+            category=category,
+            amount=amount,
+            description=note,
+            incurred_on=incurred_on,
+            paid_from_cash=True,
+        )
+        sync_manager_withdrawal(monthly)
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='Expense',
+            object_id=expense.id,
+            object_repr=f"Retrait gérant: {amount}",
+            request=request,
+        )
+        return self.by_period(request, year=monthly.year, month=monthly.month)
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
@@ -190,6 +251,8 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         instance = serializer.save()
+        if instance.category.name == MANAGER_WITHDRAWAL_CATEGORY:
+            sync_manager_withdrawal(instance.monthly)
         AuditLog.log(
             user=self.request.user,
             action=AuditLog.ActionType.CREATE,
@@ -201,6 +264,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
+        sync_manager_withdrawal(instance.monthly)
         AuditLog.log(
             user=self.request.user,
             action=AuditLog.ActionType.UPDATE,
@@ -211,9 +275,11 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
+        monthly = instance.monthly
         obj_id = instance.id
         obj_repr = str(instance)
         super().perform_destroy(instance)
+        sync_manager_withdrawal(monthly)
         AuditLog.log(
             user=self.request.user,
             action=AuditLog.ActionType.DELETE,
@@ -393,7 +459,7 @@ class YearSummaryView(APIView):
         months = []
         for m in range(1, 13):
             entry = by_month.get(m)
-            withdrawal = float(entry.manager_withdrawal) if entry else 0.0
+            withdrawal = float(sync_manager_withdrawal(entry)) if entry else 0.0
             expenses_total = (
                 float(sum(e.amount for e in entry.expenses.all())) if entry else 0.0
             )

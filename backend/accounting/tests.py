@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 from core.models import User
 from inventory.models import Product
 from sales.models import Return, Sale, SaleItem
-from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting
+from .models import CashRegisterAdjustment, Expense, ExpenseCategory, MonthlyAccounting
 
 
 class AccountingPermissionsTests(TestCase):
@@ -57,20 +57,24 @@ class MonthlySummaryTests(TestCase):
         }, format='json')
         self.assertEqual(r.status_code, 201, r.content)
 
-        # Set withdrawal
         monthly = MonthlyAccounting.objects.get(year=2026, month=4)
-        monthly.manager_withdrawal = Decimal('500')
-        monthly.save()
+        withdrawal = self.client.post(f'/api/accounting/monthly/{monthly.id}/withdraw/', {
+            'amount': '500.00',
+            'note': 'Retrait test',
+            'incurred_on': '2026-04-24',
+        }, format='json')
+        self.assertEqual(withdrawal.status_code, 200, withdrawal.content)
 
         r = self.client.get('/api/accounting/monthly/by-period/2026/4/')
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.data['total_expenses'], 150.0)
+        self.assertEqual(r.data['total_expenses'], 650.0)
         self.assertEqual(float(r.data['manager_withdrawal']), 500.0)
+        self.assertEqual(r.data['cash_after_withdrawal'], r.data['net_profit'])
 
         r = self.client.get('/api/accounting/summary/?year=2026')
         self.assertEqual(r.status_code, 200)
         april = next(m for m in r.data['months'] if m['month'] == 4)
-        self.assertEqual(april['expenses'], 150.0)
+        self.assertEqual(april['expenses'], 650.0)
         self.assertEqual(april['manager_withdrawal'], 500.0)
 
     def test_margin_detail_is_returned_for_day_month_and_year(self):
@@ -120,6 +124,38 @@ class MonthlySummaryTests(TestCase):
         year = self.client.get('/api/accounting/summary/?year=2026')
         self.assertEqual(year.status_code, 200)
         self.assertEqual(year.data['sales_margin_detail']['sales'][0]['margin'], 8.0)
+
+    def test_manager_withdrawals_are_added_as_cash_expenses(self):
+        monthly, _ = MonthlyAccounting.objects.get_or_create(year=2026, month=4)
+
+        first = self.client.post(f'/api/accounting/monthly/{monthly.id}/withdraw/', {
+            'amount': '100.00',
+            'note': 'Premier retrait',
+            'incurred_on': '2026-04-24',
+        }, format='json')
+        self.assertEqual(first.status_code, 200, first.content)
+
+        second = self.client.post(f'/api/accounting/monthly/{monthly.id}/withdraw/', {
+            'amount': '100.00',
+            'note': 'Deuxieme retrait',
+            'incurred_on': '2026-04-24',
+        }, format='json')
+        self.assertEqual(second.status_code, 200, second.content)
+
+        monthly.refresh_from_db()
+        self.assertEqual(monthly.manager_withdrawal, Decimal('200.00'))
+        self.assertEqual(
+            Expense.objects.filter(category__name='Retrait gérant').count(),
+            2,
+        )
+        self.assertTrue(
+            Expense.objects.filter(category__name='Retrait gérant', paid_from_cash=True).exists()
+        )
+
+        cash = self.client.get('/api/accounting/cash-register/')
+        self.assertEqual(cash.status_code, 200)
+        self.assertEqual(cash.data['expenses_total'], 200.0)
+        self.assertEqual(cash.data['balance'], -200.0)
 
 
 class CashRegisterTests(TestCase):

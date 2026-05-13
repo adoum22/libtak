@@ -164,7 +164,7 @@ export default function Accounting() {
 
     // ---------- Mutations ----------
     const saveMonthly = useMutation({
-        mutationFn: (payload: { manager_withdrawal: number; notes: string }) =>
+        mutationFn: (payload: { notes: string }) =>
             client.patch(`/accounting/monthly/${monthData!.id}/`, payload),
         onSuccess: () => {
             toast.success('Mois mis à jour');
@@ -172,6 +172,20 @@ export default function Accounting() {
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
         },
         onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur sauvegarde')),
+    });
+
+    const addWithdrawal = useMutation({
+        mutationFn: (payload: { amount: number; note: string; incurred_on: string }) =>
+            client.post(`/accounting/monthly/${monthData!.id}/withdraw/`, payload),
+        onSuccess: () => {
+            toast.success('Retrait enregistré en dépense caisse');
+            setWithdrawalDraft({ amount: '', note: '' });
+            qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
+            qc.invalidateQueries({ queryKey: ['acc-summary', year] });
+            qc.invalidateQueries({ queryKey: ['acc-period'] });
+            qc.invalidateQueries({ queryKey: ['cashRegister'] });
+        },
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur retrait')),
     });
 
     const addExpense = useMutation({
@@ -215,24 +229,18 @@ export default function Accounting() {
     // ---------- Local form state ----------
     const [monthDraft, setMonthDraft] = useState({
         id: null as number | null,
-        withdrawal: '',
         notes: '',
     });
+    const [withdrawalDraft, setWithdrawalDraft] = useState({ amount: '', note: '' });
     const [newExp, setNewExp] = useState({ category: '', amount: '', description: '', paid_from_cash: true });
     const [newCatName, setNewCatName] = useState('');
 
     const currentMonthId = monthData?.id ?? null;
-    const withdrawal = monthData && monthDraft.id === monthData.id
-        ? monthDraft.withdrawal
-        : String(monthData?.manager_withdrawal ?? '');
     const notes = monthData && monthDraft.id === monthData.id
         ? monthDraft.notes
         : (monthData?.notes ?? '');
-    const setWithdrawal = (value: string) => {
-        setMonthDraft({ id: currentMonthId, withdrawal: value, notes });
-    };
     const setNotes = (value: string) => {
-        setMonthDraft({ id: currentMonthId, withdrawal, notes: value });
+        setMonthDraft({ id: currentMonthId, notes: value });
     };
 
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -525,7 +533,14 @@ export default function Accounting() {
         const grossMargin = monthData.gross_margin ?? (monthData.net_profit + totalExp);
         const cogs = Math.max(0, revenue - grossMargin);
         const net = monthData.net_profit ?? (grossMargin - totalExp);
-        const cashAfter = monthData.cash_after_withdrawal ?? (net - wd);
+        const cashAfter = monthData.cash_after_withdrawal ?? net;
+        const withdrawalAmount = Number.parseFloat(withdrawalDraft.amount.replace(',', '.'));
+        const canAddWithdrawal = Number.isFinite(withdrawalAmount) && withdrawalAmount > 0;
+        const monthExpenseDate = toLocalDateInputValue(new Date(
+            year,
+            month - 1,
+            Math.min(now.getDate(), new Date(year, month, 0).getDate()),
+        ));
 
         // Données de waterfall pour visualiser : CA -> -achat -> -dépenses -> bénéfice
         const waterfall = [
@@ -647,34 +662,48 @@ export default function Accounting() {
                         </div>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-sm font-medium mb-1">Retrait du gérant (DH)</label>
+                        <div className="rounded-xl border border-border p-4 bg-tertiary/20">
+                            <label className="block text-sm font-medium mb-1">Nouveau retrait (DH)</label>
                             <input
                                 type="number" step="0.01" min="0"
-                                value={withdrawal}
-                                onChange={(e) => setWithdrawal(e.target.value)}
+                                value={withdrawalDraft.amount}
+                                onChange={(e) => setWithdrawalDraft({ ...withdrawalDraft, amount: e.target.value })}
+                                placeholder="0.00"
                             />
+                            <label className="block text-sm font-medium mt-3 mb-1">Note du retrait</label>
+                            <input
+                                type="text"
+                                value={withdrawalDraft.note}
+                                onChange={(e) => setWithdrawalDraft({ ...withdrawalDraft, note: e.target.value })}
+                                placeholder="Retrait especes"
+                            />
+                            <button
+                                className="btn-primary mt-4 w-full"
+                                disabled={!canAddWithdrawal || addWithdrawal.isPending}
+                                onClick={() => addWithdrawal.mutate({
+                                    amount: withdrawalAmount,
+                                    note: withdrawalDraft.note.trim() || 'Retrait gerant',
+                                    incurred_on: monthExpenseDate,
+                                })}
+                            >
+                                Ajouter le retrait
+                            </button>
                         </div>
-                        <div>
+                        <div className="rounded-xl border border-border p-4 bg-tertiary/20">
                             <label className="block text-sm font-medium mb-1">Notes</label>
                             <input
                                 type="text" value={notes}
                                 onChange={(e) => setNotes(e.target.value)}
                                 placeholder="Optionnel"
                             />
+                            <button
+                                className="btn-secondary mt-4 w-full"
+                                disabled={saveMonthly.isPending}
+                                onClick={() => saveMonthly.mutate({ notes })}
+                            >
+                                Sauvegarder la note
+                            </button>
                         </div>
-                    </div>
-                    <div className="mt-4 flex justify-end">
-                        <button
-                            className="btn-primary"
-                            disabled={saveMonthly.isPending}
-                            onClick={() => saveMonthly.mutate({
-                                manager_withdrawal: Number(withdrawal) || 0,
-                                notes,
-                            })}
-                        >
-                            Enregistrer
-                        </button>
                     </div>
                 </div>
 
