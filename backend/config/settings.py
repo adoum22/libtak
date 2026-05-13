@@ -36,6 +36,25 @@ RUNNING_MANAGEMENT_COMMAND = any(arg in _MANAGEMENT_COMMANDS for arg in sys.argv
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_env_file(path):
+    """Load KEY=value lines from a private env file if it exists."""
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file(Path.home() / '.libtak_env')
+_load_env_file(BASE_DIR / '.env')
+
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 
 SECRET_KEY = os.environ.get('SECRET_KEY')
@@ -285,17 +304,29 @@ CELERY_BEAT_SCHEDULE = {
 # User Model
 AUTH_USER_MODEL = 'core.User'
 
-# Email Configuration (à configurer avec vos propres credentials)
-EMAIL_BACKEND = os.environ.get(
-    'EMAIL_BACKEND', 
-    'django.core.mail.backends.console.EmailBackend'  # Par défaut: console pour dev
-)
+# Email Configuration
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Librairie Attaquaddoum <noreply@librairie-attaquaddoum.com>')
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'DEFAULT_FROM_EMAIL',
+    EMAIL_HOST_USER or 'Librairie Attaquaddoum <noreply@librairie-attaquaddoum.com>',
+)
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', 30))
+
+# In production we often configure only EMAIL_HOST_USER/PASSWORD in WSGI.
+# If credentials exist, use real SMTP automatically; otherwise keep console
+# backend for local/dev so tests and offline runs do not try to send mail.
+EMAIL_BACKEND = os.environ.get(
+    'EMAIL_BACKEND',
+    (
+        'django.core.mail.backends.smtp.EmailBackend'
+        if EMAIL_HOST_USER and EMAIL_HOST_PASSWORD
+        else 'django.core.mail.backends.console.EmailBackend'
+    ),
+)
 
 # Spectacular (API Docs)
 SPECTACULAR_SETTINGS = {

@@ -591,7 +591,7 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         On appelle maintenant la tâche directement et on renvoie le
         statut d'envoi pour debug.
         """
-        from .tasks import send_daily_report
+        from .tasks import email_config_error, send_daily_report
         from django.conf import settings as dj_settings
 
         try:
@@ -608,14 +608,15 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                     'success': bool(log.success) if log else None,
                     'error_message': log.error_message if log else None,
                 } if log else None,
-            'smtp_config': {
-                'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
-                'host': getattr(dj_settings, 'EMAIL_HOST', None),
-                'port': getattr(dj_settings, 'EMAIL_PORT', None),
-                'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
+                'smtp_config': {
+                    'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
+                    'host': getattr(dj_settings, 'EMAIL_HOST', None),
+                    'port': getattr(dj_settings, 'EMAIL_PORT', None),
+                    'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
                     'password_set': bool(getattr(dj_settings, 'EMAIL_HOST_PASSWORD', None)),
                     'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
                     'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
+                    'config_error': email_config_error(),
                 },
             })
         except Exception as exc:
@@ -643,6 +644,7 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         """
         from django.conf import settings as dj_settings
         from sales.models import Sale, SaleItem
+        from .tasks import email_config_error
 
         from inventory.models import Product
 
@@ -703,14 +705,16 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                 'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
                 'host': getattr(dj_settings, 'EMAIL_HOST', None),
                 'port': getattr(dj_settings, 'EMAIL_PORT', None),
-                'user': getattr(dj_settings, 'EMAIL_HOST_USER', None),
+                'user_set': bool(getattr(dj_settings, 'EMAIL_HOST_USER', None)),
                 'password_set': bool(getattr(dj_settings, 'EMAIL_HOST_PASSWORD', None)),
                 'use_tls': getattr(dj_settings, 'EMAIL_USE_TLS', None),
                 'from_email': getattr(dj_settings, 'DEFAULT_FROM_EMAIL', None),
+                'config_error': email_config_error(),
             },
             'pythonanywhere_task': (
                 'cd ~/libtak/backend && python manage.py send_scheduled_reports'
             ),
+            'pythonanywhere_env_file': '~/.libtak_env',
             'local_backup_sync_task': (
                 'cd ~/libtak/backend && python manage.py local_backup_sync'
             ),

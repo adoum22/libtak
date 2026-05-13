@@ -1,4 +1,5 @@
-from django.test import TestCase
+from django.core.management import call_command
+from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from rest_framework import status
@@ -9,7 +10,8 @@ from django.utils import timezone
 from inventory.models import Product
 from sales.models import Sale, SaleItem
 from .models import ReportSettings, ReportLog
-from .tasks import get_report_data
+from .tasks import email_config_error, get_report_data, send_report_email
+from io import StringIO
 
 User = get_user_model()
 
@@ -36,6 +38,34 @@ class ReportSettingsTest(TestCase):
         recipients = settings.get_recipients_list()
         self.assertEqual(len(recipients), 3)
         self.assertIn('test1@email.com', recipients)
+
+
+class ReportEmailConfigTest(TestCase):
+    @override_settings(
+        EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend',
+        EMAIL_HOST='smtp.gmail.com',
+        EMAIL_HOST_USER='sender@example.com',
+        EMAIL_HOST_PASSWORD='secret',
+    )
+    def test_console_backend_is_reported_as_error(self):
+        self.assertIn('console.EmailBackend', email_config_error())
+        success, error = send_report_email(
+            'DAILY',
+            date.today(),
+            date.today(),
+            {'total_revenue': 0, 'total_profit': 0, 'total_sales': 0, 'items_sold': []},
+            ['recipient@example.com'],
+        )
+        self.assertFalse(success)
+        self.assertIn('console.EmailBackend', error)
+
+    def test_scheduled_command_reports_missing_recipients(self):
+        ReportSettings.get_settings().save()
+        out = StringIO()
+
+        call_command('send_scheduled_reports', '--skip-backup', stdout=out)
+
+        self.assertIn('X daily report: No recipients configured', out.getvalue())
 
 
 class ReportDataTest(TestCase):

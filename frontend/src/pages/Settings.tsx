@@ -57,6 +57,7 @@ interface ReportDiagnostic {
         user_set?: boolean;
         password_set?: boolean;
         from_email?: string;
+        config_error?: string | null;
     };
     last_daily_log?: {
         sent_at: string | null;
@@ -64,6 +65,7 @@ interface ReportDiagnostic {
         error_message: string | null;
     } | null;
     pythonanywhere_task?: string;
+    pythonanywhere_env_file?: string;
     local_backup_sync_task?: string;
     message?: string;
     success?: boolean;
@@ -423,10 +425,20 @@ export default function Settings() {
                                             {reportDiagnostic.last_daily_log.error_message}
                                         </div>
                                     )}
+                                    {reportDiagnostic.smtp_config?.config_error && (
+                                        <div className="md:col-span-2 p-3 bg-danger-light text-danger rounded-lg">
+                                            {reportDiagnostic.smtp_config.config_error}
+                                        </div>
+                                    )}
                                     {reportDiagnostic.pythonanywhere_task && (
                                         <div className="md:col-span-2 p-3 bg-tertiary/40 rounded-lg">
                                             <p className="font-semibold mb-1">Commande PythonAnywhere 23h</p>
                                             <code className="text-xs">{reportDiagnostic.pythonanywhere_task}</code>
+                                            {reportDiagnostic.pythonanywhere_env_file && (
+                                                <p className="text-xs text-muted mt-2">
+                                                    Variables chargees depuis {reportDiagnostic.pythonanywhere_env_file}
+                                                </p>
+                                            )}
                                         </div>
                                     )}
                                 </div>

@@ -12,6 +12,23 @@ from .models import ReportSettings, ReportLog
 from core.models import AppSettings
 
 
+def email_config_error():
+    """Return a human-readable SMTP configuration error, or None if usable."""
+    backend = getattr(settings, 'EMAIL_BACKEND', '')
+    if 'console.EmailBackend' in backend:
+        return (
+            'EMAIL_BACKEND utilise console.EmailBackend: email imprime en console, '
+            'pas envoye. Configure EMAIL_HOST_USER et EMAIL_HOST_PASSWORD.'
+        )
+    if not getattr(settings, 'EMAIL_HOST', None):
+        return 'EMAIL_HOST manquant'
+    if not getattr(settings, 'EMAIL_HOST_USER', None):
+        return 'EMAIL_HOST_USER manquant'
+    if not getattr(settings, 'EMAIL_HOST_PASSWORD', None):
+        return 'EMAIL_HOST_PASSWORD manquant'
+    return None
+
+
 def get_report_data(start_date, end_date):
     """Calcule les données du rapport pour une période"""
     from sales.models import Return, ReturnItem
@@ -157,7 +174,9 @@ def get_report_data(start_date, end_date):
 def send_report_email(report_type, start_date, end_date, data, recipients):
     """Envoie le rapport par email avec configuration SMTP dynamique"""
 
-    settings_obj = ReportSettings.get_settings()
+    config_error = email_config_error()
+    if config_error:
+        return False, config_error
 
     subject_map = {
         'DAILY': f'Rapport Journalier - {end_date.strftime("%d/%m/%Y")}',
@@ -469,6 +488,10 @@ def send_low_stock_alert():
 
     if not low_stock_products.exists():
         return "No low stock products"
+
+    config_error = email_config_error()
+    if config_error:
+        return f"Error sending low stock alert: {config_error}"
 
     # Construire le message HTML
     html_message = """
