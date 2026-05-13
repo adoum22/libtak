@@ -38,17 +38,19 @@ from .serializers import (
 def update_product_cost_layer_for_request(request, product_id):
     product = get_object_or_404(Product, pk=product_id)
     layer_id = request.data.get('layer_id') or request.data.get('id')
+    layers = list(product.cost_layers.filter(
+        remaining_quantity__gt=0,
+    ).order_by('created_at', 'id'))
+    index = int(request.data.get('index', 0) or 0)
+    layer = None
 
-    if layer_id:
+    if layer_id not in (None, ''):
         try:
             layer = product.cost_layers.get(id=layer_id)
         except ProductCostLayer.DoesNotExist:
-            return Response({'detail': 'Lot FIFO introuvable pour ce produit.'}, status=404)
-    else:
-        layers = list(product.cost_layers.filter(
-            remaining_quantity__gt=0,
-        ).order_by('created_at', 'id'))
-        index = int(request.data.get('index', 0) or 0)
+            layer = None
+
+    if layer is None:
         if index < 0 or index >= len(layers):
             return Response({'detail': 'Lot FIFO introuvable pour cette position.'}, status=404)
         layer = layers[index]

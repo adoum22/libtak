@@ -209,8 +209,8 @@ export default function Inventory() {
     const priceMutation = useMutation({
         mutationFn: (data: { id: number; purchase_price: string; sale_price_ht: string }) =>
             client.patch(`/inventory/products/${data.id}/`, {
-                purchase_price: data.purchase_price || '0',
-                sale_price_ht: data.sale_price_ht || '0',
+                purchase_price: normalizeMoney(data.purchase_price) || '0',
+                sale_price_ht: normalizeMoney(data.sale_price_ht) || '0',
             }),
         onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['products'] });

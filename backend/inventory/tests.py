@@ -336,6 +336,38 @@ class InventoryAPITest(APITestCase):
         self.assertEqual(product.sale_price_ht, Decimal('5.00'))
         self.assertEqual(response.data['product']['price_ttc'], Decimal('5.00'))
 
+    def test_update_product_cost_layer_falls_back_to_position_when_id_is_stale(self):
+        product = Product.objects.create(
+            name='Lot stale id',
+            barcode='4444444444447',
+            purchase_price=Decimal('0.00'),
+            sale_price_ht=Decimal('8.00'),
+            stock=3,
+        )
+        layer = ProductCostLayer.objects.create(
+            product=product,
+            unit_cost=Decimal('0.00'),
+            sale_price=Decimal('8.00'),
+            initial_quantity=3,
+            remaining_quantity=3,
+        )
+
+        response = self.client.patch(
+            f'/api/inventory/products/{product.id}/update-cost-layer/',
+            {
+                'layer_id': 999999,
+                'index': 0,
+                'unit_cost': '1.10',
+                'sale_price': '2.00',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        layer.refresh_from_db()
+        self.assertEqual(layer.unit_cost, Decimal('1.10'))
+        self.assertEqual(layer.sale_price, Decimal('2.00'))
+
     def test_product_price_update_updates_current_fifo_layer(self):
         product = Product.objects.create(
             name='Produit prix courant',
