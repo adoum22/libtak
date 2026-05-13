@@ -175,8 +175,37 @@ export default function Accounting() {
     });
 
     const addWithdrawal = useMutation({
-        mutationFn: (payload: { amount: number; note: string; incurred_on: string }) =>
-            client.post(`/accounting/monthly/${monthData!.id}/withdraw/`, payload),
+        mutationFn: async (payload: { amount: number; note: string; incurred_on: string }) => {
+            try {
+                return await client.post(`/accounting/monthly/${monthData!.id}/withdraw/`, payload);
+            } catch (error: unknown) {
+                const statusCode = (error as { response?: { status?: number } })?.response?.status;
+                if (statusCode !== 404) {
+                    throw error;
+                }
+
+                let withdrawalCategory = categories.find(
+                    category => category.name.trim().toLowerCase() === 'retrait gérant',
+                );
+                if (!withdrawalCategory) {
+                    const created = await client.post('/accounting/categories/', { name: 'Retrait gérant' });
+                    withdrawalCategory = created.data;
+                }
+                if (!withdrawalCategory) {
+                    throw error;
+                }
+
+                return client.post('/accounting/expenses/', {
+                    year,
+                    month,
+                    category: withdrawalCategory.id,
+                    amount: payload.amount,
+                    description: payload.note,
+                    incurred_on: payload.incurred_on,
+                    paid_from_cash: true,
+                });
+            }
+        },
         onSuccess: () => {
             toast.success('Retrait enregistré en dépense caisse');
             setWithdrawalDraft({ amount: '', note: '' });
