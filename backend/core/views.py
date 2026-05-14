@@ -1,3 +1,7 @@
+import os
+import subprocess
+
+from django.conf import settings
 from rest_framework import generics, viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -24,6 +28,38 @@ from .permissions import IsAdminRole, CanManageUsers
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 User = get_user_model()
+
+
+def get_deploy_commit():
+    for key in ('VERCEL_GIT_COMMIT_SHA', 'COMMIT_SHA', 'SOURCE_VERSION', 'GIT_COMMIT'):
+        value = os.environ.get(key)
+        if value:
+            return value
+
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short=12', 'HEAD'],
+            cwd=settings.BASE_DIR.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return None
+
+
+class AppVersionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        commit = get_deploy_commit()
+        return Response({
+            'backend_commit': commit,
+            'backend_commit_short': commit[:12] if commit else None,
+            'debug': settings.DEBUG,
+        })
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):

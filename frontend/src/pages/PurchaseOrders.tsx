@@ -147,8 +147,8 @@ export default function PurchaseOrders() {
         items: [] as {
             product: number;
             quantity: number;
-            unit_cost: number;
-            sale_price: number;
+            unit_cost: string;
+            sale_price: string;
             productName?: string;
             barcode?: string;
         }[]
@@ -252,8 +252,8 @@ export default function PurchaseOrders() {
                 items: [...formData.items, {
                     product: selectedProduct.id,
                     quantity: itemQty,
-                    unit_cost: selectedProduct.purchase_price,
-                    sale_price: Number(selectedProduct.price_ttc ?? selectedProduct.sale_price_ht) || 0,
+                    unit_cost: String(selectedProduct.purchase_price ?? 0),
+                    sale_price: String(selectedProduct.price_ttc ?? selectedProduct.sale_price_ht ?? 0),
                     productName: selectedProduct.name,
                     barcode: selectedProduct.barcode
                 }]
@@ -288,8 +288,8 @@ export default function PurchaseOrders() {
             items: formData.items.map(({ product, quantity, unit_cost, sale_price }) => ({
                 product,
                 quantity,
-                unit_cost,
-                sale_price,
+                unit_cost: parseDecimalInput(unit_cost) || 0,
+                sale_price: parseDecimalInput(sale_price) || 0,
             }))
         };
 
@@ -387,8 +387,8 @@ export default function PurchaseOrders() {
             items: [...formData.items, {
                 product: newProduct.id,
                 quantity: 1,
-                unit_cost: Number(newProduct.purchase_price) || 0,
-                sale_price: 0,
+                unit_cost: String(newProduct.purchase_price ?? 0),
+                sale_price: '0',
                 productName: newProduct.name,
                 barcode: newProduct.barcode
             }]
@@ -407,7 +407,10 @@ export default function PurchaseOrders() {
         return styles[status] || 'badge-secondary';
     };
 
-    const orderTotal = formData.items.reduce((sum, i) => sum + i.quantity * i.unit_cost, 0);
+    const orderTotal = formData.items.reduce(
+        (sum, item) => sum + item.quantity * (parseDecimalInput(item.unit_cost) || 0),
+        0,
+    );
 
     return (
         <div className="space-y-6 animate-fadeIn">
@@ -576,12 +579,11 @@ export default function PurchaseOrders() {
                                                     inputMode="decimal"
                                                     value={item.unit_cost}
                                                 onChange={(e) => {
-                                                    const newCost = parseDecimalInput(e.target.value);
                                                     setFormData({
                                                         ...formData,
                                                         items: formData.items.map(i =>
                                                             i.product === item.product
-                                                                ? { ...i, unit_cost: Number.isFinite(newCost) ? newCost : 0 }
+                                                                ? { ...i, unit_cost: normalizeDecimalInput(e.target.value) }
                                                                 : i
                                                         ),
                                                     });
@@ -598,12 +600,11 @@ export default function PurchaseOrders() {
                                                     inputMode="decimal"
                                                     value={item.sale_price}
                                                 onChange={(e) => {
-                                                    const newSalePrice = parseDecimalInput(e.target.value);
                                                     setFormData({
                                                         ...formData,
                                                         items: formData.items.map(i =>
                                                             i.product === item.product
-                                                                ? { ...i, sale_price: Number.isFinite(newSalePrice) ? newSalePrice : 0 }
+                                                                ? { ...i, sale_price: normalizeDecimalInput(e.target.value) }
                                                                 : i
                                                         ),
                                                     });
@@ -632,7 +633,7 @@ export default function PurchaseOrders() {
                                             />
                                         </div>
                                         <div className="w-24 text-right font-bold text-accent">
-                                            {(item.quantity * item.unit_cost).toFixed(2)}
+                                            {(item.quantity * (parseDecimalInput(item.unit_cost) || 0)).toFixed(2)}
                                         </div>
                                         <div className="w-10 text-right">
                                             <button onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded">

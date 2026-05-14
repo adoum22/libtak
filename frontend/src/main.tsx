@@ -5,6 +5,7 @@ import './index.css'
 import './i18n'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import ErrorBoundary from './components/ErrorBoundary'
+import { registerSW } from 'virtual:pwa-register'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,3 +27,15 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 )
+
+const updateServiceWorker = registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    const shouldReload = window.confirm(
+      'Une nouvelle version de Libtak est disponible. Recharger maintenant ?',
+    )
+    if (shouldReload) {
+      updateServiceWorker(true)
+    }
+  },
+})

@@ -23,8 +23,8 @@ type ProductFormData = {
     name: string;
     barcode: string;
     description: string;
-    purchase_price: number;
-    sale_price_ht: number;
+    purchase_price: string;
+    sale_price_ht: string;
     stock: number;
     min_stock: number;
     category: string;
@@ -48,8 +48,8 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
         name: initialName,
         barcode: initialBarcode,
         description: '',
-        purchase_price: 0,
-        sale_price_ht: 0,
+        purchase_price: '',
+        sale_price_ht: '',
         stock: 0,
         min_stock: 5,
         category: '', // ID
@@ -72,9 +72,11 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
     });
 
     // Calculations
-    const margin = formData.sale_price_ht - formData.purchase_price;
-    const marginPercent = formData.purchase_price > 0
-        ? ((margin / formData.purchase_price) * 100).toFixed(1)
+    const purchasePrice = parseDecimalInput(formData.purchase_price) || 0;
+    const salePrice = parseDecimalInput(formData.sale_price_ht) || 0;
+    const margin = salePrice - purchasePrice;
+    const marginPercent = purchasePrice > 0
+        ? ((margin / purchasePrice) * 100).toFixed(1)
         : '0.0';
 
     const createProduct = useMutation({
@@ -82,7 +84,10 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
             const formDataObj = new FormData();
             Object.entries(data).forEach(([key, value]) => {
                 if (value !== undefined && value !== '') {
-                    formDataObj.append(key, String(value));
+                    const normalizedValue = key === 'purchase_price' || key === 'sale_price_ht'
+                        ? normalizeDecimalInput(String(value))
+                        : String(value);
+                    formDataObj.append(key, normalizedValue);
                 }
             });
             formDataObj.append('tva', '0');
@@ -217,7 +222,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                                 step="0.01"
                                 className="input w-full"
                                 value={formData.purchase_price}
-                                onChange={e => setFormData({ ...formData, purchase_price: parseDecimalInput(normalizeDecimalInput(e.target.value)) || 0 })}
+                                onChange={e => setFormData({ ...formData, purchase_price: normalizeDecimalInput(e.target.value) })}
                             />
                         </div>
 
@@ -229,7 +234,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                                 step="0.01"
                                 className="input w-full"
                                 value={formData.sale_price_ht}
-                                onChange={e => setFormData({ ...formData, sale_price_ht: parseDecimalInput(normalizeDecimalInput(e.target.value)) || 0 })}
+                                onChange={e => setFormData({ ...formData, sale_price_ht: normalizeDecimalInput(e.target.value) })}
                             />
                         </div>
 

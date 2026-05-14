@@ -15,6 +15,7 @@ from .views import (
     LogoutView,
     ChangePasswordView,
     AuditLogViewSet,
+    AppVersionView,
 )
 from .sync_api import receive_sync_data, get_master_data, sync_status, trigger_sync
 
@@ -38,6 +39,7 @@ urlpatterns = [
     path('settings/', AppSettingsView.as_view(), name='app_settings'),
     path('settings/public/', PublicSettingsView.as_view(), name='public_settings'),
     path('settings/logo/', AppSettingsLogoView.as_view(), name='app_settings_logo'),
+    path('version/', AppVersionView.as_view(), name='app_version'),
 
     # Database export/backup
     path('backup/', DatabaseExportView.as_view(), name='database_export'),

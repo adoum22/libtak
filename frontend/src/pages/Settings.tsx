@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import client from '../api/client';
+import client, { getApiUrl } from '../api/client';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download, Send, AlertCircle } from 'lucide-react';
@@ -71,6 +71,12 @@ interface ReportDiagnostic {
     success?: boolean;
 }
 
+interface AppVersion {
+    backend_commit?: string | null;
+    backend_commit_short?: string | null;
+    debug?: boolean;
+}
+
 export default function Settings() {
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -79,6 +85,7 @@ export default function Settings() {
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const [reportDiagnostic, setReportDiagnostic] = useState<ReportDiagnostic | null>(null);
+    const [backupDiagnostic, setBackupDiagnostic] = useState<string | null>(null);
 
     const { data: appSettings } = useQuery<AppSettings>({
         queryKey: ['appSettings'],
@@ -90,11 +97,18 @@ export default function Settings() {
         queryFn: () => client.get('/reporting/settings/').then(res => res.data)
     });
 
+    const { data: appVersion } = useQuery<AppVersion>({
+        queryKey: ['appVersion'],
+        queryFn: () => client.get('/auth/version/').then(res => res.data),
+        retry: 1,
+    });
+
     const [storeDraft, setStoreDraft] = useState<Partial<AppSettings>>({});
     const [reportDraft, setReportDraft] = useState<Partial<ReportSettings>>({});
     const storeForm = Object.keys(storeDraft).length > 0 ? storeDraft : (appSettings ?? {});
     const reportForm = Object.keys(reportDraft).length > 0 ? reportDraft : (reportSettings ?? {});
     const currentLogoPreview = logoPreview ?? appSettings?.logo_url ?? null;
+    const frontendCommit = import.meta.env.VITE_COMMIT_SHA || import.meta.env.VITE_VERCEL_GIT_COMMIT_SHA || '-';
     const setStoreForm = (value: Partial<AppSettings>) => setStoreDraft(value);
     const setReportForm = (value: Partial<ReportSettings>) => setReportDraft(value);
 
@@ -139,6 +153,17 @@ export default function Settings() {
         onSuccess: (res) => setReportDiagnostic(res.data),
     });
 
+    const testBackup = useMutation({
+        mutationFn: () => client.get('/auth/backup/?products=true&categories=true&suppliers=true&sales=true&users=true&settings=true', {
+            responseType: 'blob',
+        }),
+        onSuccess: (res) => {
+            const sizeKb = Math.max(1, Math.round(res.data.size / 1024));
+            setBackupDiagnostic(`Sauvegarde generee correctement (${sizeKb} Ko).`);
+        },
+        onError: () => setBackupDiagnostic('Erreur pendant la generation de la sauvegarde.'),
+    });
+
     const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
@@ -160,6 +185,23 @@ export default function Settings() {
             )}
 
             <h1 className="text-2xl font-bold">Paramètres</h1>
+
+            <div className="card max-w-4xl p-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <div>
+                        <p className="text-muted">API</p>
+                        <p className="font-mono text-xs break-all">{getApiUrl()}</p>
+                    </div>
+                    <div>
+                        <p className="text-muted">Version backend</p>
+                        <p className="font-mono">{appVersion?.backend_commit_short || '-'}</p>
+                    </div>
+                    <div>
+                        <p className="text-muted">Version frontend</p>
+                        <p className="font-mono">{frontendCommit === '-' ? '-' : frontendCommit.slice(0, 12)}</p>
+                    </div>
+                </div>
+            </div>
 
             {/* Tabs */}
             <div className="flex gap-2 border-b overflow-x-auto">
@@ -749,6 +791,23 @@ export default function Settings() {
                                 <Download size={24} />
                                 Télécharger la sauvegarde
                             </button>
+                        </div>
+
+                        <div className="text-center">
+                            <button
+                                type="button"
+                                onClick={() => testBackup.mutate()}
+                                disabled={testBackup.isPending}
+                                className="btn-secondary inline-flex items-center gap-2"
+                            >
+                                <Database size={18} />
+                                {testBackup.isPending ? 'Verification...' : 'Tester la sauvegarde'}
+                            </button>
+                            {backupDiagnostic && (
+                                <p className={`text-sm mt-3 ${backupDiagnostic.startsWith('Erreur') ? 'text-danger' : 'text-success'}`}>
+                                    {backupDiagnostic}
+                                </p>
+                            )}
                         </div>
 
                         <p className="text-xs text-muted text-center">

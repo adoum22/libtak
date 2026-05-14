@@ -230,6 +230,26 @@ export default function Layout() {
                     <Outlet />
                 </main>
             </div>
+
+            <nav className="mobile-bottom-nav" aria-label="Navigation mobile">
+                {filteredNavItems
+                    .filter(item => ['/', '/pos', '/cash-register', '/inventory', '/purchase-orders', '/accounting', '/settings'].includes(item.path))
+                    .slice(0, 5)
+                    .map((item) => {
+                        const Icon = item.icon;
+                        const isActive = location.pathname === item.path;
+                        return (
+                            <Link
+                                key={item.path}
+                                to={item.path}
+                                className={`mobile-bottom-item ${isActive ? 'active' : ''}`}
+                            >
+                                <Icon size={20} />
+                                <span>{item.label}</span>
+                            </Link>
+                        );
+                    })}
+            </nav>
         </div>
     );
 }

@@ -4,12 +4,19 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.db.models import Sum, F, Count
 from django.conf import settings
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from sales.models import Sale, SaleItem
 from .models import ReportSettings, ReportLog
 from core.models import AppSettings
+
+
+def local_datetime_bounds(start_date, end_date):
+    tz = timezone.get_current_timezone()
+    start_dt = timezone.make_aware(datetime.combine(start_date, time.min), tz)
+    end_dt = timezone.make_aware(datetime.combine(end_date, time.max), tz)
+    return start_dt, end_dt
 
 
 def email_config_error():
@@ -32,11 +39,13 @@ def email_config_error():
 def get_report_data(start_date, end_date):
     """Calcule les données du rapport pour une période"""
     from sales.models import Return, ReturnItem
+    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
+    tz = timezone.get_current_timezone()
 
     # Ventes de la période
     sales = Sale.objects.filter(
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date
+        created_at__gte=start_dt,
+        created_at__lte=end_dt
     )
 
     # Totaux
@@ -84,8 +93,8 @@ def get_report_data(start_date, end_date):
     # Calcul des retours COMPLÉTÉS de la période
     completed_returns = Return.objects.filter(
         status='COMPLETED',
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date
+        created_at__gte=start_dt,
+        created_at__lte=end_dt
     )
 
     total_returns = Decimal('0')
@@ -111,7 +120,7 @@ def get_report_data(start_date, end_date):
     if start_date == end_date:
         # Vue journalière : par heure
         hourly_sales = sales.annotate(
-            hour=TruncHour('created_at')
+            hour=TruncHour('created_at', tzinfo=tz)
         ).values('hour').annotate(
             revenue=Sum('total_ttc'),
             count=Count('id')
@@ -137,7 +146,7 @@ def get_report_data(start_date, end_date):
     else:
         # Vue période : par jour
         daily_sales = sales.annotate(
-            day=TruncDay('created_at')
+            day=TruncDay('created_at', tzinfo=tz)
         ).values('day').annotate(
             revenue=Sum('total_ttc'),
             count=Count('id')

@@ -644,7 +644,7 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         """
         from django.conf import settings as dj_settings
         from sales.models import Sale, SaleItem
-        from .tasks import email_config_error
+        from .tasks import email_config_error, local_datetime_bounds
 
         from inventory.models import Product
 
@@ -654,9 +654,10 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
 
         # Mêmes filtres que get_report_data → pour reproduire ce que voit
         # le rapport.
+        start_dt, end_dt = local_datetime_bounds(today, today)
         today_sales_qs = Sale.objects.filter(
-            created_at__date__gte=today,
-            created_at__date__lte=today,
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
         )
         today_count = today_sales_qs.count()
         today_revenue_ttc = today_sales_qs.aggregate(

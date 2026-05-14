@@ -227,7 +227,7 @@ export default function POS() {
     }, [closeSuccessOverlay, showSuccessOverlay]);
 
     return (
-        <div className="flex gap-6 h-[calc(100vh-120px)] animate-fadeIn relative">
+        <div className="pos-shell flex gap-6 h-[calc(100vh-120px)] animate-fadeIn relative">
 
             {/* Success Overlay (Auto-dismiss) */}
             {showSuccessOverlay && (
@@ -251,7 +251,7 @@ export default function POS() {
             {/* Price Check Overlay */}
             {checkedProduct && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn" onClick={() => setCheckedProduct(null)}>
-                    <div className="card w-full max-w-lg p-8 shadow-2xl scale-100" onClick={e => e.stopPropagation()}>
+                    <div className="card pos-price-check-modal w-full max-w-lg p-8 shadow-2xl scale-100" onClick={e => e.stopPropagation()}>
                         <div className="flex justify-between items-start mb-6">
                             <h2 className="text-2xl font-bold flex items-center gap-2">
                                 <ScanLine className="text-accent" />
@@ -262,7 +262,7 @@ export default function POS() {
                             </button>
                         </div>
 
-                        <div className="flex gap-6">
+                        <div className="pos-price-check-content flex gap-6">
                             <div className="w-1/3 aspect-square bg-tertiary rounded-xl flex items-center justify-center">
                                 {checkedProduct.image_url ? (
                                     <img src={checkedProduct.image_url} className="w-full h-full object-cover rounded-xl" />
@@ -293,7 +293,7 @@ export default function POS() {
             {/* Payment Modal */}
             {showPaymentModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
-                    <div className="card w-full max-w-md p-0 shadow-2xl">
+                    <div className="card pos-payment-modal w-full max-w-md p-0 shadow-2xl">
                         <div className="card-header bg-accent text-white flex justify-between items-center">
                             <h3 className="text-xl font-bold flex items-center gap-2">
                                 <Banknote />
@@ -349,8 +349,8 @@ export default function POS() {
             {/* Products Section */}
             <div className="flex-1 flex flex-col min-w-0">
                 {/* Top Controls */}
-                <div className="flex items-center gap-4 mb-4">
-                    <div className="bg-tertiary p-1 rounded-lg flex gap-1">
+                <div className="pos-controls flex items-center gap-4 mb-4">
+                    <div className="pos-mode-tabs bg-tertiary p-1 rounded-lg flex gap-1">
                         <button
                             onClick={() => setMode('SALE')}
                             className={`px-4 py-2 rounded-md font-medium text-sm transition-all flex items-center gap-2 ${mode === 'SALE' ? 'bg-secondary shadow text-accent' : 'text-muted hover:text-primary'
@@ -394,7 +394,7 @@ export default function POS() {
                             <p className="text-lg">Scannez un code-barres ou recherchez un produit</p>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+                        <div className="pos-products-grid grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
                             {products.map((product) => (
                                 <button
                                     key={product.id}
@@ -478,7 +478,7 @@ export default function POS() {
             </div>
 
             {/* Right Panel (Cart Only - Success is Overlay now) */}
-            <div className="w-[28rem] card flex flex-col shadow-xl border-t-4 border-t-accent">
+            <div className="pos-cart-panel w-[28rem] card flex flex-col shadow-xl border-t-4 border-t-accent">
                 <div className="card-header flex items-center gap-3 bg-tertiary/30">
                     <ShoppingCart size={26} className="text-accent" />
                     <h2 className="font-semibold text-xl">Panier en cours</h2>
