@@ -435,11 +435,11 @@ export default function Inventory() {
     };
 
     return (
-        <div className="space-y-6 animate-fadeIn">
+        <div className="inventory-page space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold">{t('Inventory')}</h1>
                 {canManageStock && (
-                    <div className="flex gap-2">
+                    <div className="inventory-actions flex gap-2">
                         <input
                             type="file"
                             accept=".xlsx,.xls,.csv,.zip,application/zip"
@@ -454,7 +454,7 @@ export default function Inventory() {
                         />
                         <button
                             onClick={() => importExcelFileRef.current?.click()}
-                            className="btn-secondary flex items-center gap-2"
+                            className="inventory-import-action btn-secondary flex items-center gap-2"
                             disabled={importMutation.isPending}
                         >
                             <Upload size={20} />
@@ -526,7 +526,7 @@ export default function Inventory() {
             </div>
 
             {/* Products Table */}
-            <div className="card overflow-hidden">
+            <div className="inventory-table-card card overflow-hidden">
                 <div className="overflow-x-auto">
                     {isLoading ? (
                         <div className="p-8 text-center">
@@ -546,7 +546,7 @@ export default function Inventory() {
                             <p className="text-sm text-muted mt-2">Cliquez sur "Ajouter un produit" pour commencer</p>
                         </div>
                     ) : (
-                        <table>
+                        <table className="inventory-table">
                             <thead>
                                 <tr>
                                     <th>Produit</th>
@@ -565,7 +565,7 @@ export default function Inventory() {
                                 {products.map((product) => (
                                     <tr key={product.id}>
                                         <td>
-                                            <div className="flex items-center gap-3">
+                                            <div className="inventory-product-cell flex items-center gap-3">
                                                 <div
                                                     onClick={() => {
                                                         if (product.image_url) {
@@ -595,11 +595,11 @@ export default function Inventory() {
                                                         </>
                                                     )}
                                                 </div>
-                                                <div>
+                                                <div className="inventory-product-copy min-w-0">
                                                     <button
                                                         type="button"
                                                         onClick={() => openProductDetails(product)}
-                                                        className="font-medium text-left hover:text-accent transition-colors"
+                                                        className="inventory-product-name font-medium text-left hover:text-accent transition-colors"
                                                         title="Ouvrir la fiche produit"
                                                     >
                                                         {product.name}
@@ -607,7 +607,7 @@ export default function Inventory() {
                                                     {isAdmin && product.cost_layers && product.cost_layers.length > 0 && (
                                                         <div className="mt-2 space-y-1">
                                                             <p className="text-[10px] uppercase font-semibold text-muted">Lots FIFO</p>
-                                                            <div className="flex flex-wrap gap-1.5">
+                                                            <div className="inventory-lots-strip flex flex-wrap gap-1.5">
                                                                 {product.cost_layers.slice(0, 3).map((layer, idx) => (
                                                                     <span
                                                                         key={`${product.id}-layer-${idx}`}

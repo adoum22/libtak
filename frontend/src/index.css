@@ -1896,6 +1896,35 @@ tbody tr:last-child td {
   z-index: 10;
 }
 
+.inventory-table td:first-child,
+.inventory-table th:first-child {
+  min-width: 320px;
+}
+
+.inventory-table td:nth-child(2),
+.inventory-table th:nth-child(2) {
+  min-width: 140px;
+}
+
+.inventory-product-cell {
+  align-items: flex-start;
+}
+
+.inventory-product-name {
+  display: block;
+  max-width: 26rem;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.inventory-product-copy {
+  min-width: 0;
+}
+
+.inventory-lots-strip {
+  max-width: 34rem;
+}
+
 /* Final mobile pass: keep this after modal/table definitions so page-specific
    utility classes do not override the compact layout. */
 @media (max-width: 767px) {
@@ -2008,6 +2037,67 @@ tbody tr:last-child td {
 
   .page-content table {
     min-width: 680px;
+  }
+
+  .page-content .inventory-table {
+    min-width: 920px;
+  }
+
+  .inventory-table td:first-child,
+  .inventory-table th:first-child {
+    min-width: 300px;
+    width: 300px;
+  }
+
+  .inventory-table td:nth-child(2),
+  .inventory-table th:nth-child(2) {
+    min-width: 145px;
+  }
+
+  .inventory-product-cell {
+    align-items: flex-start;
+    gap: 0.65rem;
+  }
+
+  .inventory-product-copy {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .inventory-product-name {
+    max-width: 13rem;
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    white-space: normal;
+  }
+
+  .inventory-lots-strip {
+    max-width: 13rem;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 0.2rem;
+    scrollbar-width: none;
+  }
+
+  .inventory-lots-strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .inventory-lots-strip span {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .inventory-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-import-action {
+    display: none !important;
   }
 
   .page-content th,
