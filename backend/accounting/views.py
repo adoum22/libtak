@@ -477,6 +477,102 @@ class CashRegisterView(APIView):
         return qs.aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
 
+class CashierExpenseView(APIView):
+    """Saisie simplifiee des depenses par vendeur.
+
+    Le vendeur ne voit aucun chiffre comptable. Il peut seulement recuperer les
+    categories et creer une depense payee depuis la caisse.
+    """
+    permission_classes = [IsAuthenticated]
+
+    DEFAULT_CATEGORIES = [
+        'Fournitures',
+        'Livraison',
+        'Electricite',
+        'Internet',
+        'Loyer',
+        'Entretien',
+        'Retrait gerant',
+        'Autre',
+    ]
+
+    def get(self, request):
+        categories = list(ExpenseCategory.objects.order_by('name'))
+        if not categories:
+            categories = [
+                ExpenseCategory.objects.get_or_create(name=name)[0]
+                for name in self.DEFAULT_CATEGORIES
+            ]
+        return Response(ExpenseCategorySerializer(categories, many=True).data)
+
+    def post(self, request):
+        amount = self._money(request.data.get('amount'))
+        if amount is None or amount <= 0:
+            return Response(
+                {'amount': ['Montant invalide.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        category = self._category_from_payload(request.data)
+        if category is None:
+            return Response(
+                {'category': ['Categorie invalide.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        incurred_on_value = request.data.get('incurred_on')
+        incurred_on = parse_date(incurred_on_value) if incurred_on_value else timezone.localdate()
+        if incurred_on_value and incurred_on is None:
+            return Response(
+                {'incurred_on': ['Date invalide.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        monthly, _ = MonthlyAccounting.objects.get_or_create(
+            year=incurred_on.year,
+            month=incurred_on.month,
+        )
+        expense = Expense.objects.create(
+            monthly=monthly,
+            category=category,
+            amount=amount,
+            description=request.data.get('description') or '',
+            incurred_on=incurred_on,
+            paid_from_cash=True,
+        )
+        if category.name == MANAGER_WITHDRAWAL_CATEGORY:
+            sync_manager_withdrawal(monthly)
+        AuditLog.log(
+            user=request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='Expense',
+            object_id=expense.id,
+            object_repr=str(expense),
+            request=request,
+        )
+        return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
+
+    def _money(self, value):
+        try:
+            return Decimal(str(value)).quantize(Decimal('0.01'))
+        except Exception:
+            return None
+
+    def _category_from_payload(self, data):
+        category_id = data.get('category')
+        if category_id:
+            try:
+                return ExpenseCategory.objects.get(pk=category_id)
+            except (ExpenseCategory.DoesNotExist, ValueError, TypeError):
+                return None
+
+        category_name = str(data.get('category_name') or '').strip()
+        if not category_name:
+            return None
+        category, _ = ExpenseCategory.objects.get_or_create(name=category_name[:100])
+        return category
+
+
 class YearSummaryView(APIView):
     """Synthèse annuelle: par mois, par trimestre, par catégorie."""
     permission_classes = [IsAuthenticated, IsAdminRole]

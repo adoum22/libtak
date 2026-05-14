@@ -6,6 +6,7 @@ from .views import (
     MonthlyAccountingViewSet,
     ExpenseViewSet,
     CashRegisterView,
+    CashierExpenseView,
     PeriodSummaryView,
     YearSummaryView,
 )
@@ -19,5 +20,6 @@ urlpatterns = [
     path('summary/', YearSummaryView.as_view(), name='accounting-year-summary'),
     path('period-summary/', PeriodSummaryView.as_view(), name='accounting-period-summary'),
     path('cash-register/', CashRegisterView.as_view(), name='accounting-cash-register'),
+    path('cashier-expense/', CashierExpenseView.as_view(), name='accounting-cashier-expense'),
     path('', include(router.urls)),
 ]

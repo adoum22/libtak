@@ -21,6 +21,16 @@ const MONTHS_FR = [
 const PIE_COLORS = ['#0f766e', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#64748b', '#2563eb'];
 const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
 const gridStroke = 'var(--color-border-light)';
+const CASHIER_FALLBACK_CATEGORIES = [
+    'Fournitures',
+    'Livraison',
+    'Electricité',
+    'Internet',
+    'Loyer',
+    'Entretien',
+    'Retrait gérant',
+    'Autre',
+];
 
 const categoryLabel = (entry: unknown) => {
     if (typeof entry === 'object' && entry !== null && 'category' in entry) {
@@ -241,6 +251,16 @@ export default function Accounting() {
         onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
     });
 
+    const addCashierExpense = useMutation({
+        mutationFn: (payload: { category?: number; category_name?: string; amount: number; description: string; incurred_on: string }) =>
+            client.post('/accounting/cashier-expense/', payload),
+        onSuccess: () => {
+            toast.success('Dépense ajoutée');
+            qc.invalidateQueries({ queryKey: ['cashRegister'] });
+        },
+        onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
+    });
+
     const deleteExpense = useMutation({
         mutationFn: (id: number) => client.delete(`/accounting/expenses/${id}/`),
         onSuccess: () => {
@@ -284,6 +304,9 @@ export default function Accounting() {
     };
 
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const cashierCategoryOptions = categories.length > 0
+        ? categories.map(category => ({ value: `id:${category.id}`, label: category.name }))
+        : CASHIER_FALLBACK_CATEGORIES.map(name => ({ value: `name:${name}`, label: name }));
 
     const submitCashierExpense = () => {
         if (!newExp.category || !newExp.amount) {
@@ -295,15 +318,16 @@ export default function Accounting() {
             toast.error('Montant invalide.');
             return;
         }
-        const dateParts = selectedDate.split('-').map(Number);
-        addExpense.mutate({
-            category: Number(newExp.category),
+        const selectedCategory = newExp.category;
+        const payload = selectedCategory.startsWith('id:')
+            ? { category: Number(selectedCategory.slice(3)) }
+            : { category_name: selectedCategory.replace(/^name:/, '') };
+
+        addCashierExpense.mutate({
+            ...payload,
             amount,
             description: newExp.description,
-            paid_from_cash: true,
             incurred_on: selectedDate,
-            year: dateParts[0],
-            month: dateParts[1],
         }, {
             onSuccess: () => setNewExp({ category: '', amount: '', description: '', paid_from_cash: true }),
         });
@@ -343,8 +367,8 @@ export default function Accounting() {
                                 className="mt-2"
                             >
                                 <option value="">Choisir une catégorie</option>
-                                {categories.map(category => (
-                                    <option key={category.id} value={category.id}>{category.name}</option>
+                                {cashierCategoryOptions.map(category => (
+                                    <option key={category.value} value={category.value}>{category.label}</option>
                                 ))}
                             </select>
                         </label>
@@ -379,7 +403,7 @@ export default function Accounting() {
                     <button
                         type="button"
                         onClick={submitCashierExpense}
-                        disabled={addExpense.isPending || categories.length === 0}
+                        disabled={addCashierExpense.isPending || cashierCategoryOptions.length === 0}
                         className="btn-primary w-full py-3 font-bold"
                     >
                         <Plus size={18} />
