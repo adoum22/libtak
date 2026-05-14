@@ -57,7 +57,7 @@ function App() {
               <Route path="purchase-orders" element={<AdminRoute><PurchaseOrders /></AdminRoute>} />
               <Route path="stock-count" element={<AdminRoute><StockCount /></AdminRoute>} />
               <Route path="zakat" element={<AdminRoute><Zakat /></AdminRoute>} />
-              <Route path="accounting" element={<AdminRoute><Accounting /></AdminRoute>} />
+              <Route path="accounting" element={<Accounting />} />
               <Route path="activity" element={<AdminRoute><ActivityLog /></AdminRoute>} />
             </Route>
           </Routes>

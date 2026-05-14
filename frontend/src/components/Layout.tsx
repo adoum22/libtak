@@ -102,7 +102,7 @@ export default function Layout() {
         { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin, tone: 'reports' },
         { icon: Users, label: t('Users'), path: '/users', show: isAdmin, tone: 'users' },
         { icon: HandCoins, label: 'Zakat', path: '/zakat', show: isAdmin, tone: 'zakat' },
-        { icon: Landmark, label: 'Comptabilité', path: '/accounting', show: isAdmin, tone: 'accounting' },
+        { icon: Landmark, label: isAdmin ? 'Comptabilité' : 'Dépenses', path: '/accounting', show: true, tone: 'accounting' },
         { icon: Activity, label: 'Activité', path: '/activity', show: isAdmin, tone: 'activity' },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin, tone: 'settings' },
     ];

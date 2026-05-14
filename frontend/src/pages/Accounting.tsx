@@ -131,6 +131,13 @@ export default function Accounting() {
     const [month, setMonth] = useState(now.getMonth() + 1);
     const [selectedDate, setSelectedDate] = useState(toLocalDateInputValue(now));
     const [tab, setTab] = useState<'day' | 'week' | 'month' | 'year' | 'categories'>('day');
+    const { data: currentUser, isLoading: currentUserLoading } = useQuery({
+        queryKey: ['currentUser'],
+        queryFn: () => client.get('/auth/me/').then(r => r.data),
+        retry: false,
+        staleTime: 60_000,
+    });
+    const isAdmin = currentUser?.role === 'ADMIN';
 
     // ---------- Queries ----------
     const { data: categories = [] } = useQuery<Category[]>({
@@ -139,17 +146,20 @@ export default function Accounting() {
             const r = await client.get('/accounting/categories/');
             return r.data.results ?? r.data;
         },
+        enabled: Boolean(currentUser),
     });
 
     const { data: monthData, isLoading: monthLoading } = useQuery<MonthData>({
         queryKey: ['acc-month', year, month],
         queryFn: () => client.get(`/accounting/monthly/by-period/${year}/${month}/`).then(r => r.data),
+        enabled: isAdmin,
         staleTime: 0,
     });
 
     const { data: summary } = useQuery<YearSummary>({
         queryKey: ['acc-summary', year],
         queryFn: () => client.get(`/accounting/summary/?year=${year}`).then(r => r.data),
+        enabled: isAdmin,
         staleTime: 0,
     });
 
@@ -158,7 +168,7 @@ export default function Accounting() {
         queryFn: () => client
             .get(`/accounting/period-summary/?type=${tab === 'week' ? 'week' : 'day'}&date=${selectedDate}`)
             .then(r => r.data),
-        enabled: tab === 'day' || tab === 'week',
+        enabled: isAdmin && (tab === 'day' || tab === 'week'),
         retry: 1,
         staleTime: 0,
     });
@@ -274,6 +284,111 @@ export default function Accounting() {
     };
 
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const submitCashierExpense = () => {
+        if (!newExp.category || !newExp.amount) {
+            toast.error('Choisissez une catégorie et un montant.');
+            return;
+        }
+        const amount = parseDecimalInput(newExp.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            toast.error('Montant invalide.');
+            return;
+        }
+        const dateParts = selectedDate.split('-').map(Number);
+        addExpense.mutate({
+            category: Number(newExp.category),
+            amount,
+            description: newExp.description,
+            paid_from_cash: true,
+            incurred_on: selectedDate,
+            year: dateParts[0],
+            month: dateParts[1],
+        }, {
+            onSuccess: () => setNewExp({ category: '', amount: '', description: '', paid_from_cash: true }),
+        });
+    };
+
+    const renderCashierExpenseEntry = () => (
+        <div className="cashier-expense-page space-y-6 animate-fadeIn">
+            <div>
+                <h1 className="text-2xl font-bold flex items-center gap-2">
+                    <Calculator size={26} /> Dépenses
+                </h1>
+                <p className="text-muted mt-1">
+                    Ajoutez uniquement les dépenses payées depuis la caisse. Les chiffres comptables restent réservés à l'admin.
+                </p>
+            </div>
+
+            <div className="card">
+                <div className="card-header">
+                    <h2 className="font-semibold text-lg">Nouvelle dépense</h2>
+                </div>
+                <div className="card-body space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <label className="block">
+                            <span className="text-sm font-semibold text-muted">Date</span>
+                            <input
+                                type="date"
+                                value={selectedDate}
+                                onChange={(event) => setSelectedDate(event.target.value)}
+                                className="mt-2"
+                            />
+                        </label>
+                        <label className="block">
+                            <span className="text-sm font-semibold text-muted">Catégorie</span>
+                            <select
+                                value={newExp.category}
+                                onChange={(event) => setNewExp({ ...newExp, category: event.target.value })}
+                                className="mt-2"
+                            >
+                                <option value="">Choisir une catégorie</option>
+                                {categories.map(category => (
+                                    <option key={category.id} value={category.id}>{category.name}</option>
+                                ))}
+                            </select>
+                        </label>
+                    </div>
+                    <label className="block">
+                        <span className="text-sm font-semibold text-muted">Montant payé</span>
+                        <div className="flex rounded-xl border border-border bg-secondary focus-within:border-accent mt-2">
+                            <input
+                                type="text"
+                                inputMode="decimal"
+                                value={newExp.amount}
+                                onChange={(event) => setNewExp({ ...newExp, amount: normalizeDecimalInput(event.target.value) })}
+                                placeholder="0.00"
+                                className="money-input text-2xl font-bold py-3 pl-4 pr-3"
+                            />
+                            <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
+                        </div>
+                    </label>
+                    <label className="block">
+                        <span className="text-sm font-semibold text-muted">Description</span>
+                        <textarea
+                            value={newExp.description}
+                            onChange={(event) => setNewExp({ ...newExp, description: event.target.value })}
+                            placeholder="Ex: livraison, fournitures, retrait gérant..."
+                            className="mt-2"
+                            rows={3}
+                        />
+                    </label>
+                    <div className="rounded-xl bg-warning-light text-warning p-4 text-sm font-medium">
+                        Cette dépense sera automatiquement soustraite de la caisse.
+                    </div>
+                    <button
+                        type="button"
+                        onClick={submitCashierExpense}
+                        disabled={addExpense.isPending || categories.length === 0}
+                        className="btn-primary w-full py-3 font-bold"
+                    >
+                        <Plus size={18} />
+                        Enregistrer la dépense
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 
     // ---------- Render helpers ----------
     const renderSalesMarginDetail = (detail?: SalesMarginDetail) => {
@@ -1092,6 +1207,14 @@ export default function Accounting() {
             </div>
         </div>
     );
+
+    if (currentUserLoading) {
+        return <div className="text-center py-12 text-muted">Chargement...</div>;
+    }
+
+    if (!isAdmin) {
+        return renderCashierExpenseEntry();
+    }
 
     return (
         <div className="space-y-6 animate-fadeIn">

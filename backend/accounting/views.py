@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -33,6 +33,28 @@ from .serializers import (
 )
 
 MANAGER_WITHDRAWAL_CATEGORY = 'Retrait gérant'
+
+
+class CanReadExpenseCategories(IsAuthenticated):
+    """Admins gerent les categories, vendeurs les lisent pour saisir une depense."""
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return request.user.is_admin_role
+
+
+class CanCreateExpense(IsAuthenticated):
+    """Admin a tous les droits, vendeur peut seulement creer une depense."""
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.user.is_admin_role:
+            return True
+        return request.method == 'POST'
 
 
 def sync_manager_withdrawal(monthly):
@@ -143,7 +165,7 @@ def sales_margin_analytics(start, end):
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.all()
     serializer_class = ExpenseCategorySerializer
-    permission_classes = [IsAuthenticated, IsAdminRole]
+    permission_classes = [CanReadExpenseCategories]
 
     def perform_destroy(self, instance):
         if instance.is_default:
@@ -245,7 +267,7 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.select_related('category', 'monthly').all()
     serializer_class = ExpenseSerializer
-    permission_classes = [IsAuthenticated, IsAdminRole]
+    permission_classes = [CanCreateExpense]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -258,7 +280,10 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        instance = serializer.save()
+        save_kwargs = {}
+        if not self.request.user.is_admin_role:
+            save_kwargs['paid_from_cash'] = True
+        instance = serializer.save(**save_kwargs)
         if instance.category.name == MANAGER_WITHDRAWAL_CATEGORY:
             sync_manager_withdrawal(instance.monthly)
         AuditLog.log(
