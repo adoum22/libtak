@@ -86,8 +86,9 @@ export default function Layout() {
 
     const navItems = [
         { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: true, tone: 'dashboard' },
-        { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true, tone: 'sale' },
         { icon: Wallet, label: 'Caisse', path: '/cash-register', show: isAdmin, tone: 'cash' },
+        { icon: Landmark, label: isAdmin ? 'Comptabilité' : 'Dépenses', path: '/accounting', show: true, tone: 'accounting' },
+        { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin, tone: 'reports' },
         {
             icon: Package,
             label: 'Stock',
@@ -95,20 +96,19 @@ export default function Layout() {
             show: isAdmin || currentUser?.can_view_stock === true,
             tone: 'stock',
         },
-        { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin, tone: 'suppliers' },
+        { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true, tone: 'sale' },
         { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin, tone: 'orders' },
+        { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin, tone: 'suppliers' },
         { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin, tone: 'returns' },
         { icon: ClipboardCheck, label: 'Inventaire', path: '/stock-count', show: isAdmin, tone: 'inventory' },
-        { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin, tone: 'reports' },
-        { icon: Users, label: t('Users'), path: '/users', show: isAdmin, tone: 'users' },
         { icon: HandCoins, label: 'Zakat', path: '/zakat', show: isAdmin, tone: 'zakat' },
-        { icon: Landmark, label: isAdmin ? 'Comptabilité' : 'Dépenses', path: '/accounting', show: true, tone: 'accounting' },
+        { icon: Users, label: t('Users'), path: '/users', show: isAdmin, tone: 'users' },
         { icon: Activity, label: 'Activité', path: '/activity', show: isAdmin, tone: 'activity' },
         { icon: Settings, label: t('Settings'), path: '/settings', show: isAdmin, tone: 'settings' },
     ];
 
     const filteredNavItems = navItems.filter(item => item.show);
-    const mobileNavPaths = ['/', '/accounting', '/cash-register', '/inventory', '/reports'];
+    const mobileNavPaths = ['/', '/cash-register', '/accounting', '/reports', '/inventory'];
     const mobileNavItems = mobileNavPaths
         .map(path => filteredNavItems.find(item => item.path === path))
         .filter((item): item is typeof filteredNavItems[number] => Boolean(item));
