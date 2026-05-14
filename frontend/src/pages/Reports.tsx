@@ -377,6 +377,37 @@ export default function Reports() {
                                 Articles vendus
                             </h2>
                         </div>
+                        <div className="reports-mobile-items">
+                            {report.items_sold?.length ? (
+                                report.items_sold.map((item, i) => (
+                                    <div key={`mobile-${item.barcode ?? item.name ?? i}`} className="mobile-detail-card">
+                                        <div className="mobile-detail-card-header">
+                                            <div>
+                                                <h3>{item.name}</h3>
+                                                <p>{item.barcode || 'Sans code-barres'}</p>
+                                            </div>
+                                            <span className="badge badge-accent">x{item.quantity}</span>
+                                        </div>
+                                        <div className="mobile-money-grid">
+                                            <div>
+                                                <span>Prix</span>
+                                                <strong>{item.unit_price?.toFixed(2) || '-'} DH</strong>
+                                            </div>
+                                            <div>
+                                                <span>Total</span>
+                                                <strong>{item.revenue?.toFixed(2)} DH</strong>
+                                            </div>
+                                            <div>
+                                                <span>Marge</span>
+                                                <strong className="text-success">{item.profit?.toFixed(2)} DH</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="mobile-empty-card">Aucune vente pour cette période</div>
+                            )}
+                        </div>
                         <div className="overflow-x-auto">
                             <table>
                                 <thead>

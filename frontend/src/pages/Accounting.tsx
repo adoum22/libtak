@@ -287,6 +287,35 @@ export default function Accounting() {
                         <Receipt size={20} className="text-accent" />
                         <h2 className="font-semibold text-lg">Marge par vente</h2>
                     </div>
+                    <div className="accounting-mobile-list">
+                        {sales.length === 0 ? (
+                            <div className="mobile-empty-card">Aucune vente sur cette période</div>
+                        ) : sales.map(sale => (
+                            <div key={`mobile-sale-${sale.id}`} className="mobile-detail-card">
+                                <div className="mobile-detail-card-header">
+                                    <div>
+                                        <h3>Vente #{sale.id}</h3>
+                                        <p>{new Date(sale.created_at).toLocaleString('fr-FR')}</p>
+                                    </div>
+                                    <span className="badge badge-accent">{sale.items_count} art.</span>
+                                </div>
+                                <div className="mobile-money-grid">
+                                    <div>
+                                        <span>CA</span>
+                                        <strong>{fmt(sale.revenue)} DH</strong>
+                                    </div>
+                                    <div>
+                                        <span>Achat</span>
+                                        <strong>{fmt(sale.purchase_cost)} DH</strong>
+                                    </div>
+                                    <div>
+                                        <span>Marge</span>
+                                        <strong className={sale.margin >= 0 ? 'text-success' : 'text-red-500'}>{fmt(sale.margin)} DH</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                     <div className="overflow-x-auto">
                         <table>
                             <thead>
@@ -328,6 +357,35 @@ export default function Accounting() {
                     <div className="card-header flex items-center gap-2">
                         <Package size={20} className="text-accent" />
                         <h2 className="font-semibold text-lg">Articles vendus</h2>
+                    </div>
+                    <div className="accounting-mobile-list">
+                        {products.length === 0 ? (
+                            <div className="mobile-empty-card">Aucun article vendu sur cette période</div>
+                        ) : products.map(product => (
+                            <div key={`mobile-product-${product.product_id ?? product.product_name}`} className="mobile-detail-card">
+                                <div className="mobile-detail-card-header">
+                                    <div>
+                                        <h3>{product.product_name}</h3>
+                                        <p>Quantité vendue: {product.quantity}</p>
+                                    </div>
+                                    <span className="badge badge-accent">x{product.quantity}</span>
+                                </div>
+                                <div className="mobile-money-grid">
+                                    <div>
+                                        <span>CA net</span>
+                                        <strong>{fmt(product.revenue)} DH</strong>
+                                    </div>
+                                    <div>
+                                        <span>Achat</span>
+                                        <strong>{fmt(product.purchase_cost)} DH</strong>
+                                    </div>
+                                    <div>
+                                        <span>Marge</span>
+                                        <strong className={product.margin >= 0 ? 'text-success' : 'text-red-500'}>{fmt(product.margin)} DH</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                     <div className="overflow-x-auto">
                         <table>

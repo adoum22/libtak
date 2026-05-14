@@ -525,6 +525,89 @@ export default function Inventory() {
                 </span>
             </div>
 
+            <div className="inventory-mobile-list">
+                {isLoading ? (
+                    <div className="mobile-empty-card">
+                        <div className="animate-spin inline-block w-7 h-7 border-4 border-accent border-t-transparent rounded-full mb-3" />
+                        <p>Chargement du stock...</p>
+                    </div>
+                ) : error ? (
+                    <div className="mobile-empty-card text-danger">
+                        <AlertTriangle size={32} className="mx-auto mb-2" />
+                        <p>Erreur de chargement</p>
+                    </div>
+                ) : products.length === 0 ? (
+                    <div className="mobile-empty-card">
+                        <Package size={32} className="mx-auto mb-2 text-muted" />
+                        <p>Aucun produit trouvé</p>
+                    </div>
+                ) : (
+                    products.map((product) => (
+                        <button
+                            key={`mobile-${product.id}`}
+                            type="button"
+                            onClick={() => openProductDetails(product)}
+                            className="inventory-mobile-card"
+                        >
+                            <div className="inventory-mobile-thumb">
+                                {product.image_url ? (
+                                    <img src={product.image_url} alt={`Photo de ${product.name}`} />
+                                ) : (
+                                    <Package size={22} />
+                                )}
+                            </div>
+                            <div className="inventory-mobile-info">
+                                <div className="inventory-mobile-title-row">
+                                    <h3>{product.name}</h3>
+                                    <span className={`badge ${product.stock === 0 ? 'badge-danger' : product.is_low_stock ? 'badge-warning' : 'badge-success'}`}>
+                                        {product.stock}
+                                    </span>
+                                </div>
+                                <p className="inventory-mobile-barcode">{product.barcode}</p>
+                                <div className="inventory-mobile-meta">
+                                    {isAdmin && <span>Achat {product.purchase_price?.toFixed(2)} DH</span>}
+                                    <span>Vente {product.price_ttc?.toFixed(2)} DH</span>
+                                    <span>Seuil {product.min_stock}</span>
+                                </div>
+                                {isAdmin && product.cost_layers && product.cost_layers.length > 0 && (
+                                    <div className="inventory-mobile-layers">
+                                        {product.cost_layers.slice(0, 2).map((layer, idx) => (
+                                            <span key={`mobile-${product.id}-layer-${layer.id}`}>
+                                                Lot {idx + 1}: {layer.remaining_quantity}/{layer.initial_quantity} à {Number(layer.sale_price).toFixed(2)} DH
+                                            </span>
+                                        ))}
+                                        {product.cost_layers.length > 2 && <span>+{product.cost_layers.length - 2} lot(s)</span>}
+                                    </div>
+                                )}
+                            </div>
+                        </button>
+                    ))
+                )}
+                {isPaginated && totalCount > 0 && (
+                    <div className="mobile-pagination">
+                        <button
+                            type="button"
+                            onClick={() => setPage(p => Math.max(1, p - 1))}
+                            disabled={!hasPrev || page === 1}
+                            className="btn-secondary disabled:opacity-30"
+                        >
+                            <ChevronLeft size={18} />
+                            Précédent
+                        </button>
+                        <span>Page {page}</span>
+                        <button
+                            type="button"
+                            onClick={() => setPage(p => p + 1)}
+                            disabled={!hasNext}
+                            className="btn-secondary disabled:opacity-30"
+                        >
+                            Suivant
+                            <ChevronRight size={18} />
+                        </button>
+                    </div>
+                )}
+            </div>
+
             {/* Products Table */}
             <div className="inventory-table-card card overflow-hidden">
                 <div className="overflow-x-auto">

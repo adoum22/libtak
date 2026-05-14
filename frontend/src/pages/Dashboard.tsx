@@ -337,6 +337,29 @@ export default function Dashboard() {
                         </h2>
                     </div>
                     <div className="card-body p-0">
+                        <div className="dashboard-mobile-list">
+                            {stats?.top_products?.length ? (
+                                stats.top_products.map((p, i) => (
+                                    <div key={`mobile-top-${p.product__name ?? i}`} className="mobile-detail-card">
+                                        <div className="mobile-detail-card-header">
+                                            <div>
+                                                <h3>{p.product__name}</h3>
+                                                <p>Produit #{i + 1} du mois</p>
+                                            </div>
+                                            <span className="badge badge-accent">x{p.total_qty}</span>
+                                        </div>
+                                        <div className="mobile-money-grid">
+                                            <div>
+                                                <span>CA</span>
+                                                <strong>{p.total_revenue?.toLocaleString('fr-FR')} DH</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="mobile-empty-card">Aucune vente ce mois</div>
+                            )}
+                        </div>
                         <table>
                             <thead>
                                 <tr>

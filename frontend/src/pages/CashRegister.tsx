@@ -255,8 +255,35 @@ export default function CashRegister() {
                             Aucun reglage de caisse pour le moment.
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table>
+                        <>
+                            <div className="cash-mobile-adjustments">
+                                {data.recent_adjustments.map((adjustment) => (
+                                    <div key={`mobile-${adjustment.id}`} className="mobile-detail-card">
+                                        <div className="mobile-detail-card-header">
+                                            <div>
+                                                <h3>{adjustmentLabel(adjustment.adjustment_type)}</h3>
+                                                <p>{new Date(adjustment.created_at).toLocaleString('fr-FR')}</p>
+                                            </div>
+                                            <strong className={adjustment.amount < 0 ? 'text-danger' : 'text-success'}>
+                                                {adjustment.amount >= 0 ? '+' : ''}{fmt(adjustment.amount)} DH
+                                            </strong>
+                                        </div>
+                                        <div className="mobile-money-grid">
+                                            <div>
+                                                <span>Compté</span>
+                                                <strong>{adjustment.counted_amount !== null ? `${fmt(adjustment.counted_amount)} DH` : '-'}</strong>
+                                            </div>
+                                            <div>
+                                                <span>Utilisateur</span>
+                                                <strong>{adjustment.created_by_name || '-'}</strong>
+                                            </div>
+                                        </div>
+                                        {adjustment.note && <p className="mobile-note">{adjustment.note}</p>}
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table>
                                 <thead>
                                     <tr>
                                         <th>Type</th>
@@ -281,8 +308,9 @@ export default function CashRegister() {
                                         </tr>
                                     ))}
                                 </tbody>
-                            </table>
-                        </div>
+                                </table>
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
