@@ -13,6 +13,7 @@ export default defineConfig({
       includeAssets: ['favicon.ico', 'icons/*.png'],
       manifest: false, // Use external manifest.json
       workbox: {
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         runtimeCaching: [
           {

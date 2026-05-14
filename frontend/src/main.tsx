@@ -6,6 +6,7 @@ import './i18n'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import ErrorBoundary from './components/ErrorBoundary'
 import { registerSW } from 'virtual:pwa-register'
+import { clearChunkReloadFlag, reloadOnceForNewVersion } from './utils/reloadOnChunkError'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,6 +17,13 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false, // Pas de refetch au focus fenêtre
     },
   },
+})
+
+clearChunkReloadFlag()
+
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  void reloadOnceForNewVersion()
 })
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
