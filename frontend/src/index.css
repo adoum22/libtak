@@ -2233,6 +2233,97 @@ tbody tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .accounting-page {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .accounting-page > .flex.items-center.justify-between {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .accounting-page > .card.p-4 {
+    padding: 0.75rem;
+  }
+
+  .accounting-page > .card.p-4 > .flex {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .accounting-page .flex.bg-tertiary {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+    padding: 0.3rem;
+    border-radius: 14px;
+  }
+
+  .accounting-page .flex.bg-tertiary button {
+    flex: 1 0 auto;
+    min-width: max-content;
+    padding: 0.65rem 0.8rem;
+  }
+
+  .accounting-page .stat-card {
+    min-height: 86px;
+  }
+
+  .accounting-page .stat-value {
+    font-size: 1.22rem;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+
+  .accounting-page .card.p-6,
+  .accounting-page .chart-card.p-6 {
+    padding: 1rem;
+  }
+
+  .accounting-page .chart-card {
+    overflow: hidden;
+  }
+
+  .accounting-page .chart-card .h-\[280px\],
+  .accounting-page .chart-card .h-\[300px\],
+  .accounting-page .chart-card .h-\[320px\] {
+    height: 230px;
+  }
+
+  .accounting-page .recharts-wrapper,
+  .accounting-page .recharts-surface {
+    max-width: 100%;
+  }
+
+  .accounting-page .overflow-x-auto,
+  .accounting-page .card > table {
+    display: none;
+  }
+
+  .accounting-page .grid.md\:grid-cols-6,
+  .accounting-page .grid.md\:grid-cols-4,
+  .accounting-page .grid.md\:grid-cols-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .accounting-page .mobile-detail-card {
+    box-shadow: var(--shadow-sm);
+  }
+
+  .accounting-page .mobile-detail-card-header {
+    align-items: flex-start;
+  }
+
+  .accounting-page .mobile-detail-card-header > div {
+    min-width: 0;
+  }
+
+  .accounting-page .mobile-detail-card-header h3 {
+    overflow-wrap: anywhere;
+  }
+
   .inventory-table td:first-child,
   .inventory-table th:first-child {
     min-width: 300px;

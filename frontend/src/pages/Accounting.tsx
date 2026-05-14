@@ -310,7 +310,7 @@ export default function Accounting() {
     };
 
     const renderCashierExpenseEntry = () => (
-        <div className="cashier-expense-page space-y-6 animate-fadeIn">
+        <div className="accounting-page cashier-expense-page space-y-6 animate-fadeIn">
             <div>
                 <h1 className="text-2xl font-bold flex items-center gap-2">
                     <Calculator size={26} /> Dépenses
@@ -678,6 +678,33 @@ export default function Accounting() {
                     <div className="card-header">
                         <h2 className="font-semibold text-lg">Dépenses de la période</h2>
                     </div>
+                    <div className="accounting-mobile-list">
+                        {periodSummary.expenses_detail.length === 0 ? (
+                            <div className="mobile-empty-card">Aucune dépense</div>
+                        ) : periodSummary.expenses_detail.map(e => (
+                            <div key={`mobile-period-expense-${e.id}`} className="mobile-detail-card">
+                                <div className="mobile-detail-card-header">
+                                    <div>
+                                        <h3>{e.description || e.category_name}</h3>
+                                        <p>{e.incurred_on || 'Sans date'} · {e.category_name}</p>
+                                    </div>
+                                    <strong>{fmt(Number(e.amount))} DH</strong>
+                                </div>
+                                <div className="mobile-detail-actions">
+                                    <span className={`badge ${e.paid_from_cash ? 'badge-warning' : 'badge-accent'}`}>
+                                        Caisse: {e.paid_from_cash ? 'Oui' : 'Non'}
+                                    </span>
+                                    <button
+                                        onClick={() => deleteExpense.mutate(e.id)}
+                                        className="btn-ghost btn-icon text-red-500"
+                                        title="Supprimer"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                     <div className="overflow-x-auto">
                         <table>
                             <thead>
@@ -1005,6 +1032,34 @@ export default function Accounting() {
                     </div>
                 </div>
 
+                <div className="accounting-mobile-list accounting-mobile-expenses-only">
+                    {monthData.expenses.length === 0 ? (
+                        <div className="mobile-empty-card">Aucune dépense</div>
+                    ) : monthData.expenses.map(e => (
+                        <div key={`mobile-month-expense-${e.id}`} className="mobile-detail-card">
+                            <div className="mobile-detail-card-header">
+                                <div>
+                                    <h3>{e.description || e.category_name}</h3>
+                                    <p>{e.category_name}</p>
+                                </div>
+                                <strong>{fmt(Number(e.amount))} DH</strong>
+                            </div>
+                            <div className="mobile-detail-actions">
+                                <span className={`badge ${e.paid_from_cash ? 'badge-warning' : 'badge-accent'}`}>
+                                    Caisse: {e.paid_from_cash ? 'Oui' : 'Non'}
+                                </span>
+                                <button
+                                    onClick={() => deleteExpense.mutate(e.id)}
+                                    className="btn-ghost btn-icon text-red-500"
+                                    title="Supprimer"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
                 {renderSalesMarginDetail(monthData.sales_margin_detail)}
             </div>
         );
@@ -1122,6 +1177,31 @@ export default function Accounting() {
                 {/* Monthly table */}
                 <div className="card">
                     <div className="card-header"><h2 className="font-semibold text-lg">Détail mensuel {year}</h2></div>
+                    <div className="accounting-mobile-list">
+                        {summary.months.map(m => (
+                            <div key={`mobile-year-${m.month}`} className="mobile-detail-card">
+                                <div className="mobile-detail-card-header">
+                                    <div>
+                                        <h3>{m.label}</h3>
+                                        <p>Retrait: {fmt(m.manager_withdrawal)} DH</p>
+                                    </div>
+                                    <strong className={m.net_profit >= 0 ? 'text-success' : 'text-red-500'}>
+                                        {fmt(m.net_profit)} DH
+                                    </strong>
+                                </div>
+                                <div className="mobile-money-grid">
+                                    <div>
+                                        <span>CA</span>
+                                        <strong>{fmt(m.revenue)} DH</strong>
+                                    </div>
+                                    <div>
+                                        <span>Dépenses</span>
+                                        <strong>{fmt(m.expenses)} DH</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                     <div className="overflow-x-auto">
                         <table>
                             <thead>
@@ -1217,7 +1297,7 @@ export default function Accounting() {
     }
 
     return (
-        <div className="space-y-6 animate-fadeIn">
+        <div className="accounting-page space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold flex items-center gap-2">
                     <Calculator size={26} /> Comptabilité
