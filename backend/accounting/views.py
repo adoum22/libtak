@@ -485,24 +485,8 @@ class CashierExpenseView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    DEFAULT_CATEGORIES = [
-        'Fournitures',
-        'Livraison',
-        'Electricite',
-        'Internet',
-        'Loyer',
-        'Entretien',
-        'Retrait gerant',
-        'Autre',
-    ]
-
     def get(self, request):
-        categories = list(ExpenseCategory.objects.order_by('name'))
-        if not categories:
-            categories = [
-                ExpenseCategory.objects.get_or_create(name=name)[0]
-                for name in self.DEFAULT_CATEGORIES
-            ]
+        categories = ExpenseCategory.objects.order_by('name')
         return Response(ExpenseCategorySerializer(categories, many=True).data)
 
     def post(self, request):
@@ -513,8 +497,10 @@ class CashierExpenseView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        category = self._category_from_payload(request.data)
-        if category is None:
+        category_id = request.data.get('category')
+        try:
+            category = ExpenseCategory.objects.get(pk=category_id)
+        except (ExpenseCategory.DoesNotExist, ValueError, TypeError):
             return Response(
                 {'category': ['Categorie invalide.']},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -557,21 +543,6 @@ class CashierExpenseView(APIView):
             return Decimal(str(value)).quantize(Decimal('0.01'))
         except Exception:
             return None
-
-    def _category_from_payload(self, data):
-        category_id = data.get('category')
-        if category_id:
-            try:
-                return ExpenseCategory.objects.get(pk=category_id)
-            except (ExpenseCategory.DoesNotExist, ValueError, TypeError):
-                return None
-
-        category_name = str(data.get('category_name') or '').strip()
-        if not category_name:
-            return None
-        category, _ = ExpenseCategory.objects.get_or_create(name=category_name[:100])
-        return category
-
 
 class YearSummaryView(APIView):
     """Synthèse annuelle: par mois, par trimestre, par catégorie."""

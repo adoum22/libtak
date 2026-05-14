@@ -21,16 +21,6 @@ const MONTHS_FR = [
 const PIE_COLORS = ['#0f766e', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#64748b', '#2563eb'];
 const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
 const gridStroke = 'var(--color-border-light)';
-const CASHIER_FALLBACK_CATEGORIES = [
-    'Fournitures',
-    'Livraison',
-    'Electricité',
-    'Internet',
-    'Loyer',
-    'Entretien',
-    'Retrait gérant',
-    'Autre',
-];
 
 const categoryLabel = (entry: unknown) => {
     if (typeof entry === 'object' && entry !== null && 'category' in entry) {
@@ -252,7 +242,7 @@ export default function Accounting() {
     });
 
     const addCashierExpense = useMutation({
-        mutationFn: (payload: { category?: number; category_name?: string; amount: number; description: string; incurred_on: string }) =>
+        mutationFn: (payload: { category: number; amount: number; description: string; incurred_on: string }) =>
             client.post('/accounting/cashier-expense/', payload),
         onSuccess: () => {
             toast.success('Dépense ajoutée');
@@ -304,9 +294,10 @@ export default function Accounting() {
     };
 
     const fmt = (n: number) => (n ?? 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const cashierCategoryOptions = categories.length > 0
-        ? categories.map(category => ({ value: `id:${category.id}`, label: category.name }))
-        : CASHIER_FALLBACK_CATEGORIES.map(name => ({ value: `name:${name}`, label: name }));
+    const cashierCategoryOptions = categories.map(category => ({
+        value: String(category.id),
+        label: category.name,
+    }));
 
     const submitCashierExpense = () => {
         if (!newExp.category || !newExp.amount) {
@@ -318,13 +309,8 @@ export default function Accounting() {
             toast.error('Montant invalide.');
             return;
         }
-        const selectedCategory = newExp.category;
-        const payload = selectedCategory.startsWith('id:')
-            ? { category: Number(selectedCategory.slice(3)) }
-            : { category_name: selectedCategory.replace(/^name:/, '') };
-
         addCashierExpense.mutate({
-            ...payload,
+            category: Number(newExp.category),
             amount,
             description: newExp.description,
             incurred_on: selectedDate,
@@ -371,6 +357,11 @@ export default function Accounting() {
                                     <option key={category.value} value={category.value}>{category.label}</option>
                                 ))}
                             </select>
+                            {cashierCategoryOptions.length === 0 && (
+                                <p className="text-sm text-danger mt-2">
+                                    Aucune catégorie disponible. Connectez-vous en admin et ajoutez les catégories de dépenses.
+                                </p>
+                            )}
                         </label>
                     </div>
                     <label className="block">
