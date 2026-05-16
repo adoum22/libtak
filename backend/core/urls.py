@@ -17,7 +17,13 @@ from .views import (
     AuditLogViewSet,
     AppVersionView,
 )
-from .sync_api import receive_sync_data, get_master_data, sync_status, trigger_sync
+from .sync_api import (
+    receive_sync_data,
+    get_master_data,
+    sync_status,
+    trigger_sync,
+    receive_credits_snapshot,
+)
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet)
@@ -49,6 +55,7 @@ urlpatterns = [
     path('sync/master-data/', get_master_data, name='sync_master_data'),
     path('sync/status/', sync_status, name='sync_status'),
     path('sync/trigger/', trigger_sync, name='sync_trigger'),
+    path('sync/credits/', receive_credits_snapshot, name='sync_credits'),
 
     # User management (admin)
     path('', include(router.urls)),

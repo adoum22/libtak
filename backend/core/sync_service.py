@@ -52,15 +52,12 @@ class SyncService:
             logger.error(f"Could not save last sync time: {e}")
     
     def get_pending_sales(self) -> list:
-        """Get sales created since last sync.
-
-        V1 du crédit : on EXCLUT les ventes à crédit (pas d'app credit côté cloud).
-        """
+        """Get sales created since last sync (incluant les ventes à crédit)."""
         last_sync = self.get_last_sync_time()
         sales = Sale.objects.filter(
             created_at__gt=last_sync,
             synced=False
-        ).exclude(payment_method='CREDIT').select_related('user').prefetch_related('items__product')
+        ).select_related('user').prefetch_related('items__product')
 
         return [self._serialize_sale(sale) for sale in sales]
     
@@ -130,14 +127,14 @@ class SyncService:
         """Push local data to cloud server."""
         if not self.cloud_url or not self.sync_token:
             return {'status': 'error', 'message': 'Cloud sync not configured'}
-        
+
         data = {
             'sales': self.get_pending_sales(),
             'returns': self.get_pending_returns(),
             'stock_updates': self.get_stock_updates(),
             'sync_timestamp': timezone.now().isoformat(),
         }
-        
+
         try:
             response = requests.post(
                 f"{self.cloud_url}/sync/receive/",
@@ -148,19 +145,22 @@ class SyncService:
                 },
                 timeout=30
             )
-            
+
             if response.status_code == 200:
-                result = response.json()
                 # Mark synced items
                 self._mark_sales_synced(data['sales'])
                 self._mark_returns_synced(data['returns'])
                 self.set_last_sync_time()
-                
+
+                # Snapshot crédit (best effort, ne fait pas échouer le sync principal)
+                credit_result = self.push_credits_snapshot()
+
                 return {
                     'status': 'success',
                     'synced_sales': len(data['sales']),
                     'synced_returns': len(data['returns']),
                     'synced_stock_updates': len(data['stock_updates']),
+                    'credits_snapshot': credit_result,
                 }
             else:
                 return {
@@ -168,9 +168,95 @@ class SyncService:
                     'message': f"Cloud returned {response.status_code}",
                     'details': response.text[:500]
                 }
-                
+
         except requests.exceptions.RequestException as e:
             logger.error(f"Sync push failed: {e}")
+            return {'status': 'error', 'message': str(e)}
+
+    def push_credits_snapshot(self) -> dict:
+        """Push an idempotent snapshot of all credit data to the cloud.
+
+        Stratégie: on envoie l'état complet (customers + credit_sales +
+        credit_payments) ; le cloud remplace son état par celui-ci. Plus
+        simple et plus robuste que de gérer un incremental sync avec
+        dédup, surtout pour un volume modeste (quelques centaines de
+        crédits max).
+        """
+        if not self.cloud_url or not self.sync_token:
+            return {'status': 'skipped', 'message': 'cloud not configured'}
+        try:
+            from credit.models import Customer, CreditSale, CreditPayment
+        except Exception:
+            return {'status': 'skipped', 'message': 'credit app not installed'}
+
+        try:
+            customers = [
+                {
+                    'local_id': c.id,
+                    'name': c.name,
+                    'phone': c.phone or '',
+                    'note': c.note or '',
+                    'created_at': c.created_at.isoformat(),
+                }
+                for c in Customer.objects.all()
+            ]
+            credit_sales = [
+                {
+                    'local_id': cs.id,
+                    'sale_local_id': cs.sale_id,
+                    'customer_local_id': cs.customer_id,
+                    'status': cs.status,
+                    'paid_amount': str(cs.paid_amount),
+                    'created_at': cs.created_at.isoformat(),
+                }
+                for cs in CreditSale.objects.all()
+            ]
+            credit_payments = [
+                {
+                    'local_id': p.id,
+                    'credit_sale_local_id': p.credit_sale_id,
+                    'amount': str(p.amount),
+                    'note': p.note or '',
+                    'created_by_username': p.created_by.username if p.created_by_id else None,
+                    'created_at': p.created_at.isoformat(),
+                }
+                for p in CreditPayment.objects.all()
+            ]
+        except Exception as exc:
+            logger.exception("Building credits snapshot failed")
+            return {'status': 'error', 'message': str(exc)}
+
+        payload = {
+            'customers': customers,
+            'credit_sales': credit_sales,
+            'credit_payments': credit_payments,
+            'snapshot_at': timezone.now().isoformat(),
+        }
+
+        try:
+            response = requests.post(
+                f"{self.cloud_url}/sync/credits/",
+                json=payload,
+                headers={
+                    'Authorization': f'SyncToken {self.sync_token}',
+                    'Content-Type': 'application/json',
+                },
+                timeout=60,
+            )
+            if response.status_code == 200:
+                return {
+                    'status': 'success',
+                    'customers': len(customers),
+                    'credit_sales': len(credit_sales),
+                    'credit_payments': len(credit_payments),
+                }
+            return {
+                'status': 'error',
+                'message': f"Cloud returned {response.status_code}",
+                'details': response.text[:500],
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Credits snapshot push failed: {e}")
             return {'status': 'error', 'message': str(e)}
     
     def _mark_sales_synced(self, sales_data: list):

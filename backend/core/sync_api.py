@@ -89,10 +89,6 @@ def _import_sale(sale_data: dict) -> bool:
     if Sale.objects.filter(local_sync_id=local_id).exists():
         return False  # Already imported
 
-    # V1 du crédit : on n'importe pas les ventes CREDIT côté cloud (pas d'app credit).
-    if sale_data.get('payment_method') == 'CREDIT':
-        return False
-
     from core.models import User
     user = None
     if sale_data.get('user_username'):
@@ -253,6 +249,143 @@ def sync_status(request):
         'pending_returns': pending_returns,
         'is_local_server': not getattr(settings, 'IS_CLOUD_SERVER', False)
     })
+
+
+@api_view(['POST'])
+@permission_classes([SyncTokenPermission])
+def receive_credits_snapshot(request):
+    """Endpoint cloud qui reçoit un snapshot complet des crédits.
+
+    L'ordi librairie pousse périodiquement l'état complet (clients +
+    crédits + règlements) et le cloud remplace son état par celui-ci.
+    Approche idempotente : pas de gestion de conflits, pas de risque de
+    désync. Le cloud est read-only pour les crédits (consultation uniquement).
+    """
+    import json
+    import os
+    from datetime import datetime
+
+    try:
+        from credit.models import Customer, CreditSale, CreditPayment
+    except Exception as exc:
+        logger.error("Credit app not installed on cloud: %s", exc)
+        return Response(
+            {'detail': "Application crédit non installée côté cloud."},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    data = request.data
+    customers = data.get('customers', [])
+    credit_sales = data.get('credit_sales', [])
+    credit_payments = data.get('credit_payments', [])
+
+    # Auto-backup local : on écrit l'état précédent dans un fichier JSON
+    # avant de remplacer. Permet de revenir en arrière en cas de bug.
+    try:
+        backup_dir = os.path.join(settings.BASE_DIR, 'credit_snapshots')
+        os.makedirs(backup_dir, exist_ok=True)
+        ts = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        backup_file = os.path.join(backup_dir, f'snapshot_{ts}.json')
+        previous = {
+            'customers': list(Customer.objects.values()),
+            'credit_sales': list(CreditSale.objects.values()),
+            'credit_payments': list(CreditPayment.objects.values()),
+        }
+        with open(backup_file, 'w', encoding='utf-8') as f:
+            json.dump(previous, f, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        logger.exception("Could not write pre-snapshot backup")
+
+    try:
+        with transaction.atomic():
+            # On supprime tout puis on recrée — ordre important pour respecter
+            # les FK (payments → credit_sales → customers + sales).
+            CreditPayment.objects.all().delete()
+            CreditSale.objects.all().delete()
+            Customer.objects.all().delete()
+
+            # 1. Customers (pas de FK externe)
+            customer_by_local_id = {}
+            for c in customers:
+                obj = Customer.objects.create(
+                    name=c['name'],
+                    phone=c.get('phone', ''),
+                    note=c.get('note', ''),
+                )
+                # Override created_at si fourni
+                if c.get('created_at'):
+                    Customer.objects.filter(id=obj.id).update(created_at=c['created_at'])
+                customer_by_local_id[c['local_id']] = obj.id
+
+            # 2. CreditSales (FK vers Customer local et Sale cloud)
+            credit_sale_by_local_id = {}
+            skipped_credit_sales = 0
+            for cs in credit_sales:
+                customer_id = customer_by_local_id.get(cs['customer_local_id'])
+                if not customer_id:
+                    skipped_credit_sales += 1
+                    continue
+                # On retrouve la Sale par local_sync_id (déjà importée par
+                # le sync principal des ventes)
+                sale = Sale.objects.filter(
+                    local_sync_id=str(cs['sale_local_id'])
+                ).first()
+                if not sale:
+                    skipped_credit_sales += 1
+                    continue
+                # Une Sale ne peut avoir qu'un seul CreditSale (OneToOne)
+                if CreditSale.objects.filter(sale=sale).exists():
+                    skipped_credit_sales += 1
+                    continue
+                obj = CreditSale.objects.create(
+                    sale=sale,
+                    customer_id=customer_id,
+                    status=cs.get('status', 'UNPAID'),
+                    paid_amount=cs.get('paid_amount', 0),
+                )
+                if cs.get('created_at'):
+                    CreditSale.objects.filter(id=obj.id).update(created_at=cs['created_at'])
+                credit_sale_by_local_id[cs['local_id']] = obj.id
+
+            # 3. CreditPayments
+            from core.models import User
+            skipped_payments = 0
+            for p in credit_payments:
+                cs_id = credit_sale_by_local_id.get(p['credit_sale_local_id'])
+                if not cs_id:
+                    skipped_payments += 1
+                    continue
+                user = None
+                if p.get('created_by_username'):
+                    user = User.objects.filter(
+                        username=p['created_by_username']
+                    ).first()
+                obj = CreditPayment.objects.create(
+                    credit_sale_id=cs_id,
+                    amount=p['amount'],
+                    note=p.get('note', ''),
+                    created_by=user,
+                )
+                if p.get('created_at'):
+                    CreditPayment.objects.filter(id=obj.id).update(
+                        created_at=p['created_at']
+                    )
+
+        return Response({
+            'status': 'success',
+            'customers_imported': len(customers),
+            'credit_sales_imported': len(credit_sales) - skipped_credit_sales,
+            'credit_sales_skipped': skipped_credit_sales,
+            'credit_payments_imported': len(credit_payments) - skipped_payments,
+            'credit_payments_skipped': skipped_payments,
+            'received_at': timezone.now().isoformat(),
+        })
+    except Exception as exc:
+        logger.exception("Credits snapshot import failed")
+        return Response(
+            {'detail': f'Snapshot crédit échoué: {exc}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @api_view(['POST'])
