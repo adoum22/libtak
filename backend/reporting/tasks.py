@@ -641,6 +641,18 @@ def daily_database_backup():
             ('users', User),
         ]
 
+        # Ajout des modèles credit (peuvent ne pas exister si l'app n'est pas
+        # encore migrée — d'où le try/except).
+        try:
+            from credit.models import Customer, CreditSale, CreditPayment
+            models_to_backup.extend([
+                ('customers', Customer),
+                ('credit_sales', CreditSale),
+                ('credit_payments', CreditPayment),
+            ])
+        except Exception:
+            pass
+
         for name, model in models_to_backup:
             try:
                 data = serializers.serialize('json', model.objects.all())
