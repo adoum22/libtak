@@ -409,6 +409,16 @@ class ReturnSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'items': 'Au moins un article est requis.',
             })
+        if sale and sale.payment_method == Sale.PaymentMethod.CREDIT:
+            # V1: les retours sur ventes à crédit ne sont pas gérés
+            # (impact comptable complexe entre paid_amount, refund cash,
+            # et l'état du CreditSale). Bloquer pour éviter incohérences.
+            raise serializers.ValidationError({
+                'sale': (
+                    "Les retours sur ventes à crédit ne sont pas pris en charge. "
+                    "Annulez/ajustez le crédit directement avec le client."
+                ),
+            })
         if sale:
             self._validate_items(sale, items_data)
         return attrs

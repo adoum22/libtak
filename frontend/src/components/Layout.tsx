@@ -110,7 +110,9 @@ export default function Layout() {
     ];
 
     const filteredNavItems = navItems.filter(item => item.show);
-    const mobileNavPaths = ['/', '/cash-register', '/accounting', '/reports', '/inventory'];
+    // Bottom nav mobile : on inclut /pos et /credit (workflow vendeur + admin),
+    // les autres entrées admin restent accessibles via le menu burger.
+    const mobileNavPaths = ['/', '/pos', '/credit', '/accounting', '/inventory'];
     const mobileNavItems = mobileNavPaths
         .map(path => filteredNavItems.find(item => item.path === path))
         .filter((item): item is typeof filteredNavItems[number] => Boolean(item));

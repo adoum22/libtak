@@ -14,7 +14,12 @@ class CreditSaleAdmin(admin.ModelAdmin):
     list_display = ('id', 'customer', 'status', 'paid_amount', 'created_at')
     list_filter = ('status',)
     search_fields = ('customer__name',)
-    readonly_fields = ('sale', 'customer', 'created_at', 'updated_at')
+    # paid_amount et status sont pilotés par l'endpoint /pay/ : on bloque
+    # l'édition manuelle pour ne pas casser l'invariant paid_amount <= total_ttc.
+    readonly_fields = (
+        'sale', 'customer', 'paid_amount', 'status',
+        'created_at', 'updated_at',
+    )
 
 
 @admin.register(CreditPayment)

@@ -823,14 +823,18 @@ class PeriodSummaryView(APIView):
         return {row['d']: row['total'] or Decimal('0') for row in rows}
 
     def _credit_payment_costs_by_day(self, start, end):
-        """Coût d'achat reconnu au prorata des règlements, regroupé par jour."""
+        """Coût d'achat reconnu au prorata des règlements, regroupé par jour.
+
+        On somme en pleine précision et on arrondit par jour pour éviter
+        la dérive cumulée sur de nombreux petits règlements.
+        """
         try:
             from credit.models import CreditPayment
         except Exception:
             return {}
         start_dt, end_dt = local_datetime_bounds(start, end)
         tz = timezone.get_current_timezone()
-        payments = (
+        payments = list(
             CreditPayment.objects.filter(
                 created_at__gte=start_dt,
                 created_at__lte=end_dt,
@@ -847,18 +851,19 @@ class PeriodSummaryView(APIView):
             .values('sale_id')
             .annotate(total=Sum('total_purchase_cost'))
         }
-        result = {}
+        accumulator = {}
         for payment in payments:
             sale = payment.credit_sale.sale
             sale_total = sale.total_ttc or Decimal('0')
             if sale_total <= 0:
                 continue
             ratio = (payment.amount or Decimal('0')) / sale_total
-            cost = (cost_by_sale.get(sale.id, Decimal('0')) * ratio).quantize(
-                Decimal('0.01'), rounding=ROUND_HALF_UP,
-            )
-            result[payment.d] = result.get(payment.d, Decimal('0')) + cost
-        return result
+            cost = cost_by_sale.get(sale.id, Decimal('0')) * ratio
+            accumulator[payment.d] = accumulator.get(payment.d, Decimal('0')) + cost
+        return {
+            d: total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            for d, total in accumulator.items()
+        }
 
     def _dated_expenses_by_day(self, start, end):
         rows = (

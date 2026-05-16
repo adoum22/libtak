@@ -2,9 +2,22 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from sales.serializers import SaleItemDetailSerializer
+from sales.models import SaleItem
 
 from .models import CreditPayment, CreditSale, Customer
+
+
+class CreditSaleItemSerializer(serializers.ModelSerializer):
+    """Items d'une vente à crédit — N'EXPOSE PAS les prix d'achat.
+    Le vendeur n'a pas à voir la marge en regardant un crédit."""
+    product_barcode = serializers.CharField(source='product.barcode', read_only=True)
+
+    class Meta:
+        model = SaleItem
+        fields = (
+            'id', 'product_name', 'product_barcode', 'quantity',
+            'unit_price_ht', 'total_price_ht', 'tva_rate',
+        )
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -66,7 +79,7 @@ class CreditSaleListSerializer(serializers.ModelSerializer):
 
 
 class CreditSaleDetailSerializer(CreditSaleListSerializer):
-    items = SaleItemDetailSerializer(source='sale.items', many=True, read_only=True)
+    items = CreditSaleItemSerializer(source='sale.items', many=True, read_only=True)
     payments = CreditPaymentSerializer(many=True, read_only=True)
     sale_discount = serializers.DecimalField(
         source='sale.discount_amount', max_digits=10, decimal_places=2, read_only=True,

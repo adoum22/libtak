@@ -89,6 +89,10 @@ def _import_sale(sale_data: dict) -> bool:
     if Sale.objects.filter(local_sync_id=local_id).exists():
         return False  # Already imported
 
+    # V1 du crédit : on n'importe pas les ventes CREDIT côté cloud (pas d'app credit).
+    if sale_data.get('payment_method') == 'CREDIT':
+        return False
+
     from core.models import User
     user = None
     if sale_data.get('user_username'):

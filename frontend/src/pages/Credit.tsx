@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
@@ -76,11 +76,25 @@ export default function Credit() {
     const [paymentInput, setPaymentInput] = useState('');
     const [paymentNote, setPaymentNote] = useState('');
 
+    // Debounce de la recherche pour éviter une requête par caractère
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedSearch(search), 250);
+        return () => clearTimeout(t);
+    }, [search]);
+
+    // Reset du formulaire de paiement à chaque changement de crédit sélectionné
+    // (évite de pré-remplir le formulaire avec le montant/note d'un autre crédit)
+    useEffect(() => {
+        setPaymentInput('');
+        setPaymentNote('');
+    }, [selectedId]);
+
     const { data: credits = [], isLoading } = useQuery<CreditSale[]>({
-        queryKey: ['credits', statusFilter, search],
+        queryKey: ['credits', statusFilter, debouncedSearch],
         queryFn: () => {
             const params = new URLSearchParams();
-            if (search) params.set('search', search);
+            if (debouncedSearch) params.set('search', debouncedSearch);
             if (statusFilter === 'UNPAID' || statusFilter === 'PARTIAL' || statusFilter === 'PAID') {
                 params.set('status', statusFilter);
             }
@@ -124,16 +138,31 @@ export default function Credit() {
 
     const submitPayment = () => {
         if (!detail) return;
-        const amount = parseDecimalInput(paymentInput) || 0;
+        const remaining = Number(detail.remaining_amount) || 0;
+        let amount = parseDecimalInput(paymentInput) || 0;
         if (amount <= 0) {
             toast.error('Montant invalide.');
             return;
         }
-        if (amount > detail.remaining_amount) {
+        // Si l'utilisateur a tapé exactement le restant arrondi à 2 décimales,
+        // on envoie la valeur exacte du backend pour éviter un reliquat de 0.001 DH
+        // qui empêcherait le crédit de passer en PAID.
+        if (Math.abs(amount - Number(remaining.toFixed(2))) < 0.005) {
+            amount = remaining;
+        }
+        if (amount > remaining + 0.01) {
             toast.error('Le règlement dépasse le restant dû.');
             return;
         }
         payMutation.mutate({ amount, note: paymentNote });
+    };
+
+    const payFullBalance = () => {
+        if (!detail) return;
+        payMutation.mutate({
+            amount: Number(detail.remaining_amount) || 0,
+            note: paymentNote,
+        });
     };
 
     const totals = filteredCredits.reduce(
@@ -275,14 +304,14 @@ export default function Credit() {
                                 <CreditCard size={20} />
                                 Crédit #{detail.id} — {detail.customer_name}
                             </h3>
-                            <button onClick={() => setSelectedId(null)} className="hover:bg-white/20 p-1 rounded">
+                            <button onClick={() => setSelectedId(null)} aria-label="Fermer" className="hover:bg-white/20 p-1 rounded">
                                 <X size={20} />
                             </button>
                         </div>
 
                         <div className="p-5 space-y-5">
                             {/* Summary */}
-                            <div className="grid grid-cols-3 gap-3 text-sm">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
                                 <div className="bg-tertiary/40 rounded-lg p-3">
                                     <p className="text-xs uppercase text-muted">Total</p>
                                     <p className="font-bold text-lg">{Number(detail.sale_total).toFixed(2)} DH</p>
@@ -400,7 +429,8 @@ export default function Credit() {
                                     </div>
                                     <div className="flex gap-2">
                                         <button
-                                            onClick={() => setPaymentInput(Number(detail.remaining_amount).toFixed(2))}
+                                            onClick={payFullBalance}
+                                            disabled={payMutation.isPending}
                                             className="btn-ghost btn-sm"
                                         >
                                             Solde total

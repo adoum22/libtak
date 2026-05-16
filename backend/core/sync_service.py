@@ -52,13 +52,16 @@ class SyncService:
             logger.error(f"Could not save last sync time: {e}")
     
     def get_pending_sales(self) -> list:
-        """Get sales created since last sync."""
+        """Get sales created since last sync.
+
+        V1 du crédit : on EXCLUT les ventes à crédit (pas d'app credit côté cloud).
+        """
         last_sync = self.get_last_sync_time()
         sales = Sale.objects.filter(
             created_at__gt=last_sync,
             synced=False
-        ).select_related('user').prefetch_related('items__product')
-        
+        ).exclude(payment_method='CREDIT').select_related('user').prefetch_related('items__product')
+
         return [self._serialize_sale(sale) for sale in sales]
     
     def _serialize_sale(self, sale: Sale) -> dict:

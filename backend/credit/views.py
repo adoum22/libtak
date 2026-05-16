@@ -10,17 +10,31 @@ from core.models import AuditLog
 
 from .models import CreditPayment, CreditSale, Customer
 from .serializers import (
-    CreditPaymentSerializer,
     CreditSaleDetailSerializer,
     CreditSaleListSerializer,
     CustomerSerializer,
 )
 
 
+class CustomerWritePermission(permissions.BasePermission):
+    """Tout utilisateur authentifié peut lister/créer un client (POS crédit).
+    Seuls les admins peuvent modifier ou supprimer un client existant
+    (un vendeur ne doit pas pouvoir corrompre la base clients)."""
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.method in permissions.SAFE_METHODS or request.method == 'POST':
+            return True
+        return getattr(request.user, 'is_admin_role', False) or getattr(
+            request.user, 'role', None,
+        ) == 'ADMIN'
+
+
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all().prefetch_related('credit_sales')
     serializer_class = CustomerSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [CustomerWritePermission]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'phone']
     ordering_fields = ['name', 'created_at']
@@ -62,25 +76,43 @@ class CreditSaleViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        with transaction.atomic():
-            credit = (
-                CreditSale.objects.select_for_update()
-                .select_related('sale')
-                .get(pk=pk)
+        try:
+            credit_id = int(pk)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'ID de crédit invalide.'},
+                status=status.HTTP_404_NOT_FOUND,
             )
+
+        with transaction.atomic():
+            try:
+                credit = (
+                    CreditSale.objects.select_for_update()
+                    .select_related('sale')
+                    .get(pk=credit_id)
+                )
+            except CreditSale.DoesNotExist:
+                return Response(
+                    {'detail': 'Crédit introuvable.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
             if credit.status == CreditSale.Status.PAID:
                 return Response(
                     {'detail': 'Ce crédit est déjà entièrement réglé.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             remaining = credit.remaining_amount
-            if amount > remaining:
+            # Tolérance de 0.01 DH pour les arrondis (frontend toFixed(2) etc.)
+            if amount > remaining + Decimal('0.01'):
                 return Response(
                     {'amount': [
                         f"Le règlement ne peut pas dépasser le restant dû ({remaining} DH)."
                     ]},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # Clamp au restant si on dépasse de moins de 1 centime (arrondi FE)
+            if amount > remaining:
+                amount = remaining
 
             payment = CreditPayment.objects.create(
                 credit_sale=credit,

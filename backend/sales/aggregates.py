@@ -62,30 +62,37 @@ def _credit_payments_cost(start_dt, end_dt) -> Decimal:
 
     Pour chaque CreditPayment dans la période on attribue
     (payment.amount / sale.total_ttc) * total_purchase_cost_de_la_sale.
-    Cela conserve la marge brute en comptabilité de caisse.
+
+    Note: la remise éventuelle est déjà incorporée dans `sale.total_ttc`
+    (qui est le net après discount). Donc en faisant
+    revenue=payment.amount et cost=ratio*purchase_cost on obtient la
+    marge correcte sans avoir à soustraire la remise séparément.
+
+    On somme en pleine précision puis on arrondit une seule fois pour
+    éviter la dérive cumulée sur de nombreux petits règlements.
     """
     try:
         from credit.models import CreditPayment
     except Exception:
         return Decimal('0')
 
-    payments = (
+    payments = list(
         CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
         )
         .select_related('credit_sale__sale')
     )
-    total = Decimal('0')
+    if not payments:
+        return Decimal('0')
     sale_ids = {p.credit_sale.sale_id for p in payments}
-    if not sale_ids:
-        return total
     cost_by_sale = {
         row['sale_id']: row['total'] or Decimal('0')
         for row in SaleItem.objects.filter(sale_id__in=sale_ids)
         .values('sale_id')
         .annotate(total=Sum('total_purchase_cost'))
     }
+    total = Decimal('0')
     for payment in payments:
         sale = payment.credit_sale.sale
         sale_total = sale.total_ttc or Decimal('0')
@@ -93,10 +100,8 @@ def _credit_payments_cost(start_dt, end_dt) -> Decimal:
             continue
         ratio = (payment.amount or Decimal('0')) / sale_total
         sale_cost = cost_by_sale.get(sale.id, Decimal('0'))
-        total += (sale_cost * ratio).quantize(
-            Decimal('0.01'), rounding=ROUND_HALF_UP,
-        )
-    return total
+        total += sale_cost * ratio
+    return total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
 
 def gross_margin_for_period(start_date, end_date) -> Decimal:

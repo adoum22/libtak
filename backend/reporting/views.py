@@ -416,23 +416,59 @@ class StatsView(APIView):
     def get(self, request):
         today = timezone.now().date()
 
-        # Ventes du jour
+        # Helper : ventes encaissées (exclut les ventes à crédit non réglées).
+        def _cash_sales(qs):
+            return qs.exclude(payment_method=Sale.PaymentMethod.CREDIT)
+
+        def _credit_payments_sum(date_filter_kwargs):
+            try:
+                from credit.models import CreditPayment
+            except Exception:
+                return Decimal('0')
+            return (
+                CreditPayment.objects.filter(**date_filter_kwargs)
+                .aggregate(total=Sum('amount'))['total']
+                or Decimal('0')
+            )
+
+        # Ventes du jour (cash-basis : exclut crédit, ajoute règlements crédit)
         today_sales = Sale.objects.filter(created_at__date=today)
-        today_revenue = today_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
+        today_cash_revenue = (
+            _cash_sales(today_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
+            or Decimal('0')
+        )
+        today_credit_payments = _credit_payments_sum({'created_at__date': today})
+        today_revenue = Decimal(today_cash_revenue) + Decimal(today_credit_payments)
 
         # Ventes de la semaine
         week_start = today - timedelta(days=today.weekday())
         week_sales = Sale.objects.filter(created_at__date__gte=week_start)
-        week_revenue = week_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
+        week_cash_revenue = (
+            _cash_sales(week_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
+            or Decimal('0')
+        )
+        week_credit_payments = _credit_payments_sum(
+            {'created_at__date__gte': week_start}
+        )
+        week_revenue = Decimal(week_cash_revenue) + Decimal(week_credit_payments)
 
         # Ventes du mois
         month_start = today.replace(day=1)
         month_sales = Sale.objects.filter(created_at__date__gte=month_start)
-        month_revenue = month_sales.aggregate(Sum('total_ttc'))['total_ttc__sum'] or 0
+        month_cash_revenue = (
+            _cash_sales(month_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
+            or Decimal('0')
+        )
+        month_credit_payments = _credit_payments_sum(
+            {'created_at__date__gte': month_start}
+        )
+        month_revenue = Decimal(month_cash_revenue) + Decimal(month_credit_payments)
 
-        # Top produits
+        # Top produits : exclut les ventes à crédit (recettes non encaissées)
         top_products = SaleItem.objects.filter(
-            sale__created_at__date__gte=month_start
+            sale__created_at__date__gte=month_start,
+        ).exclude(
+            sale__payment_method=Sale.PaymentMethod.CREDIT,
         ).values(
             'product__name', 'product__barcode'
         ).annotate(
@@ -454,11 +490,16 @@ class StatsView(APIView):
         low_stock_only_count = max(0, to_replenish_count - out_of_stock_count)
         low_stock = replenish_qs.values('id', 'name', 'stock', 'min_stock')[:10]
 
-        # Comparaison avec hier
+        # Comparaison avec hier (cash-basis : exclut crédit, ajoute règlements)
         yesterday = today - timedelta(days=1)
-        yesterday_revenue = Sale.objects.filter(
-            created_at__date=yesterday
-        ).aggregate(Sum('total_ttc'))['total_ttc__sum'] or Decimal('0')
+        yesterday_cash = (
+            Sale.objects.filter(created_at__date=yesterday)
+            .exclude(payment_method=Sale.PaymentMethod.CREDIT)
+            .aggregate(Sum('total_ttc'))['total_ttc__sum']
+            or Decimal('0')
+        )
+        yesterday_credit = _credit_payments_sum({'created_at__date': yesterday})
+        yesterday_revenue = Decimal(yesterday_cash) + Decimal(yesterday_credit)
 
         revenue_change = 0
         if yesterday_revenue > 0:
@@ -475,61 +516,133 @@ class StatsView(APIView):
 
         period_start = today - timedelta(days=days - 1)
 
+        # Helpers locaux : credit payments par jour/heure
+        def _credit_payments_by_day():
+            try:
+                from credit.models import CreditPayment
+            except Exception:
+                return {}
+            qs = (
+                CreditPayment.objects
+                .filter(created_at__date__gte=period_start)
+                .annotate(day=TruncDay('created_at'))
+                .values('day')
+                .annotate(total=Sum('amount'), c=Count('id'))
+            )
+            return {row['day'].date(): row for row in qs}
+
         if days <= 31:
-            # granularité jour
+            # granularité jour — cash-basis : exclut crédit, ajoute règlements
             daily_qs = (
                 Sale.objects.filter(created_at__date__gte=period_start)
+                .exclude(payment_method=Sale.PaymentMethod.CREDIT)
                 .annotate(day=TruncDay('created_at'))
                 .values('day')
                 .annotate(revenue=Sum('total_ttc'), count=Count('id'))
                 .order_by('day')
             )
             by_day = {row['day'].date(): row for row in daily_qs}
+            credit_by_day = _credit_payments_by_day()
             revenue_7d = []
             for i in range(days):
                 d = period_start + timedelta(days=i)
                 row = by_day.get(d)
+                credit_row = credit_by_day.get(d)
+                cash_rev = float(row['revenue'] or 0) if row else 0.0
+                credit_rev = float(credit_row['total'] or 0) if credit_row else 0.0
+                cash_count = row['count'] if row else 0
+                credit_count = credit_row['c'] if credit_row else 0
                 fmt = '%a %d/%m' if days <= 7 else '%d/%m'
                 revenue_7d.append({
                     'label': d.strftime(fmt),
                     'date': d.isoformat(),
-                    'revenue': float(row['revenue'] or 0) if row else 0.0,
-                    'count': row['count'] if row else 0,
+                    'revenue': cash_rev + credit_rev,
+                    'count': cash_count + credit_count,
                 })
         else:
-            # granularité semaine pour > 1 mois (sinon trop dense)
+            # granularité semaine pour > 1 mois — cash-basis
             weekly_qs = (
                 Sale.objects.filter(created_at__date__gte=period_start)
+                .exclude(payment_method=Sale.PaymentMethod.CREDIT)
                 .annotate(w=TruncWeek('created_at'))
                 .values('w')
                 .annotate(revenue=Sum('total_ttc'), count=Count('id'))
                 .order_by('w')
             )
-            revenue_7d = [
-                {
-                    'label': row['w'].strftime('S%V'),
-                    'date': row['w'].date().isoformat(),
-                    'revenue': float(row['revenue'] or 0),
-                    'count': row['count'],
-                }
-                for row in weekly_qs
-            ]
+            # Ajout des règlements crédit semaine par semaine
+            credit_weekly = {}
+            try:
+                from credit.models import CreditPayment
+                cp_qs = (
+                    CreditPayment.objects
+                    .filter(created_at__date__gte=period_start)
+                    .annotate(w=TruncWeek('created_at'))
+                    .values('w')
+                    .annotate(total=Sum('amount'), c=Count('id'))
+                )
+                credit_weekly = {row['w']: row for row in cp_qs}
+            except Exception:
+                credit_weekly = {}
+            seen_weeks = set()
+            revenue_7d = []
+            for row in weekly_qs:
+                w = row['w']
+                cred = credit_weekly.get(w)
+                cred_rev = float(cred['total'] or 0) if cred else 0.0
+                cred_cnt = cred['c'] if cred else 0
+                revenue_7d.append({
+                    'label': w.strftime('S%V'),
+                    'date': w.date().isoformat(),
+                    'revenue': float(row['revenue'] or 0) + cred_rev,
+                    'count': row['count'] + cred_cnt,
+                })
+                seen_weeks.add(w)
+            # Semaines avec seulement des règlements crédit (sans vente cash)
+            for w, cred in credit_weekly.items():
+                if w in seen_weeks:
+                    continue
+                revenue_7d.append({
+                    'label': w.strftime('S%V'),
+                    'date': w.date().isoformat(),
+                    'revenue': float(cred['total'] or 0),
+                    'count': cred['c'],
+                })
+            revenue_7d.sort(key=lambda r: r['date'])
 
-        # Série horaire pour aujourd'hui (BarChart)
+        # Série horaire pour aujourd'hui (BarChart) — cash-basis
         hourly_qs = (
-            today_sales.annotate(hour=TruncHour('created_at'))
+            today_sales.exclude(payment_method=Sale.PaymentMethod.CREDIT)
+            .annotate(hour=TruncHour('created_at'))
             .values('hour')
             .annotate(revenue=Sum('total_ttc'), count=Count('id'))
             .order_by('hour')
         )
         by_hour = {row['hour'].hour: row for row in hourly_qs}
+        # Règlements crédit par heure aujourd'hui
+        credit_by_hour = {}
+        try:
+            from credit.models import CreditPayment
+            chp_qs = (
+                CreditPayment.objects.filter(created_at__date=today)
+                .annotate(hour=TruncHour('created_at'))
+                .values('hour')
+                .annotate(total=Sum('amount'), c=Count('id'))
+            )
+            credit_by_hour = {row['hour'].hour: row for row in chp_qs}
+        except Exception:
+            credit_by_hour = {}
         hourly_today = []
         for h in range(8, 22):  # 8h -> 21h
             row = by_hour.get(h)
+            cred = credit_by_hour.get(h)
+            cash_rev = float(row['revenue'] or 0) if row else 0.0
+            credit_rev = float(cred['total'] or 0) if cred else 0.0
+            cash_cnt = row['count'] if row else 0
+            credit_cnt = cred['c'] if cred else 0
             hourly_today.append({
                 'label': f'{h}h',
-                'revenue': float(row['revenue'] or 0) if row else 0.0,
-                'count': row['count'] if row else 0,
+                'revenue': cash_rev + credit_rev,
+                'count': cash_cnt + credit_cnt,
             })
 
         return Response({

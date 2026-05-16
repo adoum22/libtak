@@ -71,7 +71,9 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
     const paymentLabels: Record<string, string> = {
         'CASH': 'Espèces',
         'CARD': 'Carte Bancaire',
-        'TRANSFER': 'Virement'
+        'TRANSFER': 'Virement',
+        'CREDIT': 'Crédit (à régler)',
+        'OTHER': 'Autre',
     };
 
     let itemsHTML = '';

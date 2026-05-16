@@ -68,9 +68,16 @@ def save_sync_state(state):
 
 
 def get_sales_to_sync(last_sync_time):
-    """Get all sales created since last sync."""
-    queryset = Sale.objects.all()
-    
+    """Get all sales created since last sync.
+
+    V1 du crédit : on EXCLUT les ventes à crédit du sync cloud car
+    le cloud n'a pas l'app `credit` ni le linkage CreditSale/CreditPayment.
+    Synchroniser ces ventes laisserait le cloud avec des `Sale.payment_method=CREDIT`
+    sans CreditSale lié → revenu cloud incohérent.
+    Tout le suivi crédit reste local pour l'instant.
+    """
+    queryset = Sale.objects.exclude(payment_method='CREDIT')
+
     if last_sync_time:
         try:
             last_dt = datetime.fromisoformat(last_sync_time.replace('Z', '+00:00'))

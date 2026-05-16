@@ -137,18 +137,25 @@ export default function POS() {
         }
     });
 
+    // Debounce customer search to avoid one HTTP call per keystroke
+    const [debouncedCustomerSearch, setDebouncedCustomerSearch] = useState('');
+    useEffect(() => {
+        const t = setTimeout(() => setDebouncedCustomerSearch(customerSearch), 250);
+        return () => clearTimeout(t);
+    }, [customerSearch]);
+
     // Customers search (only when credit mode is open)
-    const { data: customers = [] } = useQuery<Customer[]>({
-        queryKey: ['credit-customers', customerSearch],
+    const { data: customers = [], isFetching: customersLoading } = useQuery<Customer[]>({
+        queryKey: ['credit-customers', debouncedCustomerSearch],
         queryFn: () =>
-            client.get(`/credit/customers/?search=${encodeURIComponent(customerSearch)}`)
+            client.get(`/credit/customers/?search=${encodeURIComponent(debouncedCustomerSearch)}`)
                 .then(res => res.data.results || res.data),
         enabled: showPaymentModal && paymentChoice === 'CREDIT',
         staleTime: 10_000,
     });
 
     const createCustomerMutation = useMutation({
-        mutationFn: (data: { name: string; phone: string }) =>
+        mutationFn: (data: { name: string; phone?: string }) =>
             client.post('/credit/customers/', data).then(res => res.data),
         onSuccess: (created: Customer) => {
             queryClient.invalidateQueries({ queryKey: ['credit-customers'] });
@@ -161,6 +168,29 @@ export default function POS() {
             toast.error("Erreur création client : " + getApiErrorMessage(error));
         },
     });
+
+    const submitNewCustomer = () => {
+        const name = newCustomerName.trim();
+        if (!name) {
+            toast.error('Le nom du client est requis.');
+            return;
+        }
+        const payload: { name: string; phone?: string } = { name };
+        const phone = newCustomerPhone.trim();
+        if (phone) payload.phone = phone;
+        createCustomerMutation.mutate(payload);
+    };
+
+    const resetPaymentModal = useCallback(() => {
+        setShowPaymentModal(false);
+        setAmountGiven('');
+        setPaymentChoice('CASH');
+        setCustomerSearch('');
+        setSelectedCustomer(null);
+        setShowNewCustomerForm(false);
+        setNewCustomerName('');
+        setNewCustomerPhone('');
+    }, []);
 
     // Checkout mutation
     const checkoutMutation = useMutation({
@@ -176,13 +206,15 @@ export default function POS() {
             toast.error("Erreur lors de la validation : " + getApiErrorMessage(error));
         },
         onSuccess: () => {
-            // 1. Close payment modal and show success overlay first so the UI
-            //    remains interactive even if printing fails or is slow.
-            setShowPaymentModal(false);
+            // 1. Reset cart + payment state immediately. The success overlay
+            //    is non-blocking; the next sale must start clean even if the
+            //    cashier dismisses the overlay quickly.
+            resetSale();
             setShowSuccessOverlay(true);
 
-            // 2. Invalidate queries (stock update)
+            // 2. Invalidate queries (stock + accounting + credit)
             queryClient.invalidateQueries({ queryKey: ['products'] });
+            queryClient.invalidateQueries({ queryKey: ['sales'] });
             queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
             queryClient.invalidateQueries({ queryKey: ['acc-period'] });
             queryClient.invalidateQueries({ queryKey: ['acc-month'] });
@@ -359,7 +391,7 @@ export default function POS() {
                                 {paymentChoice === 'CREDIT' ? <CreditCard /> : <Banknote />}
                                 {paymentChoice === 'CREDIT' ? 'Vente à crédit' : 'Paiement Espèces'}
                             </h3>
-                            <button onClick={() => setShowPaymentModal(false)} className="text-white hover:bg-secondary/20 p-1 rounded">
+                            <button onClick={resetPaymentModal} aria-label="Fermer" className="text-white hover:bg-secondary/20 p-1 rounded">
                                 <X size={24} />
                             </button>
                         </div>
@@ -471,7 +503,7 @@ export default function POS() {
                                                 <button
                                                     type="button"
                                                     disabled={!newCustomerName.trim() || createCustomerMutation.isPending}
-                                                    onClick={() => createCustomerMutation.mutate({ name: newCustomerName.trim(), phone: newCustomerPhone.trim() })}
+                                                    onClick={submitNewCustomer}
                                                     className="btn-primary flex-1"
                                                 >
                                                     {createCustomerMutation.isPending ? '...' : 'Créer'}
@@ -492,7 +524,9 @@ export default function POS() {
                                                 />
                                             </div>
                                             <div className="max-h-44 overflow-y-auto rounded-xl border border-border divide-y divide-border">
-                                                {customers.length === 0 ? (
+                                                {customersLoading ? (
+                                                    <p className="text-sm text-muted p-3 text-center">Recherche...</p>
+                                                ) : customers.length === 0 ? (
                                                     <p className="text-sm text-muted p-3 text-center">
                                                         {customerSearch ? 'Aucun client trouvé.' : 'Tapez pour rechercher.'}
                                                     </p>

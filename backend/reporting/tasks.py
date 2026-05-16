@@ -37,21 +37,33 @@ def email_config_error():
 
 
 def get_report_data(start_date, end_date):
-    """Calcule les données du rapport pour une période"""
+    """Calcule les données du rapport pour une période.
+
+    Comptabilité de caisse pour le crédit :
+    - Les ventes à crédit (CREDIT) sont exclues du CA/marge de la période de vente.
+    - Les règlements de crédit (CreditPayment) sont comptés à leur date avec
+      coût d'achat au prorata.
+    """
     from sales.models import Return, ReturnItem
+    from sales.aggregates import _credit_payments_total, _credit_payments_cost
     start_dt, end_dt = local_datetime_bounds(start_date, end_date)
     tz = timezone.get_current_timezone()
 
-    # Ventes de la période
+    # Ventes de la période — on exclut les ventes à crédit (cash-basis).
     sales = Sale.objects.filter(
         created_at__gte=start_dt,
-        created_at__lte=end_dt
-    )
+        created_at__lte=end_dt,
+    ).exclude(payment_method=Sale.PaymentMethod.CREDIT)
 
-    # Totaux
-    total_sales = sales.count()
+    # Compteur ventes : on inclut TOUTES les ventes (crédit ou non) car
+    # c'est un compteur opérationnel ("combien de tickets le caissier a fait").
+    total_sales = Sale.objects.filter(
+        created_at__gte=start_dt,
+        created_at__lte=end_dt,
+    ).count()
 
     # Articles vendus groupés - prix de vente simple, sans TVA automatique.
+    # On exclut les items des ventes à crédit (recettes différées).
     items = SaleItem.objects.filter(
         sale__in=sales
     ).values(
@@ -70,6 +82,10 @@ def get_report_data(start_date, end_date):
     total_discounts = sales.aggregate(
         total=Sum('discount_amount'),
     )['total'] or Decimal('0')
+
+    # Recettes encaissées via règlements crédit pendant la période
+    credit_revenue = _credit_payments_total(start_dt, end_dt)
+    credit_cost = _credit_payments_cost(start_dt, end_dt)
 
     for item in items:
         cost = item['total_cost'] or Decimal('0')
@@ -108,8 +124,20 @@ def get_report_data(start_date, end_date):
     operating_expenses = operating_expenses_for_period(start_date, end_date)
 
     # Bénéfice net = (prix_vente - prix_achat) - retours - dépenses
-    net_revenue = float(total_revenue) - float(total_discounts) - float(total_returns)
-    gross_margin = float(total_profit) - float(total_discounts) - float(total_returns)
+    # On ajoute aux recettes/marge les règlements crédit encaissés pendant la période.
+    net_revenue = (
+        float(total_revenue)
+        - float(total_discounts)
+        - float(total_returns)
+        + float(credit_revenue)
+    )
+    gross_margin = (
+        float(total_profit)
+        - float(total_discounts)
+        - float(total_returns)
+        + float(credit_revenue)
+        - float(credit_cost)
+    )
     net_profit = gross_margin - float(operating_expenses)
 
     # Données pour le graphique
