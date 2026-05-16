@@ -15,7 +15,10 @@ import {
     X,
     Check,
     ScanLine,
-    Percent
+    Percent,
+    CreditCard,
+    UserPlus,
+    User
 } from 'lucide-react';
 
 interface Product {
@@ -37,7 +40,14 @@ interface CartItem {
     quantity: number;
 }
 
+interface Customer {
+    id: number;
+    name: string;
+    phone?: string;
+}
+
 type POSMode = 'SALE' | 'PRICE_CHECK';
+type PaymentChoice = 'CASH' | 'CREDIT';
 
 export default function POS() {
     const queryClient = useQueryClient();
@@ -50,6 +60,14 @@ export default function POS() {
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [amountGiven, setAmountGiven] = useState('');
     const [showSuccessOverlay, setShowSuccessOverlay] = useState(false); // New overlay state
+    const [paymentChoice, setPaymentChoice] = useState<PaymentChoice>('CASH');
+
+    // Credit-specific state
+    const [customerSearch, setCustomerSearch] = useState('');
+    const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+    const [showNewCustomerForm, setShowNewCustomerForm] = useState(false);
+    const [newCustomerName, setNewCustomerName] = useState('');
+    const [newCustomerPhone, setNewCustomerPhone] = useState('');
 
     // Price Check State
     const [checkedProduct, setCheckedProduct] = useState<Product | null>(null);
@@ -119,12 +137,38 @@ export default function POS() {
         }
     });
 
+    // Customers search (only when credit mode is open)
+    const { data: customers = [] } = useQuery<Customer[]>({
+        queryKey: ['credit-customers', customerSearch],
+        queryFn: () =>
+            client.get(`/credit/customers/?search=${encodeURIComponent(customerSearch)}`)
+                .then(res => res.data.results || res.data),
+        enabled: showPaymentModal && paymentChoice === 'CREDIT',
+        staleTime: 10_000,
+    });
+
+    const createCustomerMutation = useMutation({
+        mutationFn: (data: { name: string; phone: string }) =>
+            client.post('/credit/customers/', data).then(res => res.data),
+        onSuccess: (created: Customer) => {
+            queryClient.invalidateQueries({ queryKey: ['credit-customers'] });
+            setSelectedCustomer(created);
+            setShowNewCustomerForm(false);
+            setNewCustomerName('');
+            setNewCustomerPhone('');
+        },
+        onError: (error: unknown) => {
+            toast.error("Erreur création client : " + getApiErrorMessage(error));
+        },
+    });
+
     // Checkout mutation
     const checkoutMutation = useMutation({
         mutationFn: (data: {
             items: Array<{ product_id: number; quantity: number }>;
             payment_method: string;
             discount_amount: number;
+            customer_id?: number;
         }) =>
             client.post('/sales/sales/', data),
         onError: (error: unknown) => {
@@ -144,10 +188,7 @@ export default function POS() {
             queryClient.invalidateQueries({ queryKey: ['acc-month'] });
             queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
             queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
-
-            // Ticket printing is intentionally disabled while no thermal printer
-            // is connected. The sale remains validated and the cashier returns
-            // to a fresh cart through the success overlay.
+            queryClient.invalidateQueries({ queryKey: ['credits'] });
         }
     });
 
@@ -180,14 +221,27 @@ export default function POS() {
     const handleCheckout = () => {
         if (cart.length === 0) return;
 
-        const payload = {
+        if (paymentChoice === 'CREDIT' && !selectedCustomer) {
+            toast.error("Sélectionnez un client pour la vente à crédit.");
+            return;
+        }
+
+        const payload: {
+            items: Array<{ product_id: number; quantity: number }>;
+            discount_amount: number;
+            payment_method: string;
+            customer_id?: number;
+        } = {
             items: cart.map(item => ({
                 product_id: item.product.id,
                 quantity: item.quantity
             })),
             discount_amount: discountAmount,
-            payment_method: 'CASH'
+            payment_method: paymentChoice,
         };
+        if (paymentChoice === 'CREDIT' && selectedCustomer) {
+            payload.customer_id = selectedCustomer.id;
+        }
 
         checkoutMutation.mutate(payload);
     };
@@ -197,6 +251,12 @@ export default function POS() {
         setAmountGiven('');
         setSearchTerm('');
         setDiscountInput('');
+        setPaymentChoice('CASH');
+        setSelectedCustomer(null);
+        setCustomerSearch('');
+        setShowNewCustomerForm(false);
+        setNewCustomerName('');
+        setNewCustomerPhone('');
         searchInputRef.current?.focus();
     }, []);
 
@@ -294,52 +354,191 @@ export default function POS() {
             {showPaymentModal && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
                     <div className="card pos-payment-modal w-full max-w-md p-0 shadow-2xl">
-                        <div className="card-header bg-accent text-white flex justify-between items-center">
+                        <div className={`card-header text-white flex justify-between items-center ${paymentChoice === 'CREDIT' ? 'bg-warning' : 'bg-accent'}`}>
                             <h3 className="text-xl font-bold flex items-center gap-2">
-                                <Banknote />
-                                Paiement Espèces
+                                {paymentChoice === 'CREDIT' ? <CreditCard /> : <Banknote />}
+                                {paymentChoice === 'CREDIT' ? 'Vente à crédit' : 'Paiement Espèces'}
                             </h3>
                             <button onClick={() => setShowPaymentModal(false)} className="text-white hover:bg-secondary/20 p-1 rounded">
                                 <X size={24} />
                             </button>
                         </div>
-                        <div className="p-6 space-y-6">
+                        <div className="p-6 space-y-5">
                             <div className="text-center space-y-2">
                                 <p className="text-muted uppercase text-sm font-semibold">Total à payer</p>
-                                <p className="text-4xl font-bold text-accent">{total.toFixed(2)} DH</p>
+                                <p className={`text-4xl font-bold ${paymentChoice === 'CREDIT' ? 'text-warning' : 'text-accent'}`}>{total.toFixed(2)} DH</p>
                             </div>
 
-                            <div className="space-y-2">
-                                <label className="block text-sm font-medium">Montant Perçu</label>
-                                <div className="flex rounded-xl border-2 border-border bg-secondary focus-within:border-accent">
-                                    <input
-                                        type="text"
-                                        inputMode="decimal"
-                                        autoFocus
-                                        className="money-input text-2xl font-bold py-3 pl-4 pr-3 w-full"
-                                        placeholder="0.00"
-                                        value={amountGiven}
-                                        onChange={e => setAmountGiven(normalizeDecimalInput(e.target.value))}
-                                        onKeyDown={e => {
-                                            if (e.key === 'Enter' && changeAmount >= 0) handleCheckout();
-                                        }}
-                                    />
-                                    <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
+                            {/* Mode selector */}
+                            <div className="grid grid-cols-2 gap-2 bg-tertiary/40 p-1 rounded-xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setPaymentChoice('CASH')}
+                                    className={`flex items-center justify-center gap-2 py-2 rounded-lg font-semibold text-sm transition ${paymentChoice === 'CASH' ? 'bg-accent text-white shadow' : 'text-muted hover:text-primary'}`}
+                                >
+                                    <Banknote size={18} /> Espèces
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setPaymentChoice('CREDIT')}
+                                    className={`flex items-center justify-center gap-2 py-2 rounded-lg font-semibold text-sm transition ${paymentChoice === 'CREDIT' ? 'bg-warning text-white shadow' : 'text-muted hover:text-primary'}`}
+                                >
+                                    <CreditCard size={18} /> Crédit
+                                </button>
+                            </div>
+
+                            {paymentChoice === 'CASH' && (
+                                <>
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-medium">Montant Perçu</label>
+                                        <div className="flex rounded-xl border-2 border-border bg-secondary focus-within:border-accent">
+                                            <input
+                                                type="text"
+                                                inputMode="decimal"
+                                                autoFocus
+                                                className="money-input text-2xl font-bold py-3 pl-4 pr-3 w-full"
+                                                placeholder="0.00"
+                                                value={amountGiven}
+                                                onChange={e => setAmountGiven(normalizeDecimalInput(e.target.value))}
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter' && changeAmount >= 0) handleCheckout();
+                                                }}
+                                            />
+                                            <span className="px-4 flex items-center text-muted font-bold border-l border-border">DH</span>
+                                        </div>
+                                    </div>
+                                    <div className={`p-4 rounded-xl flex justify-between items-center transition-colors ${changeAmount >= 0 ? 'bg-success-light text-success-dark' : 'bg-danger-light text-danger'
+                                        }`}>
+                                        <span className="font-semibold text-lg">Monnaie à rendre</span>
+                                        <span className="text-3xl font-bold">{Math.max(0, changeAmount).toFixed(2)} DH</span>
+                                    </div>
+                                </>
+                            )}
+
+                            {paymentChoice === 'CREDIT' && (
+                                <div className="space-y-3">
+                                    <p className="text-xs text-muted">
+                                        La vente ne sera pas ajoutée au chiffre du jour ni à la caisse. Elle apparaîtra dans la section Crédit jusqu'au règlement.
+                                    </p>
+
+                                    {selectedCustomer ? (
+                                        <div className="flex items-center justify-between gap-3 p-3 rounded-xl border-2 border-warning/40 bg-warning-light/30">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <span className="w-9 h-9 rounded-full bg-warning text-white flex items-center justify-center shrink-0">
+                                                    <User size={18} />
+                                                </span>
+                                                <div className="min-w-0">
+                                                    <p className="font-bold truncate">{selectedCustomer.name}</p>
+                                                    {selectedCustomer.phone && (
+                                                        <p className="text-xs text-muted truncate">{selectedCustomer.phone}</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}
+                                                className="btn-ghost btn-sm"
+                                            >
+                                                Changer
+                                            </button>
+                                        </div>
+                                    ) : showNewCustomerForm ? (
+                                        <div className="space-y-2 p-3 rounded-xl border border-border bg-secondary">
+                                            <label className="block text-sm font-medium">Nouveau client</label>
+                                            <input
+                                                type="text"
+                                                autoFocus
+                                                placeholder="Nom du client"
+                                                value={newCustomerName}
+                                                onChange={e => setNewCustomerName(e.target.value)}
+                                                className="input w-full"
+                                            />
+                                            <input
+                                                type="tel"
+                                                placeholder="Téléphone (optionnel)"
+                                                value={newCustomerPhone}
+                                                onChange={e => setNewCustomerPhone(e.target.value)}
+                                                className="input w-full"
+                                            />
+                                            <div className="flex gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowNewCustomerForm(false)}
+                                                    className="btn-ghost flex-1"
+                                                >
+                                                    Annuler
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={!newCustomerName.trim() || createCustomerMutation.isPending}
+                                                    onClick={() => createCustomerMutation.mutate({ name: newCustomerName.trim(), phone: newCustomerPhone.trim() })}
+                                                    className="btn-primary flex-1"
+                                                >
+                                                    {createCustomerMutation.isPending ? '...' : 'Créer'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="relative">
+                                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
+                                                <input
+                                                    type="text"
+                                                    autoFocus
+                                                    placeholder="Rechercher un client..."
+                                                    value={customerSearch}
+                                                    onChange={e => setCustomerSearch(e.target.value)}
+                                                    className="input w-full pl-10"
+                                                />
+                                            </div>
+                                            <div className="max-h-44 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                                                {customers.length === 0 ? (
+                                                    <p className="text-sm text-muted p-3 text-center">
+                                                        {customerSearch ? 'Aucun client trouvé.' : 'Tapez pour rechercher.'}
+                                                    </p>
+                                                ) : (
+                                                    customers.map(c => (
+                                                        <button
+                                                            key={c.id}
+                                                            type="button"
+                                                            onClick={() => setSelectedCustomer(c)}
+                                                            className="w-full text-left p-3 hover:bg-tertiary/40 transition flex justify-between items-center gap-3"
+                                                        >
+                                                            <div className="min-w-0">
+                                                                <p className="font-medium truncate">{c.name}</p>
+                                                                {c.phone && <p className="text-xs text-muted truncate">{c.phone}</p>}
+                                                            </div>
+                                                        </button>
+                                                    ))
+                                                )}
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowNewCustomerForm(true)}
+                                                className="btn-ghost w-full flex items-center justify-center gap-2"
+                                            >
+                                                <UserPlus size={16} />
+                                                Nouveau client
+                                            </button>
+                                        </>
+                                    )}
                                 </div>
-                            </div>
-
-                            <div className={`p-4 rounded-xl flex justify-between items-center transition-colors ${changeAmount >= 0 ? 'bg-success-light text-success-dark' : 'bg-danger-light text-danger'
-                                }`}>
-                                <span className="font-semibold text-lg">Monnaie à rendre</span>
-                                <span className="text-3xl font-bold">{Math.max(0, changeAmount).toFixed(2)} DH</span>
-                            </div>
+                            )}
 
                             <button
                                 onClick={handleCheckout}
-                                disabled={checkoutMutation.isPending || changeAmount < 0}
-                                className="btn-primary w-full py-4 text-xl font-bold shadow-lg shadow-accent/20"
+                                disabled={
+                                    checkoutMutation.isPending
+                                    || (paymentChoice === 'CASH' && changeAmount < 0)
+                                    || (paymentChoice === 'CREDIT' && !selectedCustomer)
+                                }
+                                className={`w-full py-4 text-xl font-bold shadow-lg flex items-center justify-center gap-2 ${paymentChoice === 'CREDIT' ? 'btn bg-warning text-white hover:bg-warning/90 shadow-warning/20' : 'btn-primary shadow-accent/20'}`}
                             >
-                                {checkoutMutation.isPending ? 'Validation...' : 'VALIDER LA VENTE'}
+                                {checkoutMutation.isPending
+                                    ? 'Validation...'
+                                    : paymentChoice === 'CREDIT'
+                                        ? 'ENREGISTRER LE CRÉDIT'
+                                        : 'VALIDER LA VENTE'}
                             </button>
                         </div>
                     </div>

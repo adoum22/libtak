@@ -52,6 +52,10 @@ class SaleSerializer(serializers.ModelSerializer):
         required=False,
         default=Decimal('0.00'),
     )
+    customer_id = serializers.IntegerField(
+        required=False, allow_null=True, write_only=True,
+    )
+    credit = serializers.SerializerMethodField()
 
     class Meta:
         model = Sale
@@ -59,10 +63,37 @@ class SaleSerializer(serializers.ModelSerializer):
             'id', 'user', 'items',
             'total_ht', 'total_tva', 'total_ttc', 'discount_amount',
             'payment_method', 'created_at',
+            'customer_id', 'credit',
         )
         read_only_fields = (
             'user', 'total_ht', 'total_tva', 'total_ttc', 'created_at',
         )
+
+    def get_credit(self, obj):
+        credit = getattr(obj, 'credit', None)
+        if not credit:
+            return None
+        return {
+            'id': credit.id,
+            'customer_id': credit.customer_id,
+            'customer_name': credit.customer.name,
+            'status': credit.status,
+            'paid_amount': float(credit.paid_amount),
+        }
+
+    def validate(self, attrs):
+        payment_method = attrs.get('payment_method') or Sale.PaymentMethod.CASH
+        customer_id = attrs.get('customer_id')
+        if payment_method == Sale.PaymentMethod.CREDIT and not customer_id:
+            raise serializers.ValidationError({
+                'customer_id': (
+                    "Un client est requis pour une vente à crédit."
+                ),
+            })
+        if customer_id and payment_method != Sale.PaymentMethod.CREDIT:
+            # Ignorer silencieusement le client si la vente n'est pas à crédit
+            attrs.pop('customer_id', None)
+        return attrs
 
     def _send_stock_updates(self, stock_updates):
         for product_id, new_stock in stock_updates:
@@ -112,6 +143,10 @@ class SaleSerializer(serializers.ModelSerializer):
         items_data = validated_data.pop('items')
         user = validated_data.pop('user', None) or self.context['request'].user
         discount_amount = validated_data.pop('discount_amount', Decimal('0.00'))
+        customer_id = validated_data.pop('customer_id', None)
+        payment_method = validated_data.get(
+            'payment_method', Sale.PaymentMethod.CASH,
+        )
 
         product_quantities = {}
         for item_data in items_data:
@@ -214,6 +249,16 @@ class SaleSerializer(serializers.ModelSerializer):
                     item['quantity'],
                 )
                 stock_updates.append((product.id, new_stock))
+
+            if payment_method == Sale.PaymentMethod.CREDIT:
+                from credit.models import CreditSale, Customer
+                try:
+                    customer = Customer.objects.get(pk=customer_id)
+                except Customer.DoesNotExist:
+                    raise serializers.ValidationError({
+                        'customer_id': "Client introuvable.",
+                    })
+                CreditSale.objects.create(sale=sale, customer=customer)
 
         self._send_stock_updates(stock_updates)
         return sale

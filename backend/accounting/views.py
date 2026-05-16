@@ -88,6 +88,7 @@ def sales_margin_analytics(start, end):
             created_at__gte=start_dt,
             created_at__lte=end_dt,
         )
+        .exclude(payment_method=Sale.PaymentMethod.CREDIT)
         .prefetch_related('items')
         .order_by('-created_at', '-id')
     )
@@ -407,13 +408,17 @@ class CashRegisterView(APIView):
 
     def _summary(self):
         cash_sales = self._cash_sales_total()
+        credit_payments = self._credit_payments_total()
         completed_returns = self._completed_returns_total()
         expenses = self._expenses_total()
         adjustments = self._adjustments_total()
         opening = self._adjustments_total(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
         )
-        balance = adjustments + cash_sales - completed_returns - expenses
+        balance = (
+            adjustments + cash_sales + credit_payments
+            - completed_returns - expenses
+        )
         last_adjustment = CashRegisterAdjustment.objects.order_by('-created_at').first()
         recent_adjustments = CashRegisterAdjustment.objects.select_related(
             'created_by'
@@ -423,6 +428,7 @@ class CashRegisterView(APIView):
             'balance': float(balance),
             'opening_amount': float(opening),
             'cash_sales_total': float(cash_sales),
+            'credit_payments_total': float(credit_payments),
             'returns_total': float(completed_returns),
             'expenses_total': float(expenses),
             'adjustments_total': float(adjustments),
@@ -439,6 +445,7 @@ class CashRegisterView(APIView):
         return (
             self._adjustments_total()
             + self._cash_sales_total()
+            + self._credit_payments_total()
             - self._completed_returns_total()
             - self._expenses_total()
         )
@@ -453,6 +460,16 @@ class CashRegisterView(APIView):
         return (
             Sale.objects.filter(payment_method=Sale.PaymentMethod.CASH)
             .aggregate(total=Sum('total_ttc'))['total']
+            or Decimal('0')
+        )
+
+    def _credit_payments_total(self):
+        try:
+            from credit.models import CreditPayment
+        except Exception:
+            return Decimal('0')
+        return (
+            CreditPayment.objects.aggregate(total=Sum('amount'))['total']
             or Decimal('0')
         )
 
@@ -729,14 +746,21 @@ class PeriodSummaryView(APIView):
                 created_at__gte=start_dt,
                 created_at__lte=end_dt,
             )
+            .exclude(payment_method=Sale.PaymentMethod.CREDIT)
             .annotate(d=TruncDate('created_at', tzinfo=tz))
             .values('d')
             .annotate(total=Sum('total_ttc'))
         )
-        return {row['d']: row['total'] or Decimal('0') for row in rows}
+        revenue = {row['d']: row['total'] or Decimal('0') for row in rows}
+        # Ajouter les règlements de crédit à leur date
+        for d, amount in self._credit_payments_by_day(start, end).items():
+            revenue[d] = revenue.get(d, Decimal('0')) + amount
+        return revenue
 
     def _gross_margin_by_day(self, start, end):
         # Marge brute = (vente - achat) - remise, agrégée par jour.
+        # Les ventes à crédit sont exclues ; les règlements sont comptés à leur date
+        # avec leur coût d'achat au prorata.
         start_dt, end_dt = local_datetime_bounds(start, end)
         tz = timezone.get_current_timezone()
         items = (
@@ -744,6 +768,7 @@ class PeriodSummaryView(APIView):
                 sale__created_at__gte=start_dt,
                 sale__created_at__lte=end_dt,
             )
+            .exclude(sale__payment_method=Sale.PaymentMethod.CREDIT)
             .annotate(d=TruncDate('sale__created_at', tzinfo=tz))
             .values('d')
             .annotate(
@@ -755,12 +780,13 @@ class PeriodSummaryView(APIView):
             row['d']: (row['revenue'] or Decimal('0')) - (row['cost'] or Decimal('0'))
             for row in items
         }
-        # Soustraire les remises par jour
+        # Soustraire les remises par jour (hors crédit)
         discounts = (
             Sale.objects.filter(
                 created_at__gte=start_dt,
                 created_at__lte=end_dt,
             )
+            .exclude(payment_method=Sale.PaymentMethod.CREDIT)
             .annotate(d=TruncDate('created_at', tzinfo=tz))
             .values('d')
             .annotate(total=Sum('discount_amount'))
@@ -769,7 +795,70 @@ class PeriodSummaryView(APIView):
             margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
                 row['total'] or Decimal('0')
             )
+        # Ajouter le revenu des règlements de crédit, et soustraire le coût au prorata
+        payments_by_day = self._credit_payments_by_day(start, end)
+        costs_by_day = self._credit_payment_costs_by_day(start, end)
+        for d, amount in payments_by_day.items():
+            margin[d] = margin.get(d, Decimal('0')) + amount
+        for d, cost in costs_by_day.items():
+            margin[d] = margin.get(d, Decimal('0')) - cost
         return margin
+
+    def _credit_payments_by_day(self, start, end):
+        try:
+            from credit.models import CreditPayment
+        except Exception:
+            return {}
+        start_dt, end_dt = local_datetime_bounds(start, end)
+        tz = timezone.get_current_timezone()
+        rows = (
+            CreditPayment.objects.filter(
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
+            )
+            .annotate(d=TruncDate('created_at', tzinfo=tz))
+            .values('d')
+            .annotate(total=Sum('amount'))
+        )
+        return {row['d']: row['total'] or Decimal('0') for row in rows}
+
+    def _credit_payment_costs_by_day(self, start, end):
+        """Coût d'achat reconnu au prorata des règlements, regroupé par jour."""
+        try:
+            from credit.models import CreditPayment
+        except Exception:
+            return {}
+        start_dt, end_dt = local_datetime_bounds(start, end)
+        tz = timezone.get_current_timezone()
+        payments = (
+            CreditPayment.objects.filter(
+                created_at__gte=start_dt,
+                created_at__lte=end_dt,
+            )
+            .select_related('credit_sale__sale')
+            .annotate(d=TruncDate('created_at', tzinfo=tz))
+        )
+        if not payments:
+            return {}
+        sale_ids = {p.credit_sale.sale_id for p in payments}
+        cost_by_sale = {
+            row['sale_id']: row['total'] or Decimal('0')
+            for row in SaleItem.objects.filter(sale_id__in=sale_ids)
+            .values('sale_id')
+            .annotate(total=Sum('total_purchase_cost'))
+        }
+        result = {}
+        for payment in payments:
+            sale = payment.credit_sale.sale
+            sale_total = sale.total_ttc or Decimal('0')
+            if sale_total <= 0:
+                continue
+            ratio = (payment.amount or Decimal('0')) / sale_total
+            cost = (cost_by_sale.get(sale.id, Decimal('0')) * ratio).quantize(
+                Decimal('0.01'), rounding=ROUND_HALF_UP,
+            )
+            result[payment.d] = result.get(payment.d, Decimal('0')) + cost
+        return result
 
     def _dated_expenses_by_day(self, start, end):
         rows = (

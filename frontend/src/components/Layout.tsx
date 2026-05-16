@@ -21,6 +21,7 @@ import {
     Activity,
     HandCoins,
     Landmark,
+    CreditCard,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -97,6 +98,7 @@ export default function Layout() {
             tone: 'stock',
         },
         { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true, tone: 'sale' },
+        { icon: CreditCard, label: 'Crédit', path: '/credit', show: true, tone: 'credit' },
         { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin, tone: 'orders' },
         { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin, tone: 'suppliers' },
         { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin, tone: 'returns' },

@@ -7,6 +7,7 @@ class Sale(models.Model):
     class PaymentMethod(models.TextChoices):
         CASH = 'CASH', _('Cash')
         CARD = 'CARD', _('Card')
+        CREDIT = 'CREDIT', _('Credit')
         OTHER = 'OTHER', _('Other')
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)

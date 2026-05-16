@@ -102,6 +102,7 @@ INSTALLED_APPS = _OPTIONAL_APPS + [
     'sales',
     'reporting',
     'accounting',
+    'credit',
 ]
 
 MIDDLEWARE = [

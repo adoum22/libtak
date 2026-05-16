@@ -20,6 +20,7 @@ const Zakat = lazy(() => import('./pages/Zakat'));
 const Accounting = lazy(() => import('./pages/Accounting'));
 const CashRegister = lazy(() => import('./pages/CashRegister'));
 const ActivityLog = lazy(() => import('./pages/ActivityLog'));
+const Credit = lazy(() => import('./pages/Credit'));
 
 function PageLoader() {
   return (
@@ -58,6 +59,7 @@ function App() {
               <Route path="stock-count" element={<AdminRoute><StockCount /></AdminRoute>} />
               <Route path="zakat" element={<AdminRoute><Zakat /></AdminRoute>} />
               <Route path="accounting" element={<Accounting />} />
+              <Route path="credit" element={<Credit />} />
               <Route path="activity" element={<AdminRoute><ActivityLog /></AdminRoute>} />
             </Route>
           </Routes>
