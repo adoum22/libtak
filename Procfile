@@ -1,1 +1,1 @@
-web: cd backend && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+web: cd backend && python manage.py migrate --noinput && python create_users.py && unset BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_PASSWORD BOOTSTRAP_ADMIN_EMAIL && exec daphne -b 0.0.0.0 -p $PORT config.asgi:application

@@ -1,5 +1,5 @@
 param(
-    [string]$ApiUrl = "https://dido22.pythonanywhere.com/api",
+    [string]$ApiUrl = "http://127.0.0.1:8000/api",
     [string]$Username = "admin",
     [string]$Password,
     [switch]$RunSaleTest

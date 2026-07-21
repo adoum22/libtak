@@ -1,7 +1,7 @@
 # =====================================================================
 # WSGI configuration for PythonAnywhere
 # Copy this content into:  /var/www/<USERNAME>_pythonanywhere_com_wsgi.py
-# (replace <USERNAME> with your PythonAnywhere username, e.g. dido22)
+# (replace <USERNAME> with your PythonAnywhere username)
 # =====================================================================
 
 import os
@@ -9,7 +9,9 @@ import sys
 
 # ---- 1. Path to your project on PythonAnywhere ----------------------
 # After `git clone`, your code lives at /home/<USERNAME>/libtak
-USERNAME = 'dido22'  # <-- CHANGE if your PA username is different
+USERNAME = os.environ.get('PYTHONANYWHERE_USERNAME') or os.environ.get('USER')
+if not USERNAME:
+    raise RuntimeError('Set PYTHONANYWHERE_USERNAME in the Web app environment.')
 PROJECT_HOME = f'/home/{USERNAME}/libtak/backend'
 
 if PROJECT_HOME not in sys.path:
@@ -24,7 +26,7 @@ if PROJECT_HOME not in sys.path:
 # os.environ['ALLOWED_HOSTS'] = f'{USERNAME}.pythonanywhere.com'
 # os.environ['CORS_ALLOWED_ORIGINS'] = 'https://libtak.vercel.app'
 # os.environ['CSRF_TRUSTED_ORIGINS'] = 'https://libtak.vercel.app'
-# os.environ['DATABASE_URL'] = 'sqlite:////home/dido22/libtak/backend/db.sqlite3'
+# os.environ['DATABASE_URL'] = f'sqlite:////home/{USERNAME}/libtak/backend/db.sqlite3'
 # os.environ['EMAIL_HOST'] = 'smtp.gmail.com'
 # os.environ['EMAIL_PORT'] = '587'
 # os.environ['EMAIL_HOST_USER'] = 'your@gmail.com'

@@ -2,9 +2,10 @@
 
 ## Test 1 : Connexion et récupération du token
 
+$credential = Get-Credential -Message "Compte administrateur LibTak"
 $body = @{
-    username = "admin"
-    password = "admin123"
+    username = $credential.UserName
+    password = $credential.GetNetworkCredential().Password
 } | ConvertTo-Json
 
 Write-Host "🔐 Test de connexion..." -ForegroundColor Cyan
@@ -12,7 +13,7 @@ $response = Invoke-RestMethod -Uri "http://localhost:8000/api/auth/login/" -Meth
 $token = $response.access
 
 Write-Host "✅ Connexion réussie !" -ForegroundColor Green
-Write-Host "Token JWT : $($token.Substring(0,50))..." -ForegroundColor Yellow
+Write-Host "Token JWT reçu (valeur masquée)." -ForegroundColor Yellow
 Write-Host ""
 
 ## Test 2 : Récupérer les produits
@@ -91,6 +92,6 @@ Write-Host ""
 Write-Host "🎉 Tous les tests sont terminés !" -ForegroundColor Green
 Write-Host ""
 Write-Host "📚 Prochaines étapes :" -ForegroundColor Cyan
-Write-Host "1. Ouvrez http://localhost:8000/api/docs/ pour explorer l'API" -ForegroundColor White
+Write-Host "1. Ouvrez http://localhost:8000/api/docs/ pour explorer la documentation API" -ForegroundColor White
 Write-Host "2. Testez le frontend avec: cd frontend && npm run dev" -ForegroundColor White
-Write-Host "3. Connectez-vous avec admin/admin123" -ForegroundColor White
+Write-Host "3. Connectez-vous avec le compte créé localement" -ForegroundColor White

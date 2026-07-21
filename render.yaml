@@ -18,8 +18,8 @@ services:
     buildCommand: |
       pip install -r backend/requirements.txt
       cd backend && python manage.py collectstatic --no-input
-      cd backend && python manage.py migrate
-    startCommand: cd backend && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    startCommand: cd backend && python manage.py migrate --noinput && python create_users.py && unset BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_PASSWORD BOOTSTRAP_ADMIN_EMAIL && exec daphne -b 0.0.0.0 -p $PORT config.asgi:application
+    healthCheckPath: /api/health/
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -27,24 +27,63 @@ services:
           property: connectionString
       - key: SECRET_KEY
         generateValue: true
+      - key: JWT_SIGNING_KEY
+        generateValue: true
+      - key: BOOTSTRAP_ADMIN_USERNAME
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
       - key: DEBUG
         value: "False"
       - key: ALLOWED_HOSTS
-        value: ".onrender.com"
+        value: "librairie-api.onrender.com"
       - key: CORS_ALLOWED_ORIGINS
         value: "https://librairie-pos.onrender.com"
       - key: PYTHON_VERSION
         value: "3.11.0"
+      - key: TRUST_PROXY_SSL_HEADER
+        value: "True"
+      - key: AUDIT_TRUSTED_PROXY_COUNT
+        value: "1"
+      - key: ENABLE_API_DOCS
+        value: "False"
+      - key: ENABLE_DJANGO_ADMIN
+        value: "False"
+      - key: IS_CLOUD_SERVER
+        value: "False"
 
   # Frontend Static Site
   - type: static
     name: librairie-pos
-    buildCommand: cd frontend && npm install && npm run build
+    buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
     headers:
       - path: /*
         name: Cache-Control
         value: public, max-age=0, must-revalidate
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://librairie-api.onrender.com wss://librairie-api.onrender.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'; worker-src 'self' blob:"
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
       - path: /assets/*
         name: Cache-Control
         value: public, max-age=31536000, immutable

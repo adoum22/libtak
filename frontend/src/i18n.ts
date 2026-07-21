@@ -841,12 +841,24 @@ const resources = {
     }
 };
 
+const supportedLanguages = ['fr', 'en', 'ar'] as const;
+const savedLanguage = localStorage.getItem('language');
+const browserLanguage = navigator.language.split('-')[0];
+const initialLanguage = supportedLanguages.includes(
+    savedLanguage as (typeof supportedLanguages)[number],
+)
+    ? savedLanguage!
+    : supportedLanguages.includes(browserLanguage as (typeof supportedLanguages)[number])
+        ? browserLanguage
+        : 'fr';
+
 i18n
     .use(initReactI18next)
     .init({
         resources,
-        lng: "fr",
-        fallbackLng: "en",
+        lng: initialLanguage,
+        supportedLngs: [...supportedLanguages],
+        fallbackLng: "fr",
         interpolation: {
             escapeValue: false
         }

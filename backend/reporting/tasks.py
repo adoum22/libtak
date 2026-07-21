@@ -2,14 +2,51 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.html import escape
 from django.db.models import Sum, F, Count
 from django.conf import settings
 from datetime import datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from sales.models import Sale, SaleItem
 from .models import ReportSettings, ReportLog
+from .backup_utils import encryption_key_from_env
 from core.models import AppSettings
+
+
+CENT = Decimal('0.01')
+
+
+def _allocate_cents(total, weights):
+    """Allocate a non-negative monetary total and preserve every cent.
+
+    Intermediate shares use the application's ROUND_HALF_UP policy.  Any
+    rounding residue is assigned to the final, deterministically ordered row,
+    which makes product totals exactly reconcile with the accounting aggregate.
+    """
+    target = Decimal(total or 0).quantize(CENT, rounding=ROUND_HALF_UP)
+    if not weights:
+        return []
+    normalized = [max(Decimal(weight or 0), Decimal('0')) for weight in weights]
+    weight_total = sum(normalized, Decimal('0'))
+    if weight_total <= 0:
+        return [Decimal('0.00')] * (len(weights) - 1) + [target]
+
+    shares = []
+    allocated = Decimal('0.00')
+    for weight in normalized[:-1]:
+        remaining = target - allocated
+        share = (target * weight / weight_total).quantize(
+            CENT,
+            rounding=ROUND_HALF_UP,
+        )
+        # Totals handled here are non-negative.  Capping prevents a sequence
+        # of rounded-up shares from making the deterministic residual negative.
+        share = min(max(share, Decimal('0.00')), remaining)
+        shares.append(share)
+        allocated += share
+    shares.append(target - allocated)
+    return shares
 
 
 def local_datetime_bounds(start_date, end_date):
@@ -36,34 +73,22 @@ def email_config_error():
     return None
 
 
-def get_report_data(start_date, end_date):
-    """Calcule les données du rapport pour une période.
-
-    Comptabilité de caisse pour le crédit :
-    - Les ventes à crédit (CREDIT) sont exclues du CA/marge de la période de vente.
-    - Les règlements de crédit (CreditPayment) sont comptés à leur date avec
-      coût d'achat au prorata.
-    """
+def _legacy_get_report_data(start_date, end_date):
+    """Calcule les données du rapport pour une période"""
     from sales.models import Return, ReturnItem
-    from sales.aggregates import _credit_payments_total, _credit_payments_cost
     start_dt, end_dt = local_datetime_bounds(start_date, end_date)
     tz = timezone.get_current_timezone()
 
-    # Ventes de la période — on exclut les ventes à crédit (cash-basis).
+    # Ventes de la période
     sales = Sale.objects.filter(
         created_at__gte=start_dt,
-        created_at__lte=end_dt,
-    ).exclude(payment_method=Sale.PaymentMethod.CREDIT)
+        created_at__lte=end_dt
+    )
 
-    # Compteur ventes : on inclut TOUTES les ventes (crédit ou non) car
-    # c'est un compteur opérationnel ("combien de tickets le caissier a fait").
-    total_sales = Sale.objects.filter(
-        created_at__gte=start_dt,
-        created_at__lte=end_dt,
-    ).count()
+    # Totaux
+    total_sales = sales.count()
 
     # Articles vendus groupés - prix de vente simple, sans TVA automatique.
-    # On exclut les items des ventes à crédit (recettes différées).
     items = SaleItem.objects.filter(
         sale__in=sales
     ).values(
@@ -82,10 +107,6 @@ def get_report_data(start_date, end_date):
     total_discounts = sales.aggregate(
         total=Sum('discount_amount'),
     )['total'] or Decimal('0')
-
-    # Recettes encaissées via règlements crédit pendant la période
-    credit_revenue = _credit_payments_total(start_dt, end_dt)
-    credit_cost = _credit_payments_cost(start_dt, end_dt)
 
     for item in items:
         cost = item['total_cost'] or Decimal('0')
@@ -124,20 +145,8 @@ def get_report_data(start_date, end_date):
     operating_expenses = operating_expenses_for_period(start_date, end_date)
 
     # Bénéfice net = (prix_vente - prix_achat) - retours - dépenses
-    # On ajoute aux recettes/marge les règlements crédit encaissés pendant la période.
-    net_revenue = (
-        float(total_revenue)
-        - float(total_discounts)
-        - float(total_returns)
-        + float(credit_revenue)
-    )
-    gross_margin = (
-        float(total_profit)
-        - float(total_discounts)
-        - float(total_returns)
-        + float(credit_revenue)
-        - float(credit_cost)
-    )
+    net_revenue = float(total_revenue) - float(total_discounts) - float(total_returns)
+    gross_margin = float(total_profit) - float(total_discounts) - float(total_returns)
     net_profit = gross_margin - float(operating_expenses)
 
     # Données pour le graphique
@@ -208,6 +217,241 @@ def get_report_data(start_date, end_date):
 
 
 
+def get_report_data(start_date, end_date):
+    """Build a financially consistent report for a local-date period."""
+    from sales.aggregates import (
+        _credit_payments_cost,
+        _credit_payments_total,
+        completed_returns_for_period,
+        financials_for_period,
+        operating_expenses_for_period,
+    )
+    from django.db.models.functions import TruncDay, TruncHour
+    from credit.models import CreditPayment
+
+    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
+    tz = timezone.get_current_timezone()
+    sales = (
+        Sale.objects.filter(created_at__gte=start_dt, created_at__lte=end_dt)
+        .exclude(payment_method=Sale.PaymentMethod.CREDIT)
+        .prefetch_related('items__product')
+    )
+    completed_returns = completed_returns_for_period(
+        start_date, end_date,
+    ).prefetch_related('items__sale_item__product')
+    financials = financials_for_period(start_date, end_date)
+    operating_expenses = operating_expenses_for_period(start_date, end_date)
+    credit_revenue = _credit_payments_total(start_dt, end_dt)
+    credit_cost = _credit_payments_cost(start_dt, end_dt)
+
+    product_rows = {}
+    for sale in sales:
+        sale_items = sorted(sale.items.all(), key=lambda item: item.pk)
+        line_values = [
+            item.unit_price_ht * item.quantity for item in sale_items
+        ]
+        allocated_revenue = _allocate_cents(sale.total_ttc, line_values)
+        for item, revenue in zip(sale_items, allocated_revenue):
+            cost = item.total_purchase_cost or Decimal('0')
+            key = (item.product_id, item.product_name)
+            row = product_rows.setdefault(key, {
+                'name': item.product_name or 'Produit sans nom',
+                'barcode': item.product.barcode if item.product else '',
+                'quantity': 0,
+                'revenue': Decimal('0'),
+                'cost': Decimal('0'),
+            })
+            row['quantity'] += item.quantity
+            row['revenue'] += revenue
+            row['cost'] += cost
+
+    if credit_revenue or credit_cost:
+        product_rows[(None, 'Règlements crédit')] = {
+            'name': 'Règlements crédit',
+            'barcode': '',
+            'quantity': 0,
+            'revenue': credit_revenue,
+            'cost': credit_cost,
+        }
+
+    for return_order in completed_returns:
+        return_items = sorted(return_order.items.all(), key=lambda item: item.pk)
+        line_values = [
+            item.sale_item.unit_price_ht * item.quantity
+            for item in return_items
+        ]
+        allocated_refunds = _allocate_cents(
+            return_order.refund_amount,
+            line_values,
+        )
+        for item, refund_share in zip(return_items, allocated_refunds):
+            sale_item = item.sale_item
+            key = (sale_item.product_id, sale_item.product_name)
+            row = product_rows.setdefault(key, {
+                'name': sale_item.product_name or 'Produit sans nom',
+                'barcode': sale_item.product.barcode if sale_item.product else '',
+                'quantity': 0,
+                'revenue': Decimal('0'),
+                'cost': Decimal('0'),
+            })
+            row['quantity'] -= item.quantity
+            row['revenue'] -= refund_share
+            if item.restock:
+                row['cost'] -= sale_item.unit_purchase_price * item.quantity
+
+    target_revenue = Decimal(financials['net_revenue']).quantize(
+        CENT, rounding=ROUND_HALF_UP,
+    )
+    target_cost = Decimal(financials['net_cost']).quantize(
+        CENT, rounding=ROUND_HALF_UP,
+    )
+    if not product_rows and (target_revenue or target_cost):
+        product_rows[(None, 'Montant non attribue')] = {
+            'name': 'Montant non attribue',
+            'barcode': '',
+            'quantity': 0,
+            'revenue': Decimal('0.00'),
+            'cost': Decimal('0.00'),
+        }
+
+    ordered_keys = sorted(
+        product_rows,
+        key=lambda key: (
+            key[0] is None,
+            key[0] if key[0] is not None else 0,
+            key[1] or '',
+        ),
+    )
+    for key in ordered_keys:
+        row = product_rows[key]
+        row['revenue'] = Decimal(row['revenue']).quantize(
+            CENT, rounding=ROUND_HALF_UP,
+        )
+        row['cost'] = Decimal(row['cost']).quantize(
+            CENT, rounding=ROUND_HALF_UP,
+        )
+    if ordered_keys:
+        residual_row = product_rows[ordered_keys[-1]]
+        residual_row['revenue'] += target_revenue - sum(
+            (product_rows[key]['revenue'] for key in ordered_keys),
+            Decimal('0.00'),
+        )
+        residual_row['cost'] += target_cost - sum(
+            (product_rows[key]['cost'] for key in ordered_keys),
+            Decimal('0.00'),
+        )
+
+    items_sold = []
+    for key in ordered_keys:
+        row = product_rows[key]
+        quantity = row['quantity']
+        unit_price = row['revenue'] / quantity if quantity > 0 else Decimal('0')
+        items_sold.append({
+            **row,
+            'unit_price': float(unit_price),
+            'revenue': float(row['revenue']),
+            'cost': float(row['cost']),
+            'profit': float(row['revenue'] - row['cost']),
+        })
+    items_sold.sort(key=lambda row: (-row['quantity'], row['name']))
+
+    chart_data = []
+    if start_date == end_date:
+        hourly_sales = sales.annotate(
+            bucket=TruncHour('created_at', tzinfo=tz),
+        ).values('bucket').annotate(revenue=Sum('total_ttc'), count=Count('id'))
+        hourly_credit = CreditPayment.objects.filter(
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
+        ).annotate(bucket=TruncHour('created_at', tzinfo=tz)).values(
+            'bucket',
+        ).annotate(revenue=Sum('amount'), count=Count('id'))
+        hourly_returns = completed_returns.annotate(
+            bucket=TruncHour('completed_at', tzinfo=tz),
+        ).values('bucket').annotate(
+            refunds=Sum('refund_amount'), returns_count=Count('id'),
+        )
+        sales_by_hour = {
+            row['bucket'].hour: row for row in hourly_sales if row['bucket']
+        }
+        credit_by_hour = {
+            row['bucket'].hour: row for row in hourly_credit if row['bucket']
+        }
+        returns_by_hour = {
+            row['bucket'].hour: row for row in hourly_returns if row['bucket']
+        }
+        for hour in range(24):
+            sale_point = sales_by_hour.get(hour, {})
+            credit_point = credit_by_hour.get(hour, {})
+            return_point = returns_by_hour.get(hour, {})
+            chart_data.append({
+                'label': f'{hour:02d}h',
+                'revenue': float(
+                    (sale_point.get('revenue') or 0)
+                    + (credit_point.get('revenue') or 0)
+                    - (return_point.get('refunds') or 0)
+                ),
+                'count': sale_point.get('count', 0) + credit_point.get('count', 0),
+                'returns_count': return_point.get('returns_count', 0),
+            })
+    else:
+        daily_sales = sales.annotate(
+            bucket=TruncDay('created_at', tzinfo=tz),
+        ).values('bucket').annotate(revenue=Sum('total_ttc'), count=Count('id'))
+        daily_credit = CreditPayment.objects.filter(
+            created_at__gte=start_dt,
+            created_at__lte=end_dt,
+        ).annotate(bucket=TruncDay('created_at', tzinfo=tz)).values(
+            'bucket',
+        ).annotate(revenue=Sum('amount'), count=Count('id'))
+        daily_returns = completed_returns.annotate(
+            bucket=TruncDay('completed_at', tzinfo=tz),
+        ).values('bucket').annotate(
+            refunds=Sum('refund_amount'), returns_count=Count('id'),
+        )
+        sales_by_day = {
+            row['bucket'].date(): row for row in daily_sales if row['bucket']
+        }
+        credit_by_day = {
+            row['bucket'].date(): row for row in daily_credit if row['bucket']
+        }
+        returns_by_day = {
+            row['bucket'].date(): row for row in daily_returns if row['bucket']
+        }
+        current = start_date
+        while current <= end_date:
+            sale_point = sales_by_day.get(current, {})
+            credit_point = credit_by_day.get(current, {})
+            return_point = returns_by_day.get(current, {})
+            chart_data.append({
+                'label': current.strftime('%d/%m'),
+                'revenue': float(
+                    (sale_point.get('revenue') or 0)
+                    + (credit_point.get('revenue') or 0)
+                    - (return_point.get('refunds') or 0)
+                ),
+                'count': sale_point.get('count', 0) + credit_point.get('count', 0),
+                'returns_count': return_point.get('returns_count', 0),
+            })
+            current += timedelta(days=1)
+
+    return {
+        'total_sales': financials['sales_count'],
+        'total_revenue': float(financials['net_revenue']),
+        'gross_revenue': float(financials['gross_revenue']),
+        'total_returns': float(financials['refunds']),
+        'returns_count': financials['returns_count'],
+        'gross_cost': float(financials['gross_cost']),
+        'returned_cost': float(financials['returned_cost']),
+        'net_cost': float(financials['net_cost']),
+        'gross_margin': float(financials['gross_margin']),
+        'operating_expenses': float(operating_expenses),
+        'total_profit': float(financials['gross_margin'] - operating_expenses),
+        'items_sold': items_sold,
+        'chart_data': chart_data,
+    }
+
+
 def send_report_email(report_type, start_date, end_date, data, recipients):
     """Envoie le rapport par email avec configuration SMTP dynamique"""
 
@@ -270,7 +514,7 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
                 <thead>
                     <tr>
                         <th>Produit</th>
-                        <th style="text-align: right;">Prix Unit.</th>
+                        <th style="text-align: right;">Prix moyen vendu</th>
                         <th style="text-align: center;">Qté</th>
                         <th style="text-align: right;">Total</th>
                         <th style="text-align: right;">Marge</th>
@@ -282,7 +526,7 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
     for item in data['items_sold'][:20]:  # Top 20
         html_message += f"""
                     <tr>
-                        <td>{item['name']}</td>
+                        <td>{escape(item['name'])}</td>
                         <td style="text-align: right;">{item['unit_price']:.2f} DH</td>
                         <td style="text-align: center;">{item['quantity']}</td>
                         <td style="text-align: right;">{item['revenue']:.2f} DH</td>
@@ -342,7 +586,7 @@ def send_daily_report():
         )
         return "No recipients configured"
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     data = get_report_data(today, today)
 
     success, error = send_report_email('DAILY', today, today, data, recipients)
@@ -376,7 +620,7 @@ def send_weekly_report():
     if not recipients:
         return "No recipients configured"
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     start_date = today - timedelta(days=6)
 
     data = get_report_data(start_date, today)
@@ -411,7 +655,7 @@ def send_monthly_report():
     if not recipients:
         return "No recipients configured"
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     start_date = today.replace(day=1)
 
     data = get_report_data(start_date, today)
@@ -446,7 +690,7 @@ def send_quarterly_report():
     if not recipients:
         return "No recipients configured"
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     quarter = (today.month - 1) // 3
     start_month = quarter * 3 + 1
     start_date = today.replace(month=start_month, day=1)
@@ -483,7 +727,7 @@ def send_yearly_report():
     if not recipients:
         return "No recipients configured"
 
-    today = timezone.now().date()
+    today = timezone.localdate()
     start_date = today.replace(month=1, day=1)
 
     data = get_report_data(start_date, today)
@@ -569,8 +813,8 @@ def send_low_stock_alert():
         row_class = 'critical' if product.stock == 0 else 'warning' if product.stock <= product.min_stock / 2 else ''
         html_message += f"""
                     <tr class="{row_class}">
-                        <td>{product.name}</td>
-                        <td>{product.barcode}</td>
+                        <td>{escape(product.name)}</td>
+                        <td>{escape(product.barcode)}</td>
                         <td>{product.stock}</td>
                         <td>{product.min_stock}</td>
                     </tr>
@@ -606,90 +850,159 @@ def send_low_stock_alert():
 
 @shared_task
 def daily_database_backup():
+    """Create an encrypted, restorable database + media archive.
+
+    ``BACKUP_ENCRYPTION_KEY`` must be a URL-safe base64 encoded 32-byte key.
+    The task fails closed when the key is missing or invalid. Archives use a
+    streaming AES-256-GCM envelope and are retained for 30 days by default.
     """
-    Daily database backup task - runs at 18:00 each day.
-    Saves backup with timestamp, never deletes old backups.
-    """
-    import os
+    import hashlib
     import json
-    from django.core import serializers
-    from inventory.models import Product, Category, Supplier
-    from sales.models import Sale, SaleItem
-    from core.models import User
+    import os
+    import secrets
+    import sqlite3
+    import tempfile
+    import zipfile
+    from contextlib import closing
+    from pathlib import Path, PurePosixPath
 
-    now = timezone.now()
-    backup_dir = os.path.join(settings.BASE_DIR, 'backups')
-    os.makedirs(backup_dir, exist_ok=True)
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from django.core.management import call_command
 
-    # Create timestamped backup filename
-    timestamp = now.strftime('%Y-%m-%d_%H-%M-%S')
-    backup_file = os.path.join(backup_dir, f'backup_{timestamp}.json')
+    now = timezone.localtime()
+    backup_dir = Path(
+        os.environ.get('BACKUP_DIR')
+        or os.environ.get('LIBTAK_BACKUP_DIR')
+        or (Path(settings.BASE_DIR).parent / '.libtak-secure-backups')
+    ).expanduser().resolve()
+    output_path = None
+    temporary_output = None
 
     try:
-        backup_data = {
-            'timestamp': now.isoformat(),
-            'models': {}
-        }
+        def file_sha256(path):
+            digest = hashlib.sha256()
+            with path.open('rb') as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+            return digest.hexdigest()
 
-        # Backup each model
-        models_to_backup = [
-            ('products', Product),
-            ('categories', Category),
-            ('suppliers', Supplier),
-            ('sales', Sale),
-            ('sale_items', SaleItem),
-            ('users', User),
-        ]
+        encryption_key = encryption_key_from_env()
 
-        # Ajout des modèles credit (peuvent ne pas exister si l'app n'est pas
-        # encore migrée — d'où le try/except).
-        try:
-            from credit.models import Customer, CreditSale, CreditPayment
-            models_to_backup.extend([
-                ('customers', Customer),
-                ('credit_sales', CreditSale),
-                ('credit_payments', CreditPayment),
-            ])
-        except Exception:
-            pass
+        backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(backup_dir, 0o700)
+        timestamp = now.strftime('%Y-%m-%d_%H-%M-%S_%f')
+        output_path = backup_dir / f'libtak_backup_{timestamp}.ltbk'
+        temporary_output = backup_dir / f'.{output_path.name}.tmp'
 
-        for name, model in models_to_backup:
-            try:
-                data = serializers.serialize('json', model.objects.all())
-                backup_data['models'][name] = json.loads(data)
-            except Exception as e:
-                backup_data['models'][name] = {'error': str(e)}
+        with tempfile.TemporaryDirectory(prefix='libtak-backup-') as temp_name:
+            temp_dir = Path(temp_name)
+            database_name = 'database.sqlite3'
+            database_path = temp_dir / database_name
+            vendor = settings.DATABASES['default']['ENGINE']
 
-        # Write backup file
-        with open(backup_file, 'w', encoding='utf-8') as f:
-            json.dump(backup_data, f, ensure_ascii=False, indent=2)
+            if vendor.endswith('sqlite3'):
+                source_path = Path(settings.DATABASES['default']['NAME']).resolve()
+                with closing(sqlite3.connect(source_path)) as source, closing(
+                    sqlite3.connect(database_path)
+                ) as target:
+                    source.backup(target)
+            else:
+                database_name = 'database.json'
+                database_path = temp_dir / database_name
+                with database_path.open('w', encoding='utf-8') as stream:
+                    call_command(
+                        'dumpdata',
+                        '--natural-foreign',
+                        '--natural-primary',
+                        '--exclude', 'contenttypes',
+                        '--exclude', 'auth.permission',
+                        '--exclude', 'sessions',
+                        '--exclude', 'token_blacklist',
+                        stdout=stream,
+                    )
 
-        # Log the backup
+            archive_path = temp_dir / 'backup.zip'
+            checksums = {
+                database_name: file_sha256(database_path),
+            }
+            media_root = Path(settings.MEDIA_ROOT).resolve()
+            with zipfile.ZipFile(
+                archive_path, 'w', compression=zipfile.ZIP_DEFLATED,
+            ) as archive:
+                archive.write(database_path, database_name)
+                if media_root.exists():
+                    for media_file in media_root.rglob('*'):
+                        if not media_file.is_file() or media_file.is_symlink():
+                            continue
+                        relative = media_file.relative_to(media_root)
+                        arcname = str(PurePosixPath('media', *relative.parts))
+                        archive.write(media_file, arcname)
+                        checksums[arcname] = file_sha256(media_file)
+                manifest = {
+                    'format': 1,
+                    'created_at': now.isoformat(),
+                    'database_engine': vendor,
+                    'files_sha256': checksums,
+                }
+                archive.writestr(
+                    'manifest.json',
+                    json.dumps(manifest, ensure_ascii=False, indent=2),
+                )
+
+            nonce = secrets.token_bytes(12)
+            encryptor = Cipher(
+                algorithms.AES(encryption_key), modes.GCM(nonce),
+            ).encryptor()
+            with archive_path.open('rb') as source, temporary_output.open('wb') as target:
+                target.write(b'LTBK1')
+                target.write(nonce)
+                while chunk := source.read(1024 * 1024):
+                    target.write(encryptor.update(chunk))
+                target.write(encryptor.finalize())
+                target.write(encryptor.tag)
+            os.chmod(temporary_output, 0o600)
+            os.replace(temporary_output, output_path)
+
+        retention_days = max(
+            1, min(3650, int(os.environ.get('BACKUP_RETENTION_DAYS', '30'))),
+        )
+        cutoff = now - timedelta(days=retention_days)
+        for candidate in backup_dir.glob('libtak_backup_*.ltbk'):
+            if candidate.resolve().parent != backup_dir or candidate == output_path:
+                continue
+            modified = datetime.fromtimestamp(
+                candidate.stat().st_mtime, tz=now.tzinfo,
+            )
+            if modified < cutoff:
+                candidate.unlink()
+
         ReportLog.objects.create(
-            report_type='BACKUP',
+            report_type=ReportLog.ReportType.BACKUP,
             period_start=now.date(),
             period_end=now.date(),
             total_sales=0,
             total_revenue=0,
             total_profit=0,
             items_sold=[],
-            recipients='local',
-            success=True
+            recipients='encrypted-local-storage',
+            success=True,
         )
-
-        return f"Backup created: {backup_file}"
-
-    except Exception as e:
+        return f'Backup created: {output_path}'
+    except Exception as exc:
+        if temporary_output and temporary_output.exists():
+            temporary_output.unlink()
+        if output_path and output_path.exists():
+            output_path.unlink()
         ReportLog.objects.create(
-            report_type='BACKUP',
+            report_type=ReportLog.ReportType.BACKUP,
             period_start=timezone.localdate(),
             period_end=timezone.localdate(),
             total_sales=0,
             total_revenue=0,
             total_profit=0,
             items_sold=[],
-            recipients='local',
+            recipients='encrypted-local-storage',
             success=False,
-            error_message=str(e)
+            error_message=str(exc),
         )
-        return f"Backup failed: {str(e)}"
+        return f'Backup failed: {exc}'

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils.translation import gettext_lazy as _
@@ -79,7 +81,7 @@ class Expense(models.Model):
         _('Amount'),
         max_digits=12,
         decimal_places=2,
-        validators=[MinValueValidator(0)],
+        validators=[MinValueValidator(Decimal('0.01'))],
     )
     description = models.CharField(_('Description'), max_length=255, blank=True)
     incurred_on = models.DateField(_('Incurred On'), null=True, blank=True)
@@ -87,6 +89,26 @@ class Expense(models.Model):
         _('Paid From Cash Register'),
         default=True,
         help_text=_('Si oui, cette depense est soustraite de la caisse physique.'),
+    )
+    created_by = models.ForeignKey(
+        'core.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='expenses_created',
+        verbose_name=_('Created By'),
+    )
+    operation_id = models.UUIDField(
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text=_('Client idempotency key for expense creation.'),
+    )
+    operation_payload_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        editable=False,
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -136,6 +158,18 @@ class CashRegisterAdjustment(models.Model):
         blank=True,
         related_name='cash_register_adjustments',
     )
+    operation_id = models.UUIDField(
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+        help_text=_('Client idempotency key for register operations'),
+    )
+    operation_payload_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        editable=False,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -146,3 +180,16 @@ class CashRegisterAdjustment(models.Model):
 
     def __str__(self):
         return f"{self.adjustment_type}: {self.amount}"
+
+
+class CashRegisterState(models.Model):
+    """Singleton row used to serialize balance-changing register operations."""
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _('Cash register state')
+        verbose_name_plural = _('Cash register state')
+
+    def __str__(self):
+        return 'Cash register state'

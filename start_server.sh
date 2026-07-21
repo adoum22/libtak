@@ -31,5 +31,8 @@ if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
+# Appliquer les migrations avant le démarrage; cette commande est idempotente.
+python3 manage.py migrate --noinput
+
 # Démarrer le serveur Django
-python3 manage.py runserver 0.0.0.0:8000
+python3 manage.py runserver 127.0.0.1:8000

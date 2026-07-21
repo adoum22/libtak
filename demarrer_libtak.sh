@@ -4,8 +4,8 @@
 #   Double-cliquez sur l'icône pour tout lancer !
 # ============================================
 
-# Chemin de l'application
-APP_DIR="/home/librairie/libtak"
+# Chemin de l'application (portable, basé sur ce script).
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Afficher un message de démarrage
 echo "============================================"
@@ -31,14 +31,15 @@ fi
 echo "📦 Démarrage du serveur backend (port 8000)..."
 cd "$APP_DIR/backend"
 
-python manage.py runserver 0.0.0.0:8000 &
+python manage.py migrate --noinput
+python manage.py runserver 127.0.0.1:8000 &
 BACKEND_PID=$!
 sleep 3
 
 # Démarrer le frontend
 echo "🎨 Démarrage du serveur frontend (port 5173)..."
 cd "$APP_DIR/frontend/dist"
-python3 -m http.server 5173 --bind 0.0.0.0 &
+python3 -m http.server 5173 --bind 127.0.0.1 &
 FRONTEND_PID=$!
 sleep 2
 

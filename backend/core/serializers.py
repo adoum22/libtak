@@ -1,5 +1,7 @@
+from django.contrib.auth import get_user_model, password_validation
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
-from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
 from django.urls import reverse
@@ -9,28 +11,73 @@ from .image_validators import validate_image_upload
 User = get_user_model()
 
 
+def validate_user_password(password, user):
+    """Run the complete Django password policy and expose DRF errors."""
+    try:
+        password_validation.validate_password(password, user=user)
+    except DjangoValidationError as exc:
+        raise serializers.ValidationError(list(exc.messages)) from exc
+    return password
+
+
+class ReplacedFileCleanupMixin:
+    """Delete superseded uploads after the surrounding DB transaction commits."""
+
+    managed_file_fields = ()
+
+    def update(self, instance, validated_data):
+        old_files = {}
+        for field_name in self.managed_file_fields:
+            field_file = getattr(instance, field_name, None)
+            if field_file and field_file.name:
+                old_files[field_name] = (field_file.storage, field_file.name)
+
+        updated_instance = super().update(instance, validated_data)
+        for field_name, (storage, old_name) in old_files.items():
+            new_file = getattr(updated_instance, field_name, None)
+            new_name = new_file.name if new_file else ''
+            if new_name != old_name:
+                transaction.on_commit(
+                    lambda storage=storage, name=old_name: storage.delete(name),
+                    robust=True,
+                )
+        return updated_instance
+
+
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         username = attrs.get('username') or attrs.get('email')
         password = attrs.get('password')
+        user = None
 
         if username and password:
             # Check if user exists check password
-            user = User.objects.filter(username=username).first()
+            user = User.objects.filter(username__iexact=username).first()
             if not user:
                 # Try email if username not found
-                user = User.objects.filter(email=username).first()
+                user = User.objects.filter(email__iexact=username).first()
 
-            if user:
-                if user.check_password(password):
-                    if not user.is_active:
-                        raise AuthenticationFailed(
-                            detail='Votre compte a été désactivé. Veuillez contacter l\'administrateur.',
-                            code='user_inactive'
-                        )
-                # If password incorrect, let standard auth handle it (or return generic error)
+            # SimpleJWT authenticates against USERNAME_FIELD. Resolve a valid
+            # e-mail address without changing the generic failure response.
+            if user and username.casefold() == (user.email or '').casefold():
+                attrs[User.USERNAME_FIELD] = user.get_username()
 
-        data = super().validate(attrs)
+        try:
+            data = super().validate(attrs)
+        except AuthenticationFailed:
+            try:
+                AuditLog.log(
+                    user=user,
+                    action=AuditLog.ActionType.LOGIN,
+                    model_name='User',
+                    object_id=user.pk if user else None,
+                    object_repr='Failed login attempt',
+                    changes={'success': False},
+                    request=self.context.get('request'),
+                )
+            except Exception:
+                pass
+            raise
         try:
             AuditLog.log(
                 user=self.user,
@@ -45,26 +92,30 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return data
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserSerializer(ReplacedFileCleanupMixin, serializers.ModelSerializer):
+    managed_file_fields = ('avatar',)
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     is_admin_role = serializers.BooleanField(read_only=True)
     avatar_url = serializers.SerializerMethodField()
+    effective_can_view_stock = serializers.BooleanField(read_only=True)
+    effective_can_manage_stock = serializers.BooleanField(read_only=True)
 
     def validate_avatar(self, value):
         return validate_image_upload(value)
-    
+
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name',
             'role', 'role_display', 'is_admin_role',
             'can_view_stock', 'can_manage_stock',
+            'effective_can_view_stock', 'effective_can_manage_stock',
             'phone', 'avatar', 'avatar_url',
             'is_active', 'date_joined', 'last_login'
         ]
         read_only_fields = ['date_joined', 'last_login']
-    
-    def get_avatar_url(self, obj):
+
+    def get_avatar_url(self, obj) -> str | None:
         if obj.avatar:
             request = self.context.get('request')
             if request:
@@ -80,6 +131,15 @@ class MeSerializer(UserSerializer):
     remain controlled by admin-only endpoints.
     """
 
+    can_view_stock = serializers.BooleanField(
+        source='effective_can_view_stock',
+        read_only=True,
+    )
+    can_manage_stock = serializers.BooleanField(
+        source='effective_can_manage_stock',
+        read_only=True,
+    )
+
     class Meta(UserSerializer.Meta):
         read_only_fields = [
             'role', 'role_display', 'is_admin_role',
@@ -91,7 +151,7 @@ class MeSerializer(UserSerializer):
 class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=12)
     password_confirm = serializers.CharField(write_only=True)
-    
+
     class Meta:
         model = User
         fields = [
@@ -99,14 +159,28 @@ class UserCreateSerializer(serializers.ModelSerializer):
             'first_name', 'last_name', 'role', 'phone',
             'can_view_stock', 'can_manage_stock'
         ]
-    
+
     def validate(self, attrs):
-        if attrs['password'] != attrs.pop('password_confirm'):
+        password_confirm = attrs.pop('password_confirm')
+        if attrs['password'] != password_confirm:
             raise serializers.ValidationError({
                 'password_confirm': 'Les mots de passe ne correspondent pas.'
             })
+
+        candidate = User(
+            username=attrs.get('username', ''),
+            email=attrs.get('email', ''),
+            first_name=attrs.get('first_name', ''),
+            last_name=attrs.get('last_name', ''),
+        )
+        try:
+            validate_user_password(attrs['password'], candidate)
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'password': exc.detail}) from exc
+        if attrs.get('can_manage_stock'):
+            attrs['can_view_stock'] = True
         return attrs
-    
+
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = User.objects.create(**validated_data)
@@ -115,7 +189,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return user
 
 
-class UserUpdateSerializer(serializers.ModelSerializer):
+class UserUpdateSerializer(ReplacedFileCleanupMixin, serializers.ModelSerializer):
+    managed_file_fields = ('avatar',)
     class Meta:
         model = User
         fields = [
@@ -127,6 +202,19 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     def validate_avatar(self, value):
         return validate_image_upload(value)
 
+    def validate(self, attrs):
+        can_manage = attrs.get(
+            'can_manage_stock',
+            self.instance.can_manage_stock if self.instance else False,
+        )
+        can_view = attrs.get(
+            'can_view_stock',
+            self.instance.can_view_stock if self.instance else False,
+        )
+        if can_manage and not can_view:
+            attrs['can_view_stock'] = True
+        return attrs
+
 
 
 
@@ -134,20 +222,58 @@ class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
     new_password = serializers.CharField(required=True, min_length=12)
     new_password_confirm = serializers.CharField(required=True)
-    
+
     def validate(self, attrs):
         if attrs['new_password'] != attrs['new_password_confirm']:
             raise serializers.ValidationError({
                 'new_password_confirm': 'Les mots de passe ne correspondent pas.'
             })
+        try:
+            validate_user_password(
+                attrs['new_password'],
+                self.context['request'].user,
+            )
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'new_password': exc.detail}) from exc
         return attrs
 
 
-class AppSettingsSerializer(serializers.ModelSerializer):
+class ResetPasswordSerializer(serializers.Serializer):
+    new_password = serializers.CharField(required=True, min_length=12)
+    new_password_confirm = serializers.CharField(required=False)
+
+    def validate(self, attrs):
+        confirmation = attrs.get('new_password_confirm')
+        if confirmation is not None and confirmation != attrs['new_password']:
+            raise serializers.ValidationError({
+                'new_password_confirm': 'Les mots de passe ne correspondent pas.'
+            })
+        try:
+            validate_user_password(attrs['new_password'], self.context['user'])
+        except serializers.ValidationError as exc:
+            raise serializers.ValidationError({'new_password': exc.detail}) from exc
+        return attrs
+
+
+class AppSettingsSerializer(ReplacedFileCleanupMixin, serializers.ModelSerializer):
+    managed_file_fields = ('store_logo',)
     logo_url = serializers.SerializerMethodField()
 
     def validate_store_logo(self, value):
         return validate_image_upload(value)
+
+    def validate(self, attrs):
+        can_manage = attrs.get(
+            'cashier_can_manage_stock',
+            self.instance.cashier_can_manage_stock if self.instance else False,
+        )
+        can_view = attrs.get(
+            'cashier_can_view_stock',
+            self.instance.cashier_can_view_stock if self.instance else False,
+        )
+        if can_manage and not can_view:
+            attrs['cashier_can_view_stock'] = True
+        return attrs
 
     class Meta:
         model = AppSettings
@@ -163,8 +289,8 @@ class AppSettingsSerializer(serializers.ModelSerializer):
             'updated_at'
         ]
         read_only_fields = ['updated_at']
-    
-    def get_logo_url(self, obj):
+
+    def get_logo_url(self, obj) -> str | None:
         if obj.store_logo:
             request = self.context.get('request')
             if request:

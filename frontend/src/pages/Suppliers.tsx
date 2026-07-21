@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
+import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
 import {
     Truck,
     Plus,
@@ -31,13 +33,22 @@ interface Supplier {
     image_url: string | null;
 }
 
+interface SuppliersPage {
+    count: number;
+    results: Supplier[];
+}
+
+const PAGE_SIZE = 50;
+
 export default function Suppliers() {
     const queryClient = useQueryClient();
     const toast = useToast();
     const { t } = useTranslation();
     const [search, setSearch] = useState('');
+    const [page, setPage] = useState(1);
     const [showModal, setShowModal] = useState(false);
     const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+    const [supplierToDeactivate, setSupplierToDeactivate] = useState<Supplier | null>(null);
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -57,12 +68,18 @@ export default function Suppliers() {
         active: true
     });
 
-    const { data: suppliersData } = useQuery({
-        queryKey: ['suppliers', search],
-        queryFn: () => client.get(`/inventory/suppliers/?search=${search}`).then(res => res.data)
+    const { data: suppliersData, isLoading, isError, refetch } = useQuery<SuppliersPage>({
+        queryKey: ['suppliers', search, page],
+        queryFn: () => client.get('/inventory/suppliers/', { params: { search: search.trim() || undefined, page } }).then(res => ({
+            count: Number(res.data?.count ?? (Array.isArray(res.data) ? res.data.length : 0)),
+            results: res.data?.results ?? (Array.isArray(res.data) ? res.data : []),
+        })),
+        placeholderData: previous => previous,
     });
 
-    const suppliers: Supplier[] = suppliersData?.results || suppliersData || [];
+    const suppliers = suppliersData?.results ?? [];
+    const totalItems = suppliersData?.count ?? 0;
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
     const buildFormData = (data: typeof formData, image: File | null) => {
         const payload = new FormData();
@@ -109,7 +126,12 @@ export default function Suppliers() {
 
     const deleteMutation = useMutation({
         mutationFn: (id: number) => client.delete(`/inventory/suppliers/${id}/`),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['suppliers'] })
+        onSuccess: () => {
+            setSupplierToDeactivate(null);
+            toast.success('Fournisseur désactivé.');
+            queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+        },
+        onError: () => toast.error('Le fournisseur ne peut pas être désactivé.'),
     });
 
     const openCreateModal = () => {
@@ -196,7 +218,7 @@ export default function Suppliers() {
                     <h1 className="text-2xl font-bold">Fournisseurs</h1>
                     <p className="text-muted text-sm mt-1">{t('Suppliers')}</p>
                 </div>
-                <button onClick={openCreateModal} className="btn-primary flex items-center gap-2">
+                <button type="button" onClick={openCreateModal} className="btn-primary flex items-center gap-2">
                     <Plus size={20} />
                     <span>{t('AddSupplier')}</span>
                 </button>
@@ -211,7 +233,8 @@ export default function Suppliers() {
                         placeholder={t('SearchSuppliers')}
                         style={{ paddingLeft: '3rem' }}
                         value={search}
-                        onChange={(e) => setSearch(e.target.value)}
+                        aria-label={t('SearchSuppliers')}
+                        onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                     />
                 </div>
             </div>
@@ -220,24 +243,30 @@ export default function Suppliers() {
             <div className="card overflow-hidden">
                 <div className="overflow-x-auto">
                     <table>
+                        <caption className="sr-only">Liste des fournisseurs</caption>
                         <thead>
                             <tr>
-                                <th>{t('Supplier')}</th>
-                                <th>{t('ContactName')}</th>
-                                <th>{t('Details')}</th>
-                                <th>{t('Address')}</th>
-                                <th className="text-center">{t('ProductsCount')}</th>
-                                <th className="text-center">{t('Active')}</th>
-                                <th>{t('Actions')}</th>
+                                <th scope="col">{t('Supplier')}</th>
+                                <th scope="col">{t('ContactName')}</th>
+                                <th scope="col">{t('Details')}</th>
+                                <th scope="col">{t('Address')}</th>
+                                <th scope="col" className="text-center">{t('ProductsCount')}</th>
+                                <th scope="col" className="text-center">{t('Active')}</th>
+                                <th scope="col">{t('Actions')}</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {suppliers.map((supplier) => (
+                            {isLoading ? (
+                                <tr><td colSpan={7} className="text-center py-12 text-muted" role="status">Chargement…</td></tr>
+                            ) : isError ? (
+                                <tr><td colSpan={7} className="text-center py-8"><div className="network-error-state" role="alert"><p>Les fournisseurs n’ont pas pu être chargés.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button></div></td></tr>
+                            ) : suppliers.map((supplier) => (
                                 <tr key={supplier.id} className="group hover:bg-muted/10">
                                     <td>
                                         <div className="flex items-center gap-3">
                                             {/* Smart Image Container */}
-                                            <div
+                                            <button
+                                                type="button"
                                                 onClick={() => {
                                                     if (supplier.image_url) {
                                                         setViewingImageSupplier(supplier);
@@ -245,8 +274,9 @@ export default function Suppliers() {
                                                         handleListUploadClick(supplier.id);
                                                     }
                                                 }}
-                                                className="w-12 h-12 bg-accent-light/20 rounded-lg flex items-center justify-center text-accent overflow-hidden shrink-0 border border-border cursor-pointer hover:ring-2 hover:ring-accent transition-all relative group/img"
+                                                className="w-12 h-12 bg-accent-light/20 rounded-lg flex items-center justify-center text-accent overflow-hidden shrink-0 border border-border hover:ring-2 hover:ring-accent transition-all relative group/img"
                                                 title={supplier.image_url ? "Voir le logo" : "Ajouter un logo"}
+                                                aria-label={supplier.image_url ? `Voir le logo de ${supplier.name}` : `Ajouter un logo à ${supplier.name}`}
                                             >
                                                 {supplier.image_url ? (
                                                     <>
@@ -261,7 +291,7 @@ export default function Suppliers() {
                                                         <Plus size={24} className="hidden group-hover/img:block" />
                                                     </>
                                                 )}
-                                            </div>
+                                            </button>
 
                                             <div>
                                                 <p className="font-bold text-primary">{supplier.name}</p>
@@ -321,20 +351,20 @@ export default function Suppliers() {
                                     <td>
                                         <div className="flex items-center gap-1">
                                             <button
+                                                type="button"
                                                 onClick={() => openEditModal(supplier)}
                                                 className="btn-ghost p-2 text-accent hover:bg-accent-light"
                                                 title="Modifier le fournisseur"
+                                                aria-label={`Modifier ${supplier.name}`}
                                             >
                                                 <Edit size={18} />
                                             </button>
                                             <button
-                                                onClick={() => {
-                                                    if (confirm('Êtes-vous sûr de vouloir supprimer ce fournisseur ? Cette action est irréversible.')) {
-                                                        deleteMutation.mutate(supplier.id);
-                                                    }
-                                                }}
+                                                type="button"
+                                                onClick={() => setSupplierToDeactivate(supplier)}
                                                 className="btn-ghost p-2 text-danger hover:bg-danger-light"
-                                                title="Supprimer"
+                                                title="Désactiver"
+                                                aria-label={`Désactiver ${supplier.name}`}
                                             >
                                                 <Trash2 size={18} />
                                             </button>
@@ -342,16 +372,16 @@ export default function Suppliers() {
                                     </td>
                                 </tr>
                             ))}
-                            {suppliers.length === 0 && (
+                            {!isLoading && !isError && suppliers.length === 0 && (
                                 <tr>
                                     <td colSpan={7} className="text-center py-12">
                                         <div className="flex flex-col items-center justify-center text-muted">
                                             <Truck size={48} className="mb-4 opacity-20" />
                                             <p className="text-lg font-medium">Aucun fournisseur trouvé</p>
-                                            <p className="text-sm">Commencez par ajouter votre premier fournisseur</p>
-                                            <button onClick={openCreateModal} className="btn-outline mt-4 btn-sm">
+                                            <p className="text-sm">{search ? 'Essayez une autre recherche.' : 'Commencez par ajouter votre premier fournisseur.'}</p>
+                                            {!search && <button type="button" onClick={openCreateModal} className="btn-outline mt-4 btn-sm">
                                                 Ajouter maintenant
-                                            </button>
+                                            </button>}
                                         </div>
                                     </td>
                                 </tr>
@@ -359,23 +389,26 @@ export default function Suppliers() {
                         </tbody>
                     </table>
                 </div>
+                {!isLoading && !isError && (
+                    <Pagination currentPage={page} totalPages={totalPages} totalItems={totalItems} pageSize={PAGE_SIZE} onPageChange={setPage} />
+                )}
             </div>
 
             {/* Modal de création / modification */}
             {showModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeModal} />
-                    <div className="relative card w-full max-w-4xl animate-fadeScale p-0 overflow-hidden shadow-2xl">
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" role="presentation">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={closeModal} aria-hidden="true" />
+                    <div className="relative card w-full max-w-4xl animate-fadeScale p-0 overflow-hidden shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="supplier-modal-title">
                         <div className="p-6 border-b flex items-center justify-between bg-secondary z-10">
                             <div>
-                                <h2 className="text-xl font-bold text-primary">
+                                <h2 id="supplier-modal-title" className="text-xl font-bold text-primary">
                                     {editingSupplier ? 'Modifier le fournisseur' : 'Nouveau fournisseur'}
                                 </h2>
                                 <p className="text-sm text-muted">
                                     {editingSupplier ? 'Mettre à jour les informations du partenaire' : 'Ajouter un nouveau partenaire commercial'}
                                 </p>
                             </div>
-                            <button onClick={closeModal} className="btn-ghost p-2 -mr-2 text-muted hover:text-danger transition-colors">
+                            <button type="button" onClick={closeModal} className="btn-ghost p-2 -mr-2 text-muted hover:text-danger transition-colors" aria-label="Fermer la fenêtre">
                                 <X size={24} />
                             </button>
                         </div>
@@ -385,13 +418,14 @@ export default function Suppliers() {
                             <div className="flex flex-col md:flex-row gap-8">
                                 {/* Image Upload */}
                                 <div className="w-full md:w-1/4 flex flex-col items-center">
-                                    <div
+                                    <button
+                                        type="button"
                                         onClick={() => fileInputRef.current?.click()}
                                         className="w-40 h-40 bg-tertiary rounded-2xl border-2 border-dashed border-border hover:border-accent hover:bg-accent-light/10 transition-colors flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group shrink-0"
                                     >
                                         {imagePreview ? (
                                             <>
-                                                <img src={imagePreview} className="w-full h-full object-cover" />
+                                                <img src={imagePreview} className="w-full h-full object-cover" alt="Aperçu du logo" />
                                                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <span className="text-white font-medium flex items-center gap-2">
                                                         <Edit size={20} />
@@ -408,14 +442,15 @@ export default function Suppliers() {
                                                 <p className="text-xs mt-1">Cliquez pour uploader</p>
                                             </div>
                                         )}
+                                    </button>
                                         <input
                                             ref={fileInputRef}
                                             type="file"
                                             accept="image/*"
                                             className="hidden"
                                             onChange={handleImageChange}
+                                            aria-label="Choisir un logo fournisseur"
                                         />
-                                    </div>
                                     <p className="text-xs text-muted text-center mt-2">
                                         JPG, PNG ou WEBP max 5Mo
                                     </p>
@@ -424,10 +459,11 @@ export default function Suppliers() {
                                 {/* Form Fields */}
                                 <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 content-start">
                                     <div className="col-span-1 md:col-span-2">
-                                        <label className="block text-sm font-bold mb-2">Nom de l'entreprise *</label>
+                                        <label htmlFor="supplier-name" className="block text-sm font-bold mb-2">Nom de l'entreprise *</label>
                                         <div className="relative">
                                             <Truck className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
+                                                id="supplier-name"
                                                 type="text"
                                                 className="input-lg pl-12 font-bold"
                                                 placeholder="Ex: Papeterie Générale SARL"
@@ -439,9 +475,10 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-medium mb-2">Interlocuteur</label>
+                                        <label htmlFor="supplier-contact" className="block text-sm font-medium mb-2">Interlocuteur</label>
                                         <div className="relative">
                                             <input
+                                                id="supplier-contact"
                                                 type="text"
                                                 placeholder="Nom du contact"
                                                 value={formData.contact_name}
@@ -451,8 +488,9 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-medium mb-2">Statut</label>
+                                        <label htmlFor="supplier-status" className="block text-sm font-medium mb-2">Statut</label>
                                         <select
+                                            id="supplier-status"
                                             value={formData.active ? 'true' : 'false'}
                                             onChange={(e) => setFormData({ ...formData, active: e.target.value === 'true' })}
                                             className="w-full p-2.5 bg-secondary border border-border rounded-lg"
@@ -463,10 +501,11 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-medium mb-2">Email</label>
+                                        <label htmlFor="supplier-email" className="block text-sm font-medium mb-2">Email</label>
                                         <div className="relative">
                                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
+                                                id="supplier-email"
                                                 type="email"
                                                 className="pl-12"
                                                 placeholder="contact@entreprise.com"
@@ -477,10 +516,11 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-medium mb-2">Téléphone</label>
+                                        <label htmlFor="supplier-phone" className="block text-sm font-medium mb-2">Téléphone</label>
                                         <div className="relative">
                                             <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
+                                                id="supplier-phone"
                                                 type="tel"
                                                 className="pl-12 font-mono"
                                                 placeholder="06..."
@@ -491,10 +531,11 @@ export default function Suppliers() {
                                     </div>
 
                                     <div className="col-span-1 md:col-span-2">
-                                        <label className="block text-sm font-medium mb-2">Adresse</label>
+                                        <label htmlFor="supplier-address" className="block text-sm font-medium mb-2">Adresse</label>
                                         <div className="relative">
                                             <MapPin className="absolute left-3 top-3 text-muted" size={18} />
                                             <textarea
+                                                id="supplier-address"
                                                 rows={2}
                                                 className="pl-12 resize-none"
                                                 placeholder="Adresse complète..."
@@ -505,8 +546,9 @@ export default function Suppliers() {
                                     </div>
 
                                     <div className="col-span-1 md:col-span-2">
-                                        <label className="block text-sm font-medium mb-2">Notes internes</label>
+                                        <label htmlFor="supplier-notes" className="block text-sm font-medium mb-2">Notes internes</label>
                                         <textarea
+                                            id="supplier-notes"
                                             rows={3}
                                             className="resize-none"
                                             placeholder="Conditions de livraison, délais, etc..."
@@ -533,28 +575,31 @@ export default function Suppliers() {
 
             {/* Image View Modal (Comme dans l'inventaire) */}
             {viewingImageSupplier && (
-                <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setViewingImageSupplier(null)} />
-                    <div className="relative bg-secondary rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale">
-                        <div className="relative aspect-square bg-gray-100 flex items-center justify-center p-4">
+                <div className="fixed inset-0 z-[120] flex items-center justify-center p-4" role="presentation">
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setViewingImageSupplier(null)} aria-hidden="true" />
+                    <div className="relative bg-secondary rounded-2xl overflow-hidden max-w-lg w-full shadow-2xl animate-fadeScale" role="dialog" aria-modal="true" aria-labelledby="supplier-image-title">
+                        <div className="relative aspect-square bg-tertiary flex items-center justify-center p-4">
                             <img
                                 src={viewingImageSupplier.image_url!}
                                 className="w-full h-full object-contain"
                                 alt={viewingImageSupplier.name}
                             />
                             <button
+                                type="button"
                                 onClick={() => setViewingImageSupplier(null)}
                                 className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full backdrop-blur-md transition-colors"
+                                aria-label="Fermer l’aperçu"
                             >
                                 <X size={20} />
                             </button>
                         </div>
                         <div className="p-6 flex items-center justify-between bg-secondary border-t border-border">
                             <div>
-                                <h3 className="font-bold text-lg text-primary">{viewingImageSupplier.name}</h3>
+                                <h3 id="supplier-image-title" className="font-bold text-lg text-primary">{viewingImageSupplier.name}</h3>
                                 <p className="text-sm text-muted">Aperçu du logo actuel</p>
                             </div>
                             <button
+                                type="button"
                                 onClick={() => {
                                     handleListUploadClick(viewingImageSupplier.id);
                                     setViewingImageSupplier(null);
@@ -576,6 +621,20 @@ export default function Suppliers() {
                 accept="image/*"
                 className="hidden"
                 onChange={handleListFileChange}
+            />
+
+            <ConfirmDialog
+                open={Boolean(supplierToDeactivate)}
+                title="Désactiver ce fournisseur ?"
+                description={supplierToDeactivate
+                    ? `${supplierToDeactivate.name} restera dans l’historique, mais ne sera plus proposé pour les nouvelles opérations.`
+                    : ''}
+                confirmLabel="Désactiver"
+                busy={deleteMutation.isPending}
+                onCancel={() => setSupplierToDeactivate(null)}
+                onConfirm={() => {
+                    if (supplierToDeactivate) deleteMutation.mutate(supplierToDeactivate.id);
+                }}
             />
         </div>
     );

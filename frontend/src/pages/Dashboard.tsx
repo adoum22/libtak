@@ -75,7 +75,7 @@ export default function Dashboard() {
     const { t } = useTranslation();
     const [range, setRange] = useState<ChartRange>(7);
 
-    const { data: stats, isLoading } = useQuery<StatsData>({
+    const { data: stats, isLoading, isError, refetch, dataUpdatedAt } = useQuery<StatsData>({
         queryKey: ['dashboardStats', range],
         queryFn: () => client.get(`/reporting/stats/?days=${range}`).then(res => res.data),
         refetchInterval: 30000, // Refresh every 30s
@@ -101,8 +101,8 @@ export default function Dashboard() {
             <div className="space-y-6">
                 <h1 className="text-2xl font-bold">{t('Dashboard')}</h1>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    {[1, 2, 3, 4].map(i => (
-                        <div key={i} className="stat-card animate-pulse">
+                    {['sales', 'daily-revenue', 'monthly-revenue', 'stock'].map(section => (
+                        <div key={section} className="stat-card animate-pulse">
                             <div className="stat-icon bg-tertiary" />
                             <div className="flex-1 space-y-2">
                                 <div className="h-4 bg-tertiary rounded w-20" />
@@ -115,6 +115,19 @@ export default function Dashboard() {
         );
     }
 
+    if (isError) {
+        return (
+            <div className="space-y-6">
+                <h1 className="text-2xl font-bold">{t('Dashboard')}</h1>
+                <div className="network-error-state" role="alert">
+                    <p className="font-semibold">Les données du tableau de bord sont indisponibles.</p>
+                    <p className="text-sm mt-2">Aucun montant ni état de stock n’est affiché tant que la connexion n’est pas rétablie.</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                </div>
+            </div>
+        );
+    }
+
     const revenueChange = stats?.today?.revenue_change || 0;
 
     return (
@@ -122,7 +135,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold">{t('Dashboard')}</h1>
                 <span className="text-sm text-muted">
-                    Dernière mise à jour: {new Date().toLocaleTimeString('fr-FR')}
+                    Dernière mise à jour : {new Date(dataUpdatedAt).toLocaleTimeString('fr-FR')}
                 </span>
             </div>
 
@@ -361,11 +374,12 @@ export default function Dashboard() {
                             )}
                         </div>
                         <table>
+                            <caption className="sr-only">Produits les plus vendus du mois</caption>
                             <thead>
                                 <tr>
-                                    <th>Produit</th>
-                                    <th className="text-right">Qté</th>
-                                    <th className="text-right">CA</th>
+                                    <th scope="col">Produit</th>
+                                    <th scope="col" className="text-right">Qté</th>
+                                    <th scope="col" className="text-right">CA</th>
                                 </tr>
                             </thead>
                             <tbody>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
+import Pagination from '../components/Pagination';
 import {
     ClipboardCheck,
     Plus,
@@ -40,11 +41,32 @@ interface InventoryCount {
     completed_at: string | null;
 }
 
+interface InventoryCountsPage {
+    count: number;
+    results: InventoryCount[];
+}
+
+const PAGE_SIZE = 50;
+
+const fetchAllProducts = async (): Promise<Product[]> => {
+    const products: Product[] = [];
+    let nextUrl: string | null = '/inventory/products/?page=1';
+    while (nextUrl) {
+        const response = await client.get(nextUrl);
+        if (Array.isArray(response.data)) return response.data;
+        products.push(...(response.data?.results ?? []));
+        const next = response.data?.next as string | null | undefined;
+        nextUrl = next ? `${new URL(next, window.location.origin).pathname}${new URL(next, window.location.origin).search}` : null;
+    }
+    return products;
+};
+
 export default function StockCount() {
     const queryClient = useQueryClient();
     const toast = useToast();
 
     const [showForm, setShowForm] = useState(false);
+    const [page, setPage] = useState(1);
     const [expandedCount, setExpandedCount] = useState<number | null>(null);
     const [countName, setCountName] = useState('');
     const [selectedProducts, setSelectedProducts] = useState<Product[]>([]);
@@ -54,22 +76,29 @@ export default function StockCount() {
     const [createQuantities, setCreateQuantities] = useState<Record<number, number>>({}); // Quantités lors de création
 
     // Fetch counts
-    const { data: counts = [], isLoading } = useQuery<InventoryCount[]>({
-        queryKey: ['inventoryCounts'],
-        queryFn: () => client.get('/inventory/counts/').then(res => res.data.results || res.data)
+    const { data: countsPage, isLoading, isError: countsError, refetch: refetchCounts } = useQuery<InventoryCountsPage>({
+        queryKey: ['inventoryCounts', page],
+        queryFn: () => client.get('/inventory/counts/', { params: { page } }).then(res => ({
+            count: Number(res.data?.count ?? (Array.isArray(res.data) ? res.data.length : 0)),
+            results: res.data?.results ?? (Array.isArray(res.data) ? res.data : []),
+        })),
+        placeholderData: previous => previous,
     });
+    const counts = countsPage?.results ?? [];
+    const countsTotal = countsPage?.count ?? 0;
+    const totalPages = Math.max(1, Math.ceil(countsTotal / PAGE_SIZE));
 
     // Search products
-    const { data: products = [] } = useQuery<Product[]>({
+    const { data: products = [], isError: productsError } = useQuery<Product[]>({
         queryKey: ['products', searchProduct],
         queryFn: () => client.get(`/inventory/products/?search=${searchProduct}`).then(res => res.data.results || res.data),
         enabled: searchProduct.length > 1
     });
 
     // All products for counting
-    const { data: allProducts = [] } = useQuery<Product[]>({
+    const { data: allProducts = [], isLoading: allProductsLoading, isError: allProductsError, refetch: refetchAllProducts } = useQuery<Product[]>({
         queryKey: ['allProducts'],
-        queryFn: () => client.get('/inventory/products/?limit=1000').then(res => res.data.results || res.data)
+        queryFn: fetchAllProducts,
     });
 
     // Create count
@@ -82,7 +111,6 @@ export default function StockCount() {
             resetForm();
         },
         onError: (error: unknown) => {
-            console.error('Create count error:', error);
             const msg = getApiErrorMessage(error, 'Erreur lors de la creation');
             toast.error('Erreur: ' + msg);
         }
@@ -137,6 +165,10 @@ export default function StockCount() {
     };
 
     const addAllProducts = () => {
+        if (allProductsError) {
+            toast.error('La liste complète des produits est indisponible.');
+            return;
+        }
         setSelectedProducts(allProducts);
     };
 
@@ -200,7 +232,7 @@ export default function StockCount() {
                     </h1>
                     <p className="text-muted mt-1">Comptez et ajustez votre stock</p>
                 </div>
-                <button onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2">
+                <button type="button" onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2" aria-expanded={showForm} aria-controls="stock-count-form">
                     <Plus size={18} />
                     Nouveau Comptage
                 </button>
@@ -208,12 +240,13 @@ export default function StockCount() {
 
             {/* Create Form */}
             {showForm && (
-                <div className="card p-6 border-accent border-2">
+                <div id="stock-count-form" className="card p-6 border-accent border-2">
                     <h2 className="text-xl font-bold mb-4">Nouveau Comptage</h2>
 
                     <div className="mb-4">
-                        <label className="block text-sm font-medium mb-1">Nom de l'inventaire *</label>
+                        <label htmlFor="stock-count-name" className="block text-sm font-medium mb-1">Nom de l'inventaire *</label>
                         <input
+                            id="stock-count-name"
                             type="text"
                             value={countName}
                             onChange={(e) => setCountName(e.target.value)}
@@ -225,13 +258,20 @@ export default function StockCount() {
                     <div className="mb-4">
                         <div className="flex items-center justify-between mb-2">
                             <label className="text-sm font-medium">Produits à compter</label>
-                            <button onClick={addAllProducts} className="btn-sm btn-secondary">
-                                Ajouter tous les produits
+                            <button type="button" onClick={addAllProducts} disabled={allProductsLoading || allProductsError} className="btn-sm btn-secondary">
+                                {allProductsLoading ? 'Chargement…' : 'Ajouter tous les produits'}
                             </button>
                         </div>
+                        {allProductsError && (
+                            <div className="text-sm text-danger mb-2" role="alert">
+                                Liste complète indisponible.{' '}
+                                <button type="button" className="btn-ghost btn-sm" onClick={() => void refetchAllProducts()}>Réessayer</button>
+                            </div>
+                        )}
                         <div className="relative">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                             <input
+                                aria-label="Rechercher un produit à compter"
                                 type="text"
                                 placeholder="Rechercher un produit..."
                                 className="input w-full pl-10"
@@ -239,19 +279,22 @@ export default function StockCount() {
                                 onChange={(e) => setSearchProduct(e.target.value)}
                             />
                             {products.length > 0 && searchProduct && (
-                                <div className="absolute top-full left-0 right-0 bg-white dark:bg-surface border border-gray-200 dark:border-border rounded-lg shadow-2xl z-50 max-h-48 overflow-auto mt-1">
+                                <div className="absolute top-full left-0 right-0 bg-secondary border border-border rounded-lg shadow-2xl z-50 max-h-48 overflow-auto mt-1" role="listbox">
                                     {products.map(p => (
-                                        <div
+                                        <button
+                                            type="button"
                                             key={p.id}
-                                            className="p-3 hover:bg-gray-100 dark:hover:bg-tertiary cursor-pointer border-b last:border-b-0"
+                                            className="w-full p-3 hover:bg-tertiary border-b last:border-b-0 text-left"
                                             onClick={() => addProduct(p)}
+                                            role="option"
                                         >
-                                            <div className="font-medium text-black dark:text-white">{p.name}</div>
-                                            <div className="text-xs text-gray-500 dark:text-muted">{p.barcode} - Stock: {p.stock}</div>
-                                        </div>
+                                            <div className="font-medium text-primary">{p.name}</div>
+                                            <div className="text-xs text-muted">{p.barcode} - Stock : {p.stock}</div>
+                                        </button>
                                     ))}
                                 </div>
                             )}
+                            {productsError && searchProduct.length > 1 && <p className="text-sm text-danger mt-2" role="alert">La recherche de produits est indisponible.</p>}
                         </div>
                     </div>
 
@@ -260,10 +303,11 @@ export default function StockCount() {
                             {/* Mode selector */}
                             <div className="flex items-center gap-4 mb-4 p-3 bg-accent-light/20 rounded-lg">
                                 <span className="text-sm font-medium">Mode :</span>
-                                <div className="flex bg-tertiary rounded-lg p-1">
+                                <div className="flex bg-tertiary rounded-lg p-1" role="group" aria-label="Mode de saisie du comptage">
                                     <button
                                         type="button"
                                         onClick={() => setCountMode('total')}
+                                        aria-pressed={countMode === 'total'}
                                         className={`px-3 py-1 rounded text-sm transition ${countMode === 'total' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
                                     >
                                         Quantité totale comptée
@@ -271,6 +315,7 @@ export default function StockCount() {
                                     <button
                                         type="button"
                                         onClick={() => setCountMode('add')}
+                                        aria-pressed={countMode === 'add'}
                                         className={`px-3 py-1 rounded text-sm transition ${countMode === 'add' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
                                     >
                                         Quantité à ajouter
@@ -282,10 +327,11 @@ export default function StockCount() {
                             </p>
                             <div className="space-y-2 max-h-64 overflow-auto">
                                 {selectedProducts.map(p => (
-                                    <div key={p.id} className="flex items-center gap-4 p-3 bg-tertiary rounded">
+                                    <div key={p.id} className="flex flex-wrap items-center gap-4 p-3 bg-tertiary rounded">
                                         <span className="flex-1 font-medium">{p.name}</span>
                                         <span className="text-sm text-muted">Stock actuel: {p.stock}</span>
                                         <input
+                                            aria-label={`${countMode === 'total' ? 'Stock total' : 'Quantité à ajouter'} pour ${p.name}`}
                                             type="number"
                                             min={0}
                                             placeholder={countMode === 'total' ? 'Total' : 'À ajouter'}
@@ -310,6 +356,7 @@ export default function StockCount() {
                                                 setCreateQuantities(newQty);
                                             }}
                                             className="text-danger hover:bg-danger/20 rounded p-1"
+                                            aria-label={`Retirer ${p.name} du comptage`}
                                         >
                                             ✕
                                         </button>
@@ -320,10 +367,10 @@ export default function StockCount() {
                     )}
 
                     <div className="flex gap-3">
-                        <button onClick={handleCreate} disabled={createCount.isPending} className="btn-primary flex-1">
+                        <button type="button" onClick={handleCreate} disabled={createCount.isPending} className="btn-primary flex-1">
                             {createCount.isPending ? 'Création...' : 'Créer le Comptage'}
                         </button>
-                        <button onClick={resetForm} className="btn-secondary">Annuler</button>
+                        <button type="button" onClick={resetForm} className="btn-secondary">Annuler</button>
                     </div>
                 </div>
             )}
@@ -335,7 +382,9 @@ export default function StockCount() {
                 </div>
                 <div className="divide-y">
                     {isLoading ? (
-                        <div className="p-8 text-center text-muted">Chargement...</div>
+                        <div className="p-8 text-center text-muted" role="status">Chargement…</div>
+                    ) : countsError ? (
+                        <div className="network-error-state m-4" role="alert"><p>Les inventaires n’ont pas pu être chargés.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchCounts()}>Réessayer</button></div>
                     ) : counts.length === 0 ? (
                         <div className="p-8 text-center text-muted">
                             <ClipboardCheck size={48} className="mx-auto mb-4 opacity-50" />
@@ -344,9 +393,12 @@ export default function StockCount() {
                     ) : (
                         counts.map((count) => (
                             <div key={count.id} className="p-4">
-                                <div
-                                    className="flex items-center justify-between cursor-pointer"
+                                <button
+                                    type="button"
+                                    className="w-full flex items-center justify-between text-left bg-transparent p-0"
                                     onClick={() => setExpandedCount(expandedCount === count.id ? null : count.id)}
+                                    aria-expanded={expandedCount === count.id}
+                                    aria-controls={`stock-count-details-${count.id}`}
                                 >
                                     <div className="flex items-center gap-4">
                                         <div className="w-10 h-10 bg-tertiary rounded-full flex items-center justify-center">
@@ -365,7 +417,7 @@ export default function StockCount() {
                                         </span>
                                         {expandedCount === count.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                                     </div>
-                                </div>
+                                </button>
 
                                 {/* Quick summary - always visible for VALIDATED */}
                                 {count.status === 'VALIDATED' && expandedCount !== count.id && count.items && count.items.length > 0 && (
@@ -391,17 +443,18 @@ export default function StockCount() {
                                 )}
 
                                 {expandedCount === count.id && (
-                                    <div className="mt-4 pl-14 space-y-3">
+                                    <div id={`stock-count-details-${count.id}`} className="mt-4 pl-14 space-y-3">
                                         {/* Items to count */}
                                         {count.status === 'IN_PROGRESS' && (
                                             <div className="space-y-2">
                                                 {/* Mode selector */}
                                                 <div className="flex items-center gap-4 mb-4 p-3 bg-accent-light/20 rounded-lg">
                                                     <span className="text-sm font-medium">Mode de saisie :</span>
-                                                    <div className="flex bg-tertiary rounded-lg p-1">
+                                                    <div className="flex bg-tertiary rounded-lg p-1" role="group" aria-label="Mode de saisie du stock">
                                                         <button
                                                             type="button"
                                                             onClick={() => setCountMode('total')}
+                                                            aria-pressed={countMode === 'total'}
                                                             className={`px-3 py-1 rounded text-sm transition ${countMode === 'total' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
                                                         >
                                                             Quantité totale
@@ -409,6 +462,7 @@ export default function StockCount() {
                                                         <button
                                                             type="button"
                                                             onClick={() => setCountMode('add')}
+                                                            aria-pressed={countMode === 'add'}
                                                             className={`px-3 py-1 rounded text-sm transition ${countMode === 'add' ? 'bg-accent text-white' : 'hover:bg-hover'}`}
                                                         >
                                                             Ajouter au stock
@@ -421,10 +475,11 @@ export default function StockCount() {
                                                         : 'Saisissez la quantité à AJOUTER :'}
                                                 </p>
                                                 {count.items?.map((item) => (
-                                                    <div key={item.id} className="flex items-center gap-4 p-2 bg-tertiary rounded">
+                                                    <div key={item.id} className="flex flex-wrap items-center gap-4 p-2 bg-tertiary rounded">
                                                         <span className="flex-1">{item.product_name || `Produit #${item.product}`}</span>
                                                         <span className="text-sm text-muted">Stock actuel: {item.expected_quantity}</span>
                                                         <input
+                                                            aria-label={`${countMode === 'total' ? 'Stock total' : 'Quantité à ajouter'} pour ${item.product_name || `produit ${item.product}`}`}
                                                             type="number"
                                                             min={0}
                                                             placeholder={countMode === 'total' ? 'Total compté' : 'À ajouter'}
@@ -452,6 +507,7 @@ export default function StockCount() {
                                                 ))}
                                                 <div className="flex gap-2 pt-2">
                                                     <button
+                                                        type="button"
                                                         onClick={() => updateCount.mutate({
                                                             id: count.id,
                                                             items: Object.entries(countedValues).map(([id, qty]) => ({
@@ -464,6 +520,7 @@ export default function StockCount() {
                                                         <Save size={16} /> Sauvegarder
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => completeCount.mutate(count.id)}
                                                         className="btn-primary flex items-center gap-1"
                                                     >
@@ -497,6 +554,7 @@ export default function StockCount() {
                                                     ))}
                                                 </div>
                                                 <button
+                                                    type="button"
                                                     onClick={() => validateCount.mutate(count.id)}
                                                     className="btn-success flex items-center gap-1 mt-3"
                                                 >
@@ -558,6 +616,9 @@ export default function StockCount() {
                         ))
                     )}
                 </div>
+                {!isLoading && !countsError && (
+                    <Pagination currentPage={page} totalPages={totalPages} totalItems={countsTotal} pageSize={PAGE_SIZE} onPageChange={nextPage => { setExpandedCount(null); setPage(nextPage); }} />
+                )}
             </div>
         </div>
     );

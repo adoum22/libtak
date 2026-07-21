@@ -83,12 +83,17 @@ export default function Credit() {
         return () => clearTimeout(t);
     }, [search]);
 
-    // Reset du formulaire de paiement à chaque changement de crédit sélectionné
-    // (évite de pré-remplir le formulaire avec le montant/note d'un autre crédit)
-    useEffect(() => {
+    const selectCredit = (creditId: number) => {
         setPaymentInput('');
         setPaymentNote('');
-    }, [selectedId]);
+        setSelectedId(creditId);
+    };
+
+    const closeCredit = () => {
+        setPaymentInput('');
+        setPaymentNote('');
+        setSelectedId(null);
+    };
 
     const { data: credits = [], isLoading } = useQuery<CreditSale[]>({
         queryKey: ['credits', statusFilter, debouncedSearch],
@@ -261,7 +266,7 @@ export default function Credit() {
                                     <tr
                                         key={c.id}
                                         className="border-t border-border hover:bg-tertiary/30 cursor-pointer"
-                                        onClick={() => setSelectedId(c.id)}
+                                        onClick={() => selectCredit(c.id)}
                                     >
                                         <td className="p-3 whitespace-nowrap text-muted">{formatDate(c.sale_date)}</td>
                                         <td className="p-3">
@@ -293,7 +298,7 @@ export default function Credit() {
             {selectedId && detail && (
                 <div
                     className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
-                    onClick={() => setSelectedId(null)}
+                    onClick={closeCredit}
                 >
                     <div
                         className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto"
@@ -304,7 +309,7 @@ export default function Credit() {
                                 <CreditCard size={20} />
                                 Crédit #{detail.id} — {detail.customer_name}
                             </h3>
-                            <button onClick={() => setSelectedId(null)} aria-label="Fermer" className="hover:bg-white/20 p-1 rounded">
+                            <button onClick={closeCredit} aria-label="Fermer" className="hover:bg-white/20 p-1 rounded">
                                 <X size={20} />
                             </button>
                         </div>

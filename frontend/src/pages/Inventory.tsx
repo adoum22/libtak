@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage, getApiErrorStatus } from '../api/client';
 import { useToast } from '../components/ToastContext';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { useTranslation } from 'react-i18next';
 import { normalizeDecimalInput } from '../utils/numberInput';
 import {
@@ -28,7 +29,7 @@ interface Product {
     name: string;
     barcode: string;
     description: string;
-    purchase_price: number;
+    purchase_price?: number;
     sale_price_ht: number;
     price_ttc: number;
     stock: number;
@@ -37,7 +38,7 @@ interface Product {
     category_name: string | null;
     supplier: number | null;
     supplier_name: string | null;
-    profit_margin: number;
+    profit_margin?: number;
     is_low_stock: boolean;
     image_url: string | null;
     cost_layers?: StockLayer[];
@@ -48,7 +49,6 @@ interface StockLayer {
     initial_quantity: number;
     remaining_quantity: number;
     unit_cost: string | number;
-    sale_price: string | number;
     created_at: string;
     note?: string;
 }
@@ -76,8 +76,9 @@ export default function Inventory() {
     const [showModal, setShowModal] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
+    const [productToDeactivate, setProductToDeactivate] = useState<Product | null>(null);
     const [priceDraft, setPriceDraft] = useState({ purchase_price: '', sale_price_ht: '' });
-    const [layerDrafts, setLayerDrafts] = useState<Record<number, { unit_cost: string; sale_price: string; note: string }>>({});
+    const [layerDrafts, setLayerDrafts] = useState<Record<number, { unit_cost: string; note: string }>>({});
     const [selectedImage, setSelectedImage] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +131,8 @@ export default function Inventory() {
     const layerMatchesPurchasePrice = (layer: StockLayer) =>
         purchasePriceTarget !== null && priceMatches(layer.unit_cost);
     const products = rawProducts.filter(productMatchesPurchasePrice);
+    const hasInvalidSalePrice = (product: Product) => Number(product.price_ttc) <= 0;
+    const invalidSalePriceCount = products.filter(hasInvalidSalePrice).length;
     const totalCount: number = purchasePriceTarget !== null
         ? products.length
         : isPaginated ? (productsData as { count?: number }).count ?? products.length : products.length;
@@ -163,7 +166,9 @@ export default function Inventory() {
         payload.append('name', data.name);
         payload.append('barcode', data.barcode);
         payload.append('description', data.description);
-        payload.append('purchase_price', normalizeMoney(data.purchase_price) || '0');
+        if (isAdmin) {
+            payload.append('purchase_price', normalizeMoney(data.purchase_price) || '0');
+        }
         payload.append('sale_price_ht', normalizeMoney(data.sale_price_ht));
         payload.append('tva', '0');
         payload.append('stock', data.stock);
@@ -201,7 +206,6 @@ export default function Inventory() {
             closeModal();
         },
         onError: (error: unknown) => {
-            console.error("Update Error:", error);
             const detail = getApiErrorMessage(error);
             toast.error(`Erreur lors de la modification : ${detail}`);
         }
@@ -227,7 +231,7 @@ export default function Inventory() {
     const normalizeMoney = (value: string) => normalizeDecimalInput(value).trim();
 
     const layerMutation = useMutation({
-        mutationFn: async (data: { productId: number; id?: number; index: number; unit_cost: string; sale_price: string; note: string }) => {
+        mutationFn: async (data: { productId: number; id?: number; index: number; unit_cost: string; note: string }) => {
             const url = data.id
                 ? `/inventory/products/${data.productId}/cost-layers/${data.id}/`
                 : `/inventory/products/${data.productId}/cost-layers/by-position/${data.index}/`;
@@ -235,7 +239,6 @@ export default function Inventory() {
                 layer_id: data.id,
                 index: data.index,
                 unit_cost: normalizeMoney(data.unit_cost) || '0',
-                sale_price: normalizeMoney(data.sale_price) || null,
                 note: data.note || '',
             };
 
@@ -275,7 +278,7 @@ export default function Inventory() {
                         ...prev,
                         cost_layers: prev.cost_layers.map((layer, index) =>
                             (variables.id ? layer.id === variables.id : index === variables.index)
-                                ? { ...layer, unit_cost: normalizeMoney(variables.unit_cost), sale_price: normalizeMoney(variables.sale_price), note: variables.note }
+                                ? { ...layer, unit_cost: normalizeMoney(variables.unit_cost), note: variables.note }
                                 : layer
                         ),
                     };
@@ -290,7 +293,14 @@ export default function Inventory() {
 
     const deleteMutation = useMutation({
         mutationFn: (id: number) => client.delete(`/inventory/products/${id}/`),
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] })
+        onSuccess: () => {
+            setProductToDeactivate(null);
+            toast.success('Produit désactivé.');
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+        },
+        onError: (error: unknown) => {
+            toast.error('Désactivation impossible : ' + getApiErrorMessage(error));
+        },
     });
 
     const importExcelFileRef = useRef<HTMLInputElement | null>(null);
@@ -308,7 +318,6 @@ export default function Inventory() {
             toast.success(`Import termine ! ${data.data.created} produits crees, ${data.data.images || 0} photo(s) importee(s), ${data.data.updated || 0} produit(s) existant(s) complete(s), ${data.data.skipped || 0} ignore(s). ${data.data.errors.length} erreur(s).`);
         },
         onError: (error: unknown) => {
-            console.error("Import Error Details:", error);
             const detail = getApiErrorMessage(error);
             const responseStatus = getApiErrorStatus(error);
             const status = responseStatus ? ` (Status: ${responseStatus})` : '';
@@ -369,11 +378,10 @@ export default function Inventory() {
             purchase_price: product.purchase_price?.toString() || '0',
             sale_price_ht: product.sale_price_ht?.toString() || '0',
         });
-        const drafts: Record<number, { unit_cost: string; sale_price: string; note: string }> = {};
+        const drafts: Record<number, { unit_cost: string; note: string }> = {};
         product.cost_layers?.forEach((layer) => {
             drafts[layer.id] = {
                 unit_cost: Number(layer.unit_cost).toString(),
-                sale_price: Number(layer.sale_price).toString(),
                 note: layer.note || '',
             };
         });
@@ -440,26 +448,30 @@ export default function Inventory() {
                 <h1 className="text-2xl font-bold">{t('Inventory')}</h1>
                 {canManageStock && (
                     <div className="inventory-actions flex gap-2">
-                        <input
-                            type="file"
-                            accept=".xlsx,.xls,.csv,.zip,application/zip"
-                            className="hidden"
-                            ref={importExcelFileRef}
-                            onChange={(e) => {
-                                if (e.target.files && e.target.files[0]) {
-                                    importMutation.mutate(e.target.files[0]);
-                                    e.target.value = ''; // Reset input
-                                }
-                            }}
-                        />
-                        <button
-                            onClick={() => importExcelFileRef.current?.click()}
-                            className="inventory-import-action btn-secondary flex items-center gap-2"
-                            disabled={importMutation.isPending}
-                        >
-                            <Upload size={20} />
-                            <span>{importMutation.isPending ? t('Loading') : 'Importer CSV/ZIP'}</span>
-                        </button>
+                        {isAdmin && (
+                            <>
+                                <input
+                                    type="file"
+                                    accept=".xlsx,.xls,.csv,.zip,application/zip"
+                                    className="hidden"
+                                    ref={importExcelFileRef}
+                                    onChange={(e) => {
+                                        if (e.target.files && e.target.files[0]) {
+                                            importMutation.mutate(e.target.files[0]);
+                                            e.target.value = ''; // Reset input
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={() => importExcelFileRef.current?.click()}
+                                    className="inventory-import-action btn-secondary flex items-center gap-2"
+                                    disabled={importMutation.isPending}
+                                >
+                                    <Upload size={20} />
+                                    <span>{importMutation.isPending ? t('Loading') : 'Importer CSV/ZIP'}</span>
+                                </button>
+                            </>
+                        )}
 
                         <button onClick={openCreateModal} className="btn-primary flex items-center gap-2">
                             <Plus size={20} />
@@ -525,6 +537,20 @@ export default function Inventory() {
                 </span>
             </div>
 
+            {isAdmin && invalidSalePriceCount > 0 && (
+                <div className="rounded-xl border border-warning/30 bg-warning-light p-4 text-warning flex items-start gap-3" role="status">
+                    <AlertTriangle size={20} className="flex-shrink-0 mt-0.5" aria-hidden="true" />
+                    <div>
+                        <p className="font-semibold">
+                            {invalidSalePriceCount} produit{invalidSalePriceCount > 1 ? 's affichés ont' : ' affiché a'} un prix de vente à corriger
+                        </p>
+                        <p className="text-sm mt-1">
+                            Ces produits restent exclus de la caisse tant que tous leurs lots disponibles n’ont pas un prix strictement positif.
+                        </p>
+                    </div>
+                </div>
+            )}
+
             <div className="inventory-mobile-list">
                 {isLoading ? (
                     <div className="mobile-empty-card">
@@ -566,14 +592,19 @@ export default function Inventory() {
                                 <p className="inventory-mobile-barcode">{product.barcode}</p>
                                 <div className="inventory-mobile-meta">
                                     {isAdmin && <span>Achat {product.purchase_price?.toFixed(2)} DH</span>}
-                                    <span>Vente {product.price_ttc?.toFixed(2)} DH</span>
+                                    <span className={hasInvalidSalePrice(product) ? 'text-danger font-semibold' : ''}>
+                                        Vente {product.price_ttc?.toFixed(2)} DH
+                                    </span>
                                     <span>Seuil {product.min_stock}</span>
                                 </div>
+                                {hasInvalidSalePrice(product) && (
+                                    <span className="badge badge-danger mt-2">Prix à corriger · Non vendable</span>
+                                )}
                                 {isAdmin && product.cost_layers && product.cost_layers.length > 0 && (
                                     <div className="inventory-mobile-layers">
                                         {product.cost_layers.slice(0, 2).map((layer, idx) => (
                                             <span key={`mobile-${product.id}-layer-${layer.id}`}>
-                                                Lot {idx + 1}: {layer.remaining_quantity}/{layer.initial_quantity} à {Number(layer.sale_price).toFixed(2)} DH
+                                                Lot {idx + 1}: {layer.remaining_quantity}/{layer.initial_quantity} · achat {Number(layer.unit_cost).toFixed(2)} DH
                                             </span>
                                         ))}
                                         {product.cost_layers.length > 2 && <span>+{product.cost_layers.length - 2} lot(s)</span>}
@@ -703,8 +734,6 @@ export default function Inventory() {
                                                                     >
                                                                         <strong className="text-primary">Lot {idx + 1}</strong>
                                                                         Achat {Number(layer.unit_cost).toFixed(2)}
-                                                                        <span>→</span>
-                                                                        Vente {Number(layer.sale_price).toFixed(2)}
                                                                         <span className="text-accent font-semibold">
                                                                             {layer.remaining_quantity}/{layer.initial_quantity}
                                                                         </span>
@@ -728,10 +757,17 @@ export default function Inventory() {
                                             )}
                                         </td>
                                         {isAdmin && <td className="text-right">{product.purchase_price?.toFixed(2)} DH</td>}
-                                        <td className="text-right font-semibold">{product.price_ttc?.toFixed(2)} DH</td>
+                                        <td className="text-right font-semibold">
+                                            <span className={hasInvalidSalePrice(product) ? 'text-danger' : ''}>
+                                                {product.price_ttc?.toFixed(2)} DH
+                                            </span>
+                                            {hasInvalidSalePrice(product) && (
+                                                <span className="block text-[11px] text-danger mt-1">Non vendable</span>
+                                            )}
+                                        </td>
                                         {isAdmin && (
                                             <td className="text-right">
-                                                <span className={product.profit_margin > 0 ? 'text-success' : 'text-danger'}>
+                                                <span className={(product.profit_margin ?? 0) > 0 ? 'text-success' : 'text-danger'}>
                                                     {product.profit_margin?.toFixed(2)} DH
                                                 </span>
                                             </td>
@@ -757,12 +793,11 @@ export default function Inventory() {
                                                         <Edit size={18} />
                                                     </button>
                                                     <button
-                                                        onClick={() => {
-                                                            if (confirm('Supprimer ce produit?')) {
-                                                                deleteMutation.mutate(product.id);
-                                                            }
-                                                        }}
+                                                        type="button"
+                                                        onClick={() => setProductToDeactivate(product)}
                                                         className="btn-ghost p-2 text-danger hover:bg-danger-light"
+                                                        aria-label={`Désactiver ${product.name}`}
+                                                        title="Désactiver le produit"
                                                     >
                                                         <Trash2 size={18} />
                                                     </button>
@@ -1133,7 +1168,7 @@ export default function Inventory() {
                                             <div className="rounded-2xl border border-border p-5 bg-secondary">
                                                 <h3 className="flex items-center gap-2 font-bold mb-4">
                                                     <Banknote size={20} />
-                                                    Prix par defaut du produit
+                                                    Prix du produit
                                                 </h3>
                                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                     <div>
@@ -1149,7 +1184,7 @@ export default function Inventory() {
                                                         </div>
                                                     </div>
                                                     <div>
-                                                        <label className="block text-sm font-medium mb-2">Prix vente</label>
+                                                        <label className="block text-sm font-medium mb-2">Prix de vente unique (tout le stock)</label>
                                                         <div className="relative">
                                                             <input
                                                                  type="text"
@@ -1180,18 +1215,20 @@ export default function Inventory() {
                                         <div className="rounded-2xl border border-border p-5 bg-secondary">
                                             <h3 className="font-bold mb-4">Informations</h3>
                                             <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                                                {isAdmin && (
+                                                    <div>
+                                                        <dt className="text-muted">Prix achat affiche</dt>
+                                                        <dd className="font-bold">{Number(viewingProduct.purchase_price).toFixed(2)} DH</dd>
+                                                    </div>
+                                                )}
                                                 <div>
-                                                    <dt className="text-muted">Prix achat affiche</dt>
-                                                    <dd className="font-bold">{Number(viewingProduct.purchase_price || 0).toFixed(2)} DH</dd>
-                                                </div>
-                                                <div>
-                                                    <dt className="text-muted">Prix vente affiche</dt>
+                                                        <dt className="text-muted">Prix de vente courant</dt>
                                                     <dd className="font-bold">{Number(viewingProduct.price_ttc || 0).toFixed(2)} DH</dd>
                                                 </div>
                                                 {isAdmin && (
                                                     <div>
                                                         <dt className="text-muted">Marge par defaut</dt>
-                                                        <dd className={viewingProduct.profit_margin > 0 ? 'font-bold text-success' : 'font-bold text-danger'}>
+                                                        <dd className={(viewingProduct.profit_margin ?? 0) > 0 ? 'font-bold text-success' : 'font-bold text-danger'}>
                                                             {Number(viewingProduct.profit_margin || 0).toFixed(2)} DH
                                                         </dd>
                                                     </div>
@@ -1210,9 +1247,9 @@ export default function Inventory() {
                                     {isAdmin && (
                                         <div className="rounded-2xl border border-border bg-secondary overflow-hidden">
                                             <div className="p-5 border-b">
-                                                <h3 className="font-bold">Lots FIFO actifs</h3>
+                                                <h3 className="font-bold">Lots FIFO de coût actifs</h3>
                                                 <p className="text-sm text-muted">
-                                                    Chaque lot garde son propre prix d'achat et prix de vente. La quantite est en lecture seule pour proteger le stock.
+                                                    Chaque lot garde uniquement son coût d'achat FIFO. Le prix de vente unique affiché plus haut s'applique à tout le stock.
                                                 </p>
                                             </div>
                                             {viewingProduct.cost_layers && viewingProduct.cost_layers.length > 0 ? (
@@ -1220,7 +1257,6 @@ export default function Inventory() {
                                                     {viewingProduct.cost_layers.map((layer, idx) => {
                                                         const draft = layerDrafts[layer.id] || {
                                                             unit_cost: Number(layer.unit_cost).toString(),
-                                                            sale_price: Number(layer.sale_price).toString(),
                                                             note: layer.note || '',
                                                         };
                                                         return (
@@ -1239,7 +1275,7 @@ export default function Inventory() {
                                                                         {new Date(layer.created_at).toLocaleDateString('fr-FR')}
                                                                     </p>
                                                                 </div>
-                                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                                     <div>
                                                                         <label className="block text-sm font-medium mb-2">Prix achat lot</label>
                                                                         <div className="relative">
@@ -1250,21 +1286,6 @@ export default function Inventory() {
                                                                                 onChange={(e) => setLayerDrafts({
                                                                                     ...layerDrafts,
                                                                                     [layer.id]: { ...draft, unit_cost: normalizeDecimalInput(e.target.value) },
-                                                                                })}
-                                                                            />
-                                                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div>
-                                                                        <label className="block text-sm font-medium mb-2">Prix vente lot</label>
-                                                                        <div className="relative">
-                                                                            <input
-                                                                                 type="text"
-                                                                                step="0.01"
-                                                                                value={draft.sale_price}
-                                                                                onChange={(e) => setLayerDrafts({
-                                                                                    ...layerDrafts,
-                                                                                    [layer.id]: { ...draft, sale_price: normalizeDecimalInput(e.target.value) },
                                                                                 })}
                                                                             />
                                                                             <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted text-sm">DH</span>
@@ -1290,7 +1311,6 @@ export default function Inventory() {
                                                                         id: layer.id,
                                                                         index: idx,
                                                                         unit_cost: draft.unit_cost,
-                                                                        sale_price: draft.sale_price,
                                                                         note: draft.note,
                                                                     })}
                                                                     disabled={layerMutation.isPending}
@@ -1381,6 +1401,20 @@ export default function Inventory() {
                 accept="image/*"
                 className="hidden"
                 onChange={handleListFileChange}
+            />
+
+            <ConfirmDialog
+                open={Boolean(productToDeactivate)}
+                title="Désactiver ce produit ?"
+                description={productToDeactivate
+                    ? `${productToDeactivate.name} ne sera plus proposé à la caisse. Son historique restera conservé.`
+                    : ''}
+                confirmLabel="Désactiver"
+                busy={deleteMutation.isPending}
+                onCancel={() => setProductToDeactivate(null)}
+                onConfirm={() => {
+                    if (productToDeactivate) deleteMutation.mutate(productToDeactivate.id);
+                }}
             />
         </div>
     );

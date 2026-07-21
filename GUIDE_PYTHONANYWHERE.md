@@ -7,22 +7,18 @@ Ce guide vous explique comment configurer le serveur cloud (PythonAnywhere) pour
 ## 📋 Prérequis
 
 - Un compte PythonAnywhere (gratuit ou payant)
-- Le backend LibTak est déjà déployé sur `dido22.pythonanywhere.com`
+- Le backend LibTak est déployé sur votre propre domaine PythonAnywhere.
 
 ---
 
-## 🔧 Étape 1: Vérifier le fichier settings.py
+## 🔧 Étape 1: Configurer les variables d'environnement
 
-Connectez-vous à PythonAnywhere et ouvrez une console Bash. Allez dans votre projet et vérifiez que le fichier `settings.py` contient le token de synchronisation :
+Connectez-vous à PythonAnywhere et configurez un secret de synchronisation aléatoire d'au moins 32 caractères dans les variables d'environnement. Transmettez-le au poste local par un canal sûr ; ne le placez jamais dans le dépôt.
 
-```python
-# Dans config/settings.py (ou l'équivalent sur PythonAnywhere)
-
-# Token de synchronisation (doit être identique sur local et cloud)
-SYNC_TOKEN = 'libtak-sync-token-2025'
-
-# Identifier ce serveur comme le serveur cloud
-IS_CLOUD_SERVER = True
+```bash
+# Valeurs à définir dans l'environnement PythonAnywhere et non dans settings.py
+SYNC_TOKEN=<secret-aléatoire-identique-sur-local-et-cloud>
+IS_CLOUD_SERVER=True
 ```
 
 ---
@@ -44,7 +40,7 @@ urlpatterns = [
 ```
 
 L'endpoint de synchronisation sera accessible à :
-- `https://dido22.pythonanywhere.com/api/auth/sync/receive/`
+- `https://votre-compte.pythonanywhere.com/api/auth/sync/receive/`
 
 ---
 
@@ -56,7 +52,7 @@ Sur le PC de la librairie, le fichier `/home/librairie/libtak/backend/sync_to_cl
 
 ```python
 # Ligne 31
-CLOUD_URL = "https://dido22.pythonanywhere.com/api/auth"
+CLOUD_URL = "https://votre-compte.pythonanywhere.com/api/auth"
 ```
 
 ---
@@ -91,7 +87,7 @@ Vous devriez voir :
 Une fois la synchronisation configurée, vous pouvez accéder aux données depuis n'importe où :
 
 1. Ouvrez votre navigateur sur votre téléphone
-2. Allez sur `https://dido22.pythonanywhere.com`
+2. Allez sur `https://votre-compte.pythonanywhere.com`
 3. Connectez-vous avec vos identifiants admin
 4. Consultez les rapports et les ventes synchronisées
 
@@ -107,8 +103,8 @@ L'endpoint n'existe pas sur le serveur cloud. Vérifiez que :
 
 ### Erreur 401 (Unauthorized)
 Le token ne correspond pas. Vérifiez que :
-- Le `SYNC_TOKEN` est identique dans les deux fichiers settings.py
-- Le token sur le PC local (env variable ou dans le script) correspond
+- Le `SYNC_TOKEN` est identique dans les deux environnements
+- Le token du poste local n'est pas remplacé par une ancienne valeur
 
 ### Erreur 500
 Problème côté serveur. Consultez les logs sur PythonAnywhere :

@@ -1,60 +1,145 @@
-import axios from 'axios';
+import axios, {
+    type AxiosError,
+    type InternalAxiosRequestConfig,
+} from 'axios';
 
-// Build timestamp: 2025-12-16T11:52 - Force fresh build for new API URL
-// Local server for development
-const LOCAL_API_URL = 'http://localhost:8000/api';
+const configuredApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+const API_URL = (configuredApiUrl || '/api').replace(/\/$/, '');
 
-// Production server (PythonAnywhere)
-const PRODUCTION_API_URL = 'https://dido22.pythonanywhere.com/api';
+const ACCESS_TOKEN_KEY = 'libtak.accessToken';
+const REFRESH_TOKEN_KEY = 'libtak.refreshToken';
+const USER_ROLE_KEY = 'libtak.userRole';
 
-// Determine which server to use
-// In development (localhost): use local server
-// In production (Vercel): use PythonAnywhere
-const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-const API_URL = import.meta.env.VITE_API_URL || (isDevelopment ? LOCAL_API_URL : PRODUCTION_API_URL);
+// One-time migration away from persistent localStorage credentials.
+const legacyAccess = localStorage.getItem('token');
+const legacyRefresh = localStorage.getItem('refreshToken');
+const legacyRole = localStorage.getItem('userRole');
+if (legacyAccess && !sessionStorage.getItem(ACCESS_TOKEN_KEY)) {
+    sessionStorage.setItem(ACCESS_TOKEN_KEY, legacyAccess);
+}
+if (legacyRefresh && !sessionStorage.getItem(REFRESH_TOKEN_KEY)) {
+    sessionStorage.setItem(REFRESH_TOKEN_KEY, legacyRefresh);
+}
+if (legacyRole && !sessionStorage.getItem(USER_ROLE_KEY)) {
+    sessionStorage.setItem(USER_ROLE_KEY, legacyRole);
+}
+localStorage.removeItem('token');
+localStorage.removeItem('refreshToken');
+localStorage.removeItem('userRole');
+
+export const getAccessToken = () => sessionStorage.getItem(ACCESS_TOKEN_KEY);
+export const getRefreshToken = () => sessionStorage.getItem(REFRESH_TOKEN_KEY);
+export const getStoredUserRole = () => sessionStorage.getItem(USER_ROLE_KEY);
+export const hasAuthSession = () => Boolean(getAccessToken() || getRefreshToken());
+
+export const setAuthSession = (
+    access: string,
+    refresh?: string | null,
+    role?: string | null,
+) => {
+    sessionStorage.setItem(ACCESS_TOKEN_KEY, access);
+    if (refresh) sessionStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+    if (role) sessionStorage.setItem(USER_ROLE_KEY, role);
+    window.dispatchEvent(new Event('auth:changed'));
+};
+
+export const setStoredUserRole = (role: string) => {
+    sessionStorage.setItem(USER_ROLE_KEY, role);
+    window.dispatchEvent(new Event('auth:changed'));
+};
+
+export const clearAuthSession = () => {
+    sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+    sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+    sessionStorage.removeItem(USER_ROLE_KEY);
+    localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('userRole');
+    window.dispatchEvent(new Event('auth:changed'));
+};
 
 const client = axios.create({
     baseURL: API_URL,
-    headers: {
-        'Content-Type': 'application/json',
-    },
-    timeout: 10000, // 10 second timeout
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 15_000,
 });
 
-// Request interceptor - add token to every request
-client.interceptors.request.use(
-    (config) => {
-        const token = localStorage.getItem('token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-    },
-    (error) => {
-        return Promise.reject(error);
-    }
-);
+client.interceptors.request.use((config) => {
+    const token = getAccessToken();
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+    return config;
+});
 
-// Response interceptor - handle 401 errors
+type RetryableRequest = InternalAxiosRequestConfig & { _authRetry?: boolean };
+let refreshPromise: Promise<string> | null = null;
+let redirectingToLogin = false;
+
+const refreshAccessToken = async () => {
+    if (refreshPromise) return refreshPromise;
+    const refresh = getRefreshToken();
+    if (!refresh) throw new Error('No refresh token');
+
+    refreshPromise = axios.post(
+        `${API_URL}/auth/refresh/`,
+        { refresh },
+        { timeout: 15_000, headers: { 'Content-Type': 'application/json' } },
+    ).then((response) => {
+        const access = response.data?.access;
+        if (typeof access !== 'string' || !access) {
+            throw new Error('Invalid refresh response');
+        }
+        setAuthSession(
+            access,
+            typeof response.data?.refresh === 'string' ? response.data.refresh : refresh,
+        );
+        return access;
+    }).finally(() => {
+        refreshPromise = null;
+    });
+    return refreshPromise;
+};
+
+const redirectToLogin = () => {
+    clearAuthSession();
+    if (redirectingToLogin || window.location.pathname === '/login') return;
+    redirectingToLogin = true;
+    const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+};
+
 client.interceptors.response.use(
     (response) => response,
-    (error) => {
-        if (error.response?.status === 401) {
-            // Token expired or invalid
-            const currentPath = window.location.pathname;
-            if (currentPath !== '/login') {
-                localStorage.removeItem('token');
-                localStorage.removeItem('userRole');
-                window.location.href = '/login';
+    async (error: AxiosError) => {
+        const request = error.config as RetryableRequest | undefined;
+        const isAuthEndpoint = request?.url?.includes('/auth/login/')
+            || request?.url?.includes('/auth/refresh/');
+        if (
+            error.response?.status === 401
+            && request
+            && !request._authRetry
+            && !isAuthEndpoint
+            && getRefreshToken()
+        ) {
+            request._authRetry = true;
+            try {
+                const access = await refreshAccessToken();
+                request.headers.Authorization = `Bearer ${access}`;
+                return client(request);
+            } catch {
+                redirectToLogin();
             }
+        } else if (error.response?.status === 401 && !isAuthEndpoint) {
+            redirectToLogin();
         }
         return Promise.reject(error);
-    }
+    },
 );
 
-// Export API URL for debugging/status display
 export const getApiUrl = () => API_URL;
-export const isUsingLocalServer = () => isDevelopment;
+export const isUsingLocalServer = () => (
+    !configuredApiUrl
+    || /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null;
@@ -71,25 +156,23 @@ export const getApiErrorMessage = (
     field?: string,
 ) => {
     if (!isRecord(error)) return fallback;
-
     const response = isRecord(error.response) ? error.response : null;
     const data = response && isRecord(response.data) ? response.data : null;
-
     if (field && data) {
         const fieldMessage = firstString(data[field]);
         if (fieldMessage) return fieldMessage;
     }
-
     const detail = data ? firstString(data.detail) : null;
     if (detail) return detail;
-
-    if (data) return JSON.stringify(data);
-
+    if (data) {
+        const firstField = Object.values(data)
+            .map(firstString)
+            .find((value): value is string => Boolean(value));
+        return firstField || fallback;
+    }
     const statusText = response ? firstString(response.statusText) : null;
     if (statusText) return statusText;
-
-    const message = firstString(error.message);
-    return message || fallback;
+    return firstString(error.message) || fallback;
 };
 
 export const getApiErrorStatus = (error: unknown): number | null => {
@@ -98,4 +181,3 @@ export const getApiErrorStatus = (error: unknown): number | null => {
 };
 
 export default client;
-

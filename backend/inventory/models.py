@@ -1,5 +1,9 @@
+from decimal import Decimal
+
+from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.conf import settings
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
@@ -110,6 +114,28 @@ class Product(models.Model):
             models.Index(fields=['name']),
             models.Index(fields=['barcode']),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(purchase_price__gte=0),
+                name='inventory_product_purchase_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(sale_price_ht__gte=0),
+                name='inventory_product_sale_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(tva__gte=0, tva__lte=100),
+                name='inventory_product_tva_range',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(stock__gte=0),
+                name='inventory_product_stock_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(min_stock__gte=0),
+                name='inventory_product_min_stock_nonneg',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.barcode})"
@@ -141,14 +167,10 @@ class Product(models.Model):
 
         Le champ historique s'appelle encore `price_ttc` pour compatibilite
         API, mais LibTak ne majore plus automatiquement les prix avec la TVA.
-        La TVA est reservee aux factures.
+        La TVA est reservee aux factures. Le prix courant de la fiche produit
+        s'applique a tout le stock restant ; les lots FIFO ne conservent que
+        leur cout d'achat pour la valorisation et la marge.
         """
-        current_layer = self.cost_layers.filter(
-            remaining_quantity__gt=0,
-            sale_price__isnull=False,
-        ).order_by('created_at', 'id').first()
-        if current_layer:
-            return self._safe_decimal(current_layer.sale_price)
         return self._safe_decimal(self.sale_price_ht)
 
     @property
@@ -158,8 +180,10 @@ class Product(models.Model):
             remaining_quantity__gt=0,
         ).order_by('created_at', 'id').first()
         if current_layer:
-            sale_price = current_layer.sale_price or self.sale_price_ht
-            return self._safe_decimal(sale_price) - self._safe_decimal(current_layer.unit_cost)
+            return (
+                self._safe_decimal(self.sale_price_ht)
+                - self._safe_decimal(current_layer.unit_cost)
+            )
         return self._safe_decimal(self.sale_price_ht) - self._safe_decimal(self.purchase_price)
 
     @property
@@ -170,7 +194,7 @@ class Product(models.Model):
         ).order_by('created_at', 'id').first()
         if current_layer:
             pp = self._safe_decimal(current_layer.unit_cost)
-            sp = self._safe_decimal(current_layer.sale_price or self.sale_price_ht)
+            sp = self._safe_decimal(self.sale_price_ht)
         else:
             pp = self._safe_decimal(self.purchase_price)
             sp = self._safe_decimal(self.sale_price_ht)
@@ -235,6 +259,25 @@ class ProductCostLayer(models.Model):
         indexes = [
             models.Index(fields=['product', 'remaining_quantity', 'created_at']),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(unit_cost__gte=0),
+                name='inventory_fifo_cost_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(sale_price__isnull=True)
+                    | models.Q(sale_price__gte=0)
+                ),
+                name='inventory_fifo_sale_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    remaining_quantity__lte=models.F('initial_quantity')
+                ),
+                name='inventory_fifo_remaining_lte_initial',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.product.name}: {self.remaining_quantity}/{self.initial_quantity} @ {self.unit_cost}"
@@ -262,19 +305,78 @@ class ProductCostLayer(models.Model):
         )
 
     @classmethod
-    def ensure_layers_cover_stock(cls, product):
-        available = cls.objects.filter(product=product).aggregate(
-            total=models.Sum('remaining_quantity'),
-        )['total'] or 0
-        missing = product.stock - available
-        if missing > 0:
-            cls.create_layer(
-                product=product,
-                quantity=missing,
-                unit_cost=product.purchase_price,
-                sale_price=product.sale_price_ht,
-                note='Rattrapage stock sans lot',
+    def active_quantity(cls, product):
+        """Return the quantity represented by the product's active FIFO lots."""
+        return cls.objects.filter(
+            product=product,
+            remaining_quantity__gt=0,
+        ).aggregate(total=models.Sum('remaining_quantity'))['total'] or 0
+
+    @classmethod
+    def invariant_delta(cls, product):
+        """Positive means stock is missing FIFO units; negative means excess lots."""
+        return int(product.stock or 0) - int(cls.active_quantity(product))
+
+    @classmethod
+    def assert_matches_stock(cls, product):
+        delta = cls.invariant_delta(product)
+        if delta:
+            raise ValidationError(
+                f'Incoherence FIFO pour le produit {product.pk}: '
+                f'stock={product.stock}, ecart_lots={delta}.'
             )
+
+    @classmethod
+    def reconcile_to_stock(cls, product, note='Rattrapage invariant FIFO'):
+        """Atomically make active FIFO quantities match ``Product.stock``."""
+        with transaction.atomic():
+            locked_product = Product.objects.select_for_update().get(pk=product.pk)
+            target = int(locked_product.stock or 0)
+            if target < 0:
+                raise ValidationError(
+                    f'Le stock négatif du produit {locked_product.pk} '
+                    'doit être corrigé par un mouvement audité.'
+                )
+            layers = list(
+                cls.objects.select_for_update()
+                .filter(product=locked_product, remaining_quantity__gt=0)
+                .order_by('created_at', 'id')
+            )
+            active = sum(layer.remaining_quantity for layer in layers)
+            before = active
+
+            if active < target:
+                cls.create_layer(
+                    product=locked_product,
+                    quantity=target - active,
+                    unit_cost=locked_product.purchase_price,
+                    sale_price=locked_product.sale_price_ht,
+                    note=note,
+                )
+            elif active > target:
+                excess = active - target
+                for layer in layers:
+                    if excess <= 0:
+                        break
+                    consumed = min(excess, layer.remaining_quantity)
+                    layer.remaining_quantity -= consumed
+                    layer.save(update_fields=['remaining_quantity'])
+                    excess -= consumed
+
+            after = cls.active_quantity(locked_product)
+            return {
+                'product_id': locked_product.pk,
+                'stock': target,
+                'layers_before': before,
+                'layers_after': after,
+                'changed': before != after,
+            }
+
+    @classmethod
+    def ensure_layers_cover_stock(cls, product):
+        # Legacy versions could create duplicate initial lots or change stock
+        # without a movement. Reconcile both missing and excess quantities.
+        cls.reconcile_to_stock(product, note='Rattrapage stock sans lot')
 
     @classmethod
     def consume_fifo_breakdown(cls, product, quantity):
@@ -299,7 +401,9 @@ class ProductCostLayer(models.Model):
             chunks.append({
                 'quantity': consumed,
                 'unit_cost': layer.unit_cost,
-                'sale_price': layer.sale_price or product.sale_price_ht,
+                # Le FIFO determine uniquement le cout. Tous les exemplaires
+                # sont vendus au prix courant unique de la fiche produit.
+                'sale_price': product.sale_price_ht,
                 'total_cost': layer.unit_cost * consumed,
             })
             remaining -= consumed
@@ -385,6 +489,22 @@ class StockMovement(models.Model):
         verbose_name = _('Stock Movement')
         verbose_name_plural = _('Stock Movements')
         ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(unit_cost__isnull=True)
+                    | models.Q(unit_cost__gte=0)
+                ),
+                name='inventory_movement_cost_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(sale_price__isnull=True)
+                    | models.Q(sale_price__gte=0)
+                ),
+                name='inventory_movement_sale_nonneg',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.get_movement_type_display()} - {self.product.name} ({self.quantity})"
@@ -395,11 +515,40 @@ class StockMovement(models.Model):
             super().save(*args, **kwargs)
             return
 
+        valid_types = {choice for choice, _label in self.MovementType.choices}
+        if self.movement_type not in valid_types:
+            raise ValidationError({'movement_type': 'Type de mouvement invalide.'})
+        requested_quantity = int(self.quantity)
+        if self.movement_type == self.MovementType.ADJUST:
+            if requested_quantity < 0:
+                raise ValidationError({
+                    'quantity': 'Le stock cible ne peut pas être négatif.'
+                })
+        elif requested_quantity <= 0:
+            raise ValidationError({
+                'quantity': 'La quantité doit être strictement positive.'
+            })
+        if self.unit_cost is not None and self.unit_cost < 0:
+            raise ValidationError({
+                'unit_cost': 'Le coût unitaire ne peut pas être négatif.'
+            })
+        if self.sale_price is not None and self.sale_price < 0:
+            raise ValidationError({
+                'sale_price': 'Le prix de vente ne peut pas être négatif.'
+            })
+
         with transaction.atomic():
             product = (
                 Product.objects.select_for_update().get(pk=self.product_id)
             )
+            ProductCostLayer.reconcile_to_stock(product)
             self.stock_before = product.stock
+
+            if (
+                self.movement_type == self.MovementType.OUT
+                and requested_quantity > product.stock
+            ):
+                raise ValidationError({'quantity': 'Stock insuffisant.'})
 
             if self.movement_type == self.MovementType.IN:
                 product.stock += self.quantity
@@ -423,8 +572,16 @@ class StockMovement(models.Model):
                 ProductCostLayer.create_layer(
                     product=product,
                     quantity=abs(self.quantity),
-                    unit_cost=self.unit_cost or product.purchase_price,
-                    sale_price=self.sale_price or product.sale_price_ht,
+                    unit_cost=(
+                        self.unit_cost
+                        if self.unit_cost is not None
+                        else product.purchase_price
+                    ),
+                    sale_price=(
+                        self.sale_price
+                        if self.sale_price is not None
+                        else product.sale_price_ht
+                    ),
                     source_movement=self,
                     note=self.get_movement_type_display(),
                 )
@@ -432,11 +589,20 @@ class StockMovement(models.Model):
                 ProductCostLayer.create_layer(
                     product=product,
                     quantity=self.quantity,
-                    unit_cost=self.unit_cost or product.purchase_price,
-                    sale_price=self.sale_price or product.sale_price_ht,
+                    unit_cost=(
+                        self.unit_cost
+                        if self.unit_cost is not None
+                        else product.purchase_price
+                    ),
+                    sale_price=(
+                        self.sale_price
+                        if self.sale_price is not None
+                        else product.sale_price_ht
+                    ),
                     source_movement=self,
                     note='Ajustement stock',
                 )
+            ProductCostLayer.assert_matches_stock(product)
 
 
 class PriceHistory(models.Model):
@@ -553,6 +719,30 @@ class PurchaseOrder(models.Model):
         """Nombre d'articles dans la commande"""
         return self.items.count()
 
+    @property
+    def paid_amount(self):
+        """Total des règlements actifs, hors règlements contrepassés."""
+        return (
+            self.payments.filter(
+                status=SupplierPayment.PaymentStatus.ACTIVE,
+            ).aggregate(total=models.Sum('amount'))['total']
+            or Decimal('0.00')
+        )
+
+    @property
+    def balance_due(self):
+        """Solde restant dû, borné à zéro par sécurité d'affichage."""
+        return max(self.total_amount - self.paid_amount, Decimal('0.00'))
+
+    @property
+    def payment_status(self):
+        paid = self.paid_amount
+        if paid <= 0:
+            return 'UNPAID'
+        if paid >= self.total_amount:
+            return 'PAID'
+        return 'PARTIAL'
+
 
 class PurchaseOrderItem(models.Model):
     """Articles de commande fournisseur"""
@@ -577,21 +767,187 @@ class PurchaseOrderItem(models.Model):
         help_text=_('Public sale price to apply when receiving this order'),
     )
     received_quantity = models.IntegerField(_('Received'), default=0)
+    received_cost_total = models.DecimalField(
+        _('Actual Received Cost Total'),
+        max_digits=14,
+        decimal_places=2,
+        default=0,
+        help_text=_('Cumulated supplier cost actually applied on received units'),
+    )
 
     class Meta:
         verbose_name = _('Purchase Order Item')
         verbose_name_plural = _('Purchase Order Items')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['order', 'product'],
+                name='inventory_po_unique_product',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name='inventory_po_quantity_positive',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(received_quantity__gte=0),
+                name='inventory_po_received_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(received_quantity__lte=models.F('quantity')),
+                name='inventory_po_received_lte_quantity',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(unit_cost__gte=0),
+                name='inventory_po_cost_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=models.Q(received_cost_total__gte=0),
+                name='inventory_po_received_cost_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(sale_price__isnull=True)
+                    | models.Q(sale_price__gte=0)
+                ),
+                name='inventory_po_sale_nonneg',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.quantity}x {self.product.name}"
 
     @property
     def total(self):
-        return self.quantity * self.unit_cost
+        remaining_quantity = self.quantity - self.received_quantity
+        return self.received_cost_total + (remaining_quantity * self.unit_cost)
 
     @property
     def is_fully_received(self):
         return self.received_quantity >= self.quantity
+
+
+class SupplierPayment(models.Model):
+    """Règlement de trésorerie d'une commande fournisseur.
+
+    Un règlement n'est volontairement ni une dépense d'exploitation ni un
+    coût des ventes. Le coût est reconnu par les lots FIFO au moment de la
+    vente ; ce modèle suit uniquement la dette fournisseur et la trésorerie.
+    """
+
+    class PaymentMethod(models.TextChoices):
+        CASH = 'CASH', _('Cash')
+        BANK = 'BANK', _('Bank')
+        OTHER = 'OTHER', _('Other')
+
+    class PaymentStatus(models.TextChoices):
+        ACTIVE = 'ACTIVE', _('Active')
+        REVERSED = 'REVERSED', _('Reversed')
+
+    order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.PROTECT,
+        related_name='payments',
+        verbose_name=_('Purchase Order'),
+    )
+    amount = models.DecimalField(
+        _('Amount'),
+        max_digits=12,
+        decimal_places=2,
+    )
+    method = models.CharField(
+        _('Payment Method'),
+        max_length=10,
+        choices=PaymentMethod.choices,
+    )
+    paid_on = models.DateField(_('Paid On'), default=timezone.localdate)
+    reference = models.CharField(_('Reference'), max_length=100, blank=True)
+    note = models.TextField(_('Note'), blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='supplier_payments_created',
+        verbose_name=_('Created By'),
+    )
+    operation_id = models.CharField(
+        _('Idempotency Key'),
+        max_length=64,
+        unique=True,
+        editable=False,
+    )
+    operation_payload_hash = models.CharField(max_length=64, editable=False)
+    status = models.CharField(
+        _('Status'),
+        max_length=10,
+        choices=PaymentStatus.choices,
+        default=PaymentStatus.ACTIVE,
+    )
+    reversed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='supplier_payments_reversed',
+        verbose_name=_('Reversed By'),
+    )
+    reversed_at = models.DateTimeField(_('Reversed At'), null=True, blank=True)
+    reversal_reason = models.CharField(_('Reversal Reason'), max_length=255, blank=True)
+    reversal_operation_id = models.CharField(
+        _('Reversal Idempotency Key'),
+        max_length=64,
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    reversal_payload_hash = models.CharField(max_length=64, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _('Supplier Payment')
+        verbose_name_plural = _('Supplier Payments')
+        ordering = ['-paid_on', '-created_at', '-id']
+        indexes = [
+            models.Index(fields=['order', 'status']),
+            models.Index(fields=['method', 'paid_on', 'status']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(amount__gt=0),
+                name='inventory_supplier_payment_amount_pos',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.order.reference}: {self.amount} ({self.method})'
+
+
+class PurchaseReceipt(models.Model):
+    """Durable idempotency record for a supplier-order reception."""
+
+    order = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.CASCADE,
+        related_name='receipts',
+    )
+    receipt_id = models.CharField(max_length=64)
+    payload_hash = models.CharField(max_length=64)
+    result = models.JSONField(default=dict)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='purchase_receipts',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['order', 'receipt_id'],
+                name='inventory_receipt_unique_order_key',
+            ),
+        ]
 
 
 class InventoryCount(models.Model):
@@ -655,6 +1011,19 @@ class InventoryCountItem(models.Model):
         verbose_name = _('Count Item')
         verbose_name_plural = _('Count Items')
         unique_together = ['count', 'product']
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(expected_quantity__gte=0),
+                name='inventory_count_expected_nonneg',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(counted_quantity__isnull=True)
+                    | models.Q(counted_quantity__gte=0)
+                ),
+                name='inventory_count_counted_nonneg',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.product.name}: {self.counted_quantity}/{self.expected_quantity}"
@@ -664,3 +1033,32 @@ class InventoryCountItem(models.Model):
         if self.counted_quantity is None:
             return None
         return self.counted_quantity - self.expected_quantity
+
+
+class SyncStockSnapshot(models.Model):
+    """Latest monotonic stock snapshot for one store origin and product."""
+
+    origin_id = models.UUIDField()
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name='sync_stock_snapshots',
+    )
+    stock = models.PositiveIntegerField()
+    source_updated_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['origin_id', 'product'],
+                name='inventory_sync_stock_unique_origin_product',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['product', 'source_updated_at'],
+                name='inv_sync_stock_prod_time_idx',
+            ),
+        ]

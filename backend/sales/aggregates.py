@@ -2,10 +2,10 @@ from calendar import monthrange
 from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Sum, F
+from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from django.utils import timezone
 
-from .models import Sale, SaleItem
+from .models import Return, ReturnItem, Sale, SaleItem
 
 
 def local_datetime_bounds(start_date, end_date):
@@ -16,76 +16,52 @@ def local_datetime_bounds(start_date, end_date):
 
 
 def revenue_for_month(year: int, month: int) -> Decimal:
-    """Total revenue for a given calendar month.
-
-    Comptabilité de caisse pour les ventes à crédit :
-    - Les ventes encaissées comptant (CASH/CARD/OTHER) sont reconnues à leur date.
-    - Les ventes à crédit (CREDIT) ne sont PAS reconnues à leur date.
-    - Les règlements de crédit (CreditPayment) sont reconnus à leur date.
-    """
+    """Net recognized revenue for a calendar month (sales minus refunds)."""
     last_day = monthrange(year, month)[1]
     start_dt, end_dt = local_datetime_bounds(
         date(year, month, 1),
         date(year, month, last_day),
     )
-    cash_sales = (
-        Sale.objects.filter(
-            created_at__gte=start_dt,
-            created_at__lte=end_dt,
-        )
-        .exclude(payment_method=Sale.PaymentMethod.CREDIT)
-        .aggregate(total=Sum('total_ttc'))['total']
-        or Decimal('0')
+    return financials_for_period(
+        date(year, month, 1),
+        date(year, month, last_day),
+    )['net_revenue']
+
+
+def completed_returns_for_period(start_date, end_date):
+    """Completed refunds recognized by their effective completion date."""
+    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
+    return Return.objects.filter(
+        status=Return.ReturnStatus.COMPLETED,
+        completed_at__gte=start_dt,
+        completed_at__lte=end_dt,
     )
-    credit_payments = _credit_payments_total(start_dt, end_dt)
-    return cash_sales + credit_payments
 
 
 def _credit_payments_total(start_dt, end_dt) -> Decimal:
-    """Somme des règlements de crédit reçus dans la période."""
-    try:
-        from credit.models import CreditPayment
-    except Exception:
-        return Decimal('0')
+    """Cash received from credit customers during the period."""
+    from credit.models import CreditPayment
+
     return (
         CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
-        )
-        .aggregate(total=Sum('amount'))['total']
+        ).aggregate(total=Sum('amount'))['total']
         or Decimal('0')
     )
 
 
 def _credit_payments_cost(start_dt, end_dt) -> Decimal:
-    """Coût d'achat reconnu au prorata des règlements de crédit.
-
-    Pour chaque CreditPayment dans la période on attribue
-    (payment.amount / sale.total_ttc) * total_purchase_cost_de_la_sale.
-
-    Note: la remise éventuelle est déjà incorporée dans `sale.total_ttc`
-    (qui est le net après discount). Donc en faisant
-    revenue=payment.amount et cost=ratio*purchase_cost on obtient la
-    marge correcte sans avoir à soustraire la remise séparément.
-
-    On somme en pleine précision puis on arrondit une seule fois pour
-    éviter la dérive cumulée sur de nombreux petits règlements.
-    """
-    try:
-        from credit.models import CreditPayment
-    except Exception:
-        return Decimal('0')
+    """Recognize FIFO cost proportionally as credit payments are collected."""
+    from credit.models import CreditPayment
 
     payments = list(
         CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
-        )
-        .select_related('credit_sale__sale')
+        ).select_related('credit_sale__sale')
     )
-    if not payments:
-        return Decimal('0')
-    sale_ids = {p.credit_sale.sale_id for p in payments}
+    sale_ids = {payment.credit_sale.sale_id for payment in payments}
     cost_by_sale = {
         row['sale_id']: row['total'] or Decimal('0')
         for row in SaleItem.objects.filter(sale_id__in=sale_ids)
@@ -96,46 +72,74 @@ def _credit_payments_cost(start_dt, end_dt) -> Decimal:
     for payment in payments:
         sale = payment.credit_sale.sale
         sale_total = sale.total_ttc or Decimal('0')
-        if sale_total <= 0:
-            continue
-        ratio = (payment.amount or Decimal('0')) / sale_total
-        sale_cost = cost_by_sale.get(sale.id, Decimal('0'))
-        total += sale_cost * ratio
+        if sale_total > 0:
+            total += (
+                (payment.amount or Decimal('0'))
+                * cost_by_sale.get(sale.id, Decimal('0'))
+                / sale_total
+            )
     return total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def financials_for_period(start_date, end_date):
+    """Single financial truth used by reports and accounting.
+
+    Revenue is recognized on the sale date and refunds on the date they are
+    completed. Cost of goods is reversed only for items returned to sellable
+    stock; damaged/non-restocked goods remain a real cost.
+    """
+    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
+    sales = Sale.objects.filter(
+        created_at__gte=start_dt,
+        created_at__lte=end_dt,
+    )
+    recognized_sales = sales.exclude(payment_method=Sale.PaymentMethod.CREDIT)
+    immediate_revenue = (
+        recognized_sales.aggregate(total=Sum('total_ttc'))['total']
+        or Decimal('0')
+    )
+    immediate_cost = SaleItem.objects.filter(sale__in=recognized_sales).aggregate(
+        total=Sum('total_purchase_cost'),
+    )['total'] or Decimal('0')
+    credit_revenue = _credit_payments_total(start_dt, end_dt)
+    credit_cost = _credit_payments_cost(start_dt, end_dt)
+    gross_revenue = immediate_revenue + credit_revenue
+    gross_cost = immediate_cost + credit_cost
+
+    completed_returns = completed_returns_for_period(start_date, end_date)
+    refunds = completed_returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0')
+    returned_cost_expression = ExpressionWrapper(
+        F('sale_item__unit_purchase_price') * F('quantity'),
+        output_field=DecimalField(max_digits=14, decimal_places=2),
+    )
+    returned_cost = ReturnItem.objects.filter(
+        return_order__in=completed_returns,
+        restock=True,
+    ).aggregate(total=Sum(returned_cost_expression))['total'] or Decimal('0')
+
+    net_revenue = gross_revenue - refunds
+    net_cost = gross_cost - returned_cost
+    return {
+        'gross_revenue': gross_revenue,
+        'refunds': refunds,
+        'net_revenue': net_revenue,
+        'gross_cost': gross_cost,
+        'returned_cost': returned_cost,
+        'net_cost': net_cost,
+        'gross_margin': net_revenue - net_cost,
+        'sales_count': sales.count(),
+        'returns_count': completed_returns.count(),
+    }
 
 
 def gross_margin_for_period(start_date, end_date) -> Decimal:
     """Marge brute pour une période = Σ (prix_vente - prix_achat) × quantité.
 
-    Comptabilité de caisse pour le crédit : les ventes à crédit sont exclues
-    et les règlements de crédit sont reconnus à leur date avec coût au prorata.
+    Source unique pour le calcul du bénéfice avant déduction des dépenses
+    d'exploitation. Utilisée par accounting et reporting pour garantir la
+    cohérence du chiffre.
     """
-    start_dt, end_dt = local_datetime_bounds(start_date, end_date)
-    items = SaleItem.objects.filter(
-        sale__created_at__gte=start_dt,
-        sale__created_at__lte=end_dt,
-    ).exclude(sale__payment_method=Sale.PaymentMethod.CREDIT)
-    agg = items.aggregate(
-        revenue=Sum(F('unit_price_ht') * F('quantity')),
-        cost=Sum('total_purchase_cost'),
-    )
-    discounts = (
-        Sale.objects.filter(
-            created_at__gte=start_dt,
-            created_at__lte=end_dt,
-        )
-        .exclude(payment_method=Sale.PaymentMethod.CREDIT)
-        .aggregate(total=Sum('discount_amount'))['total']
-        or Decimal('0')
-    )
-    cash_margin = (
-        (agg['revenue'] or Decimal('0'))
-        - (agg['cost'] or Decimal('0'))
-        - discounts
-    )
-    credit_revenue = _credit_payments_total(start_dt, end_dt)
-    credit_cost = _credit_payments_cost(start_dt, end_dt)
-    return cash_margin + credit_revenue - credit_cost
+    return financials_for_period(start_date, end_date)['gross_margin']
 
 
 def operating_expenses_for_period(start_date, end_date) -> Decimal:

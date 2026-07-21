@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
+import Pagination from '../components/Pagination';
 import {
     Users as UsersIcon,
     UserPlus,
@@ -25,7 +26,24 @@ interface User {
     is_active: boolean;
     can_view_stock: boolean;
     can_manage_stock: boolean;
+    effective_can_view_stock: boolean;
+    effective_can_manage_stock: boolean;
 }
+
+const PAGE_SIZE = 12;
+
+const fetchAllUsers = async (): Promise<User[]> => {
+    const users: User[] = [];
+    let nextUrl: string | null = '/auth/users/?page=1';
+    while (nextUrl) {
+        const response = await client.get(nextUrl);
+        if (Array.isArray(response.data)) return response.data;
+        users.push(...(response.data?.results ?? []));
+        const next = response.data?.next as string | null | undefined;
+        nextUrl = next ? `${new URL(next, window.location.origin).pathname}${new URL(next, window.location.origin).search}` : null;
+    }
+    return users;
+};
 
 type UserUpdatePayload = Partial<Omit<User, 'id' | 'avatar'>> & {
     avatar?: File | null;
@@ -37,6 +55,7 @@ export default function Users() {
     const { t } = useTranslation();
     const [searchTerm, setSearchTerm] = useState('');
     const [filterRole, setFilterRole] = useState<'ALL' | 'ADMIN' | 'CASHIER'>('ALL');
+    const [page, setPage] = useState(1);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
     const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -58,12 +77,9 @@ export default function Users() {
     const [previewImage, setPreviewImage] = useState<string | null>(null);
 
     // Fetch Users
-    const { data: users = [], isLoading } = useQuery<User[]>({
+    const { data: users = [], isLoading, isError, refetch } = useQuery<User[]>({
         queryKey: ['users'],
-        queryFn: () => client.get('/auth/users/').then(res => {
-            const data = res.data;
-            return Array.isArray(data) ? data : (data.results || []);
-        })
+        queryFn: fetchAllUsers,
     });
 
     // Mutations
@@ -172,6 +188,11 @@ export default function Users() {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
 
+        if (!editingUser && formData.password !== formData.password_confirm) {
+            toast.error('Les mots de passe ne correspondent pas.');
+            return;
+        }
+
         if (editingUser) {
             // Update mode: Send JSON (preserves booleans properly)
             const updatePayload = {
@@ -215,6 +236,10 @@ export default function Users() {
         }
     };
 
+    useEffect(() => () => {
+        if (previewImage?.startsWith('blob:')) URL.revokeObjectURL(previewImage);
+    }, [previewImage]);
+
     const filteredUsers = users?.filter(user => {
         const matchesSearch =
             user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -225,17 +250,20 @@ export default function Users() {
 
         return matchesSearch && matchesRole;
     });
+    const totalPages = Math.max(1, Math.ceil(filteredUsers.length / PAGE_SIZE));
+    const visibleUsers = filteredUsers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
     return (
         <div className="space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
+                    <h1 className="text-3xl font-bold text-primary">
                         {t('Users')}
                     </h1>
                     <p className="text-muted mt-1">{t('Permissions')}</p>
                 </div>
                 <button
+                    type="button"
                     onClick={() => handleOpenModal()}
                     className="btn-primary flex items-center gap-2"
                 >
@@ -253,14 +281,17 @@ export default function Users() {
                         placeholder={t('SearchUsers')}
                         className="input pl-10 w-full"
                         value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
+                        aria-label={t('SearchUsers')}
+                        onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
                     />
                 </div>
-                <div className="flex bg-tertiary/30 p-1 rounded-lg">
+                <div className="flex bg-tertiary/30 p-1 rounded-lg" role="group" aria-label="Filtrer par rôle">
                     {(['ALL', 'ADMIN', 'CASHIER'] as const).map((role) => (
                         <button
+                            type="button"
                             key={role}
-                            onClick={() => setFilterRole(role)}
+                            onClick={() => { setFilterRole(role); setPage(1); }}
+                            aria-pressed={filterRole === role}
                             className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${filterRole === role
                                 ? 'bg-secondary text-primary shadow-sm'
                                 : 'text-muted hover:text-primary'
@@ -279,14 +310,19 @@ export default function Users() {
                         <div className="loader mx-auto"></div>
                         <p className="mt-4 text-muted">Chargement des utilisateurs...</p>
                     </div>
-                ) : filteredUsers?.length === 0 ? (
+                ) : isError ? (
+                    <div className="col-span-full network-error-state" role="alert">
+                        <p className="font-semibold">Les utilisateurs n’ont pas pu être chargés.</p>
+                        <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                    </div>
+                ) : filteredUsers.length === 0 ? (
                     <div className="col-span-full text-center py-12 bg-tertiary/10 rounded-xl border border-dashed border-tertiary">
                         <UsersIcon size={48} className="mx-auto text-muted mb-4" />
                         <h3 className="text-lg font-bold">Aucun utilisateur trouvé</h3>
-                        <p className="text-muted">Créez votre premier utilisateur pour commencer.</p>
+                        <p className="text-muted">{users.length === 0 ? 'Créez votre premier utilisateur pour commencer.' : 'Modifiez vos filtres pour élargir la recherche.'}</p>
                     </div>
                 ) : (
-                    filteredUsers?.map((user) => (
+                    visibleUsers.map((user) => (
                         <div key={user.id} className="card group hover:shadow-lg transition-all duration-300">
                             <div className="p-6">
                                 <div className="flex items-start justify-between mb-4">
@@ -300,33 +336,40 @@ export default function Users() {
                                                 />
                                             ) : (
                                                 <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-primary to-accent text-white text-xl font-bold">
-                                                    {user.first_name[0]}{user.last_name[0]}
+                                                    {user.first_name?.[0] || user.username[0]}{user.last_name?.[0] || ''}
                                                 </div>
                                             )}
                                         </div>
-                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-white ${user.is_active ? 'bg-success' : 'bg-red-500'
-                                            }`} title={user.is_active ? 'Actif' : 'Inactif'}></div>
+                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-white ${user.is_active ? 'bg-success' : 'bg-danger'}`} title={user.is_active ? 'Actif' : 'Inactif'}>
+                                            <span className="sr-only">{user.is_active ? 'Compte actif' : 'Compte inactif'}</span>
+                                        </div>
                                     </div>
                                     <div className="flex gap-2">
                                         <button
+                                            type="button"
                                             onClick={() => handleOpenPasswordModal(user)}
                                             className="p-2 hover:bg-tertiary/20 rounded-full text-muted hover:text-primary transition-colors"
                                             title="Changer mot de passe"
+                                            aria-label={`Changer le mot de passe de ${user.username}`}
                                         >
                                             <Lock size={18} />
                                         </button>
                                         <button
+                                            type="button"
                                             onClick={() => handleOpenModal(user)}
                                             className="p-2 hover:bg-tertiary/20 rounded-full text-muted hover:text-accent transition-colors"
                                             title="Modifier"
+                                            aria-label={`Modifier ${user.username}`}
                                         >
                                             <Edit size={18} />
                                         </button>
                                         <button
+                                            type="button"
                                             onClick={() => toggleActiveMutation.mutate(user.id)}
                                             className={`p-2 hover:bg-tertiary/20 rounded-full transition-colors ${user.is_active ? 'text-success hover:text-red-500' : 'text-red-500 hover:text-success'
                                                 }`}
                                             title={user.is_active ? 'Désactiver' : 'Activer'}
+                                            aria-label={`${user.is_active ? 'Désactiver' : 'Activer'} ${user.username}`}
                                         >
                                             <Power size={18} />
                                         </button>
@@ -357,13 +400,19 @@ export default function Users() {
                                     </div>
                                     {user.role === 'CASHIER' && (
                                         <div className="grid grid-cols-2 gap-2 mt-3">
-                                            <div className={`p-2 rounded bg-tertiary/20 text-center ${user.can_view_stock ? 'text-success' : 'text-muted'}`}>
+                                            <div className={`p-2 rounded bg-tertiary/20 text-center ${user.effective_can_view_stock ? 'text-success' : 'text-muted'}`}>
                                                 <span className="text-xs font-bold block">Voir Stock</span>
-                                                {user.can_view_stock ? '✓' : '✗'}
+                                                {user.effective_can_view_stock ? '✓' : '✗'}
+                                                {user.effective_can_view_stock !== user.can_view_stock && (
+                                                    <span className="block text-[10px] text-muted">droit global</span>
+                                                )}
                                             </div>
-                                            <div className={`p-2 rounded bg-tertiary/20 text-center ${user.can_manage_stock ? 'text-success' : 'text-muted'}`}>
+                                            <div className={`p-2 rounded bg-tertiary/20 text-center ${user.effective_can_manage_stock ? 'text-success' : 'text-muted'}`}>
                                                 <span className="text-xs font-bold block">Gérer Stock</span>
-                                                {user.can_manage_stock ? '✓' : '✗'}
+                                                {user.effective_can_manage_stock ? '✓' : '✗'}
+                                                {user.effective_can_manage_stock !== user.can_manage_stock && (
+                                                    <span className="block text-[10px] text-muted">droit global</span>
+                                                )}
                                             </div>
                                         </div>
                                     )}
@@ -374,27 +423,37 @@ export default function Users() {
                 )}
             </div>
 
+            {!isLoading && !isError && (
+                <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    totalItems={filteredUsers.length}
+                    pageSize={PAGE_SIZE}
+                    onPageChange={setPage}
+                />
+            )}
+
             {/* User Modal */}
             {isModalOpen && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-                    <div className="bg-secondary rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-scaleIn">
-                        <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
-                            <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent">
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn" role="presentation">
+                    <div className="bg-secondary rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-scaleIn" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
+                        <div className="p-6 border-b flex justify-between items-center bg-tertiary/50">
+                            <h2 id="user-modal-title" className="text-2xl font-bold text-primary">
                                 {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
                             </h2>
-                            <button onClick={closeModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 transition-colors">
+                            <button type="button" onClick={closeModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary transition-colors" aria-label="Fermer la fenêtre">
                                 ×
                             </button>
                         </div>
 
                         <div className="p-8">
-                            <form className="space-y-6">
+                            <form className="space-y-6" onSubmit={handleSubmit}>
                                 {/* Avatar Upload */}
                                 <div className="flex justify-center mb-6">
                                     <div className="relative group cursor-pointer">
                                         <div className="w-24 h-24 rounded-full overflow-hidden bg-tertiary/20 border-2 border-dashed border-tertiary hover:border-primary transition-colors flex items-center justify-center">
                                             {previewImage ? (
-                                                <img src={previewImage} alt="Preview" className="w-full h-full object-cover" />
+                                                <img src={previewImage} alt="Aperçu de l’avatar" className="w-full h-full object-cover" />
                                             ) : (
                                                 <div className="text-center p-2">
                                                     <UserPlus className="mx-auto text-muted mb-1" size={20} />
@@ -407,6 +466,7 @@ export default function Users() {
                                             className="absolute inset-0 opacity-0 cursor-pointer"
                                             onChange={handleImageChange}
                                             accept="image/*"
+                                            aria-label="Choisir un avatar"
                                         />
                                         <div className="absolute bottom-0 right-0 bg-primary text-white p-1 rounded-full shadow-lg transform translate-x-1/4 translate-y-1/4">
                                             <Edit size={12} />
@@ -416,8 +476,9 @@ export default function Users() {
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="form-group">
-                                        <label>Prénom</label>
+                                        <label htmlFor="user-first-name">Prénom</label>
                                         <input
+                                            id="user-first-name"
                                             type="text"
                                             value={formData.first_name}
                                             onChange={e => setFormData({ ...formData, first_name: e.target.value })}
@@ -425,8 +486,9 @@ export default function Users() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label>Nom</label>
+                                        <label htmlFor="user-last-name">Nom</label>
                                         <input
+                                            id="user-last-name"
                                             type="text"
                                             value={formData.last_name}
                                             onChange={e => setFormData({ ...formData, last_name: e.target.value })}
@@ -437,8 +499,9 @@ export default function Users() {
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="form-group">
-                                        <label>Nom d'utilisateur</label>
+                                        <label htmlFor="user-username">Nom d'utilisateur</label>
                                         <input
+                                            id="user-username"
                                             type="text"
                                             value={formData.username}
                                             onChange={e => setFormData({ ...formData, username: e.target.value })}
@@ -446,8 +509,9 @@ export default function Users() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label>Rôle</label>
+                                        <label htmlFor="user-role">Rôle</label>
                                         <select
+                                            id="user-role"
                                             value={formData.role}
                                             onChange={e => setFormData({ ...formData, role: e.target.value as 'ADMIN' | 'CASHIER' })}
                                         >
@@ -491,8 +555,9 @@ export default function Users() {
                                 )}
 
                                 <div className="form-group">
-                                    <label>Email</label>
+                                    <label htmlFor="user-email">Email</label>
                                     <input
+                                        id="user-email"
                                         type="email"
                                         value={formData.email}
                                         onChange={e => setFormData({ ...formData, email: e.target.value })}
@@ -501,8 +566,9 @@ export default function Users() {
                                 </div>
 
                                 <div className="form-group">
-                                    <label>Téléphone</label>
+                                    <label htmlFor="user-phone">Téléphone</label>
                                     <input
+                                        id="user-phone"
                                         type="tel"
                                         value={formData.phone}
                                         onChange={e => setFormData({ ...formData, phone: e.target.value })}
@@ -512,27 +578,31 @@ export default function Users() {
                                 {!editingUser && (
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="form-group">
-                                            <label>Mot de passe</label>
+                                            <label htmlFor="user-password">Mot de passe</label>
                                             <input
+                                                id="user-password"
                                                 type="password"
                                                 value={formData.password}
                                                 onChange={e => setFormData({ ...formData, password: e.target.value })}
                                                 required
-                                                minLength={6}
+                                                minLength={12}
+                                                aria-describedby="user-password-help"
                                             />
                                         </div>
                                         <div className="form-group">
-                                            <label>Confirmer mot de passe</label>
+                                            <label htmlFor="user-password-confirm">Confirmer le mot de passe</label>
                                             <input
+                                                id="user-password-confirm"
                                                 type="password"
                                                 value={formData.password_confirm}
                                                 onChange={e => setFormData({ ...formData, password_confirm: e.target.value })}
                                                 required
-                                                minLength={6}
+                                                minLength={12}
                                             />
                                         </div>
                                     </div>
                                 )}
+                                {!editingUser && <p id="user-password-help" className="text-xs text-muted">Utilisez au moins 12 caractères.</p>}
 
                                 <div className="pt-6 border-t flex justify-end gap-3">
                                     <button
@@ -543,8 +613,7 @@ export default function Users() {
                                         Annuler
                                     </button>
                                     <button
-                                        type="button"
-                                        onClick={handleSubmit}
+                                        type="submit"
                                         className="btn-primary"
                                         disabled={createMutation.isPending || updateMutation.isPending}
                                     >
@@ -566,37 +635,39 @@ export default function Users() {
 
             {/* Password Modal */}
             {isPasswordModalOpen && (
-                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-                    <div className="bg-secondary rounded-2xl w-full max-w-sm shadow-2xl animate-scaleIn">
-                        <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
-                            <h3 className="text-lg font-bold">Changer mot de passe</h3>
-                            <button onClick={closePasswordModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200">×</button>
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn" role="presentation">
+                    <div className="bg-secondary rounded-2xl w-full max-w-sm shadow-2xl animate-scaleIn" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
+                        <div className="p-6 border-b flex justify-between items-center bg-tertiary/50">
+                            <h3 id="password-modal-title" className="text-lg font-bold">Changer le mot de passe</h3>
+                            <button type="button" onClick={closePasswordModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary" aria-label="Fermer la fenêtre">×</button>
                         </div>
-                        <div className="p-6">
+                        <form className="p-6" onSubmit={(event) => { event.preventDefault(); if (selectedUserForPassword) resetPasswordMutation.mutate({ id: selectedUserForPassword.id, password: newPassword }); }}>
                             <p className="text-sm text-muted mb-4">
                                 Réinitialisation pour <strong>{selectedUserForPassword?.username}</strong>
                             </p>
                             <input
+                                aria-label="Nouveau mot de passe"
                                 type="password"
                                 placeholder="Nouveau mot de passe"
                                 className="input w-full mb-4"
                                 value={newPassword}
                                 onChange={e => setNewPassword(e.target.value)}
+                                minLength={12}
+                                required
+                                aria-describedby="reset-password-help"
                             />
+                            <p id="reset-password-help" className="text-xs text-muted mb-4">Utilisez au moins 12 caractères.</p>
                             <div className="flex justify-end gap-2">
-                                <button onClick={closePasswordModal} className="btn-ghost">Annuler</button>
+                                <button type="button" onClick={closePasswordModal} className="btn-ghost">Annuler</button>
                                 <button
-                                    onClick={() => selectedUserForPassword && resetPasswordMutation.mutate({
-                                        id: selectedUserForPassword.id,
-                                        password: newPassword
-                                    })}
+                                    type="submit"
                                     className="btn-primary"
-                                    disabled={resetPasswordMutation.isPending || !newPassword}
+                                    disabled={resetPasswordMutation.isPending || newPassword.length < 12}
                                 >
                                     Sauvegarder
                                 </button>
                             </div>
-                        </div>
+                        </form>
                     </div>
                 </div>
             )}

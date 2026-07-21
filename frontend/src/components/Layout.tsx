@@ -1,6 +1,9 @@
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import client from '../api/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import client, {
+    clearAuthSession,
+    getRefreshToken,
+} from '../api/client';
 import { useTranslation } from 'react-i18next';
 import {
     LayoutDashboard,
@@ -22,6 +25,7 @@ import {
     HandCoins,
     Landmark,
     CreditCard,
+    BadgePercent,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import SyncStatus from './SyncStatus';
@@ -30,9 +34,12 @@ export default function Layout() {
     const { t, i18n } = useTranslation();
     const location = useLocation();
     const navigate = useNavigate();
-    const [theme, setTheme] = useState<'light' | 'dark'>(() =>
-        localStorage.getItem('theme') === 'dark' ? 'dark' : 'light'
-    );
+    const queryClient = useQueryClient();
+    const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+        const saved = localStorage.getItem('theme');
+        if (saved === 'dark' || saved === 'light') return saved;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    });
     const [sidebarOpen, setSidebarOpen] = useState(false);
 
     // Récupérer le profil utilisateur complet pour les permissions granulaires
@@ -58,12 +65,20 @@ export default function Layout() {
         document.documentElement.setAttribute('data-theme', theme);
     }, [theme]);
 
+    useEffect(() => {
+        const language = i18n.resolvedLanguage || i18n.language || 'fr';
+        const direction = language === 'ar' ? 'rtl' : 'ltr';
+        localStorage.setItem('language', language);
+        document.documentElement.lang = language;
+        document.documentElement.dir = direction;
+    }, [i18n.language, i18n.resolvedLanguage]);
+
     const toggleTheme = () => {
         setTheme(current => current === 'light' ? 'dark' : 'light');
     };
 
     const handleLogout = async () => {
-        const refresh = localStorage.getItem('refreshToken');
+        const refresh = getRefreshToken();
         if (refresh) {
             try {
                 await client.post('/auth/logout/', { refresh });
@@ -79,14 +94,14 @@ export default function Layout() {
                 // ignore
             }
         }
-        localStorage.removeItem('token');
-        localStorage.removeItem('refreshToken');
-        localStorage.removeItem('userRole');
-        navigate('/login');
+        clearAuthSession();
+        await queryClient.cancelQueries();
+        queryClient.clear();
+        navigate('/login', { replace: true });
     };
 
     const navItems = [
-        { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: true, tone: 'dashboard' },
+        { icon: LayoutDashboard, label: t('Dashboard'), path: '/', show: isAdmin, tone: 'dashboard' },
         { icon: Wallet, label: 'Caisse', path: '/cash-register', show: isAdmin, tone: 'cash' },
         { icon: Landmark, label: isAdmin ? 'Comptabilité' : 'Dépenses', path: '/accounting', show: true, tone: 'accounting' },
         { icon: FileText, label: t('Reports'), path: '/reports', show: isAdmin, tone: 'reports' },
@@ -99,6 +114,7 @@ export default function Layout() {
         },
         { icon: ShoppingCart, label: 'Vente', path: '/pos', show: true, tone: 'sale' },
         { icon: CreditCard, label: 'Crédit', path: '/credit', show: true, tone: 'credit' },
+        { icon: BadgePercent, label: 'Remises', path: '/discounts', show: isAdmin, tone: 'sale' },
         { icon: ClipboardList, label: 'Commandes', path: '/purchase-orders', show: isAdmin, tone: 'orders' },
         { icon: Truck, label: t('Suppliers'), path: '/suppliers', show: isAdmin, tone: 'suppliers' },
         { icon: RotateCcw, label: 'Retours', path: '/returns', show: isAdmin, tone: 'returns' },
@@ -110,18 +126,21 @@ export default function Layout() {
     ];
 
     const filteredNavItems = navItems.filter(item => item.show);
-    // Bottom nav mobile : on inclut /pos et /credit (workflow vendeur + admin),
-    // les autres entrées admin restent accessibles via le menu burger.
-    const mobileNavPaths = ['/', '/pos', '/credit', '/accounting', '/inventory'];
+    const mobileNavPaths = isAdmin
+        ? ['/', '/cash-register', '/pos', '/credit', '/inventory']
+        : ['/pos', '/credit', '/inventory', '/accounting'];
     const mobileNavItems = mobileNavPaths
         .map(path => filteredNavItems.find(item => item.path === path))
         .filter((item): item is typeof filteredNavItems[number] => Boolean(item));
 
     return (
         <div className="flex min-h-screen" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
+            <a className="skip-link" href="#main-content">Aller au contenu</a>
             {/* Overlay for mobile */}
             {sidebarOpen && (
-                <div
+                <button
+                    type="button"
+                    aria-label="Fermer le menu"
                     className="fixed inset-0 bg-black opacity-50 z-30 lg:hidden"
                     onClick={() => setSidebarOpen(false)}
                 />
@@ -146,13 +165,16 @@ export default function Layout() {
                 <nav className="sidebar-nav">
                     {filteredNavItems.map((item) => {
                         const Icon = item.icon;
-                        const isActive = location.pathname === item.path;
+                        const isActive = item.path === '/'
+                            ? location.pathname === '/'
+                            : location.pathname.startsWith(item.path);
                         return (
                             <Link
                                 key={item.path}
                                 to={item.path}
                                 className={`nav-item ${isActive ? 'active' : ''}`}
                                 onClick={() => setSidebarOpen(false)}
+                                aria-current={isActive ? 'page' : undefined}
                             >
                                 <span className={`nav-icon nav-icon-${item.tone}`}>
                                     <Icon size={19} />
@@ -183,6 +205,8 @@ export default function Layout() {
                         <button
                             className="btn-ghost btn-icon lg:hidden"
                             onClick={() => setSidebarOpen(!sidebarOpen)}
+                            aria-label={sidebarOpen ? 'Fermer le menu' : 'Ouvrir le menu'}
+                            aria-expanded={sidebarOpen}
                         >
                             <Menu size={24} />
                         </button>
@@ -200,18 +224,21 @@ export default function Layout() {
                             <button
                                 onClick={() => i18n.changeLanguage('fr')}
                                 className={`btn-sm btn-ghost ${i18n.language === 'fr' ? 'bg-accent-light text-accent' : ''}`}
+                                aria-pressed={i18n.language === 'fr'}
                             >
                                 FR
                             </button>
                             <button
                                 onClick={() => i18n.changeLanguage('en')}
                                 className={`btn-sm btn-ghost ${i18n.language === 'en' ? 'bg-accent-light text-accent' : ''}`}
+                                aria-pressed={i18n.language === 'en'}
                             >
                                 EN
                             </button>
                             <button
                                 onClick={() => i18n.changeLanguage('ar')}
                                 className={`btn-sm btn-ghost ${i18n.language === 'ar' ? 'bg-accent-light text-accent' : ''}`}
+                                aria-pressed={i18n.language === 'ar'}
                             >
                                 AR
                             </button>
@@ -222,19 +249,20 @@ export default function Layout() {
                             onClick={toggleTheme}
                             className="btn-ghost btn-icon"
                             title={theme === 'light' ? 'Mode sombre' : 'Mode clair'}
+                            aria-label={theme === 'light' ? 'Activer le mode sombre' : 'Activer le mode clair'}
                         >
                             {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
                         </button>
 
                         {/* User Badge */}
                         <div className={`badge ${isAdmin ? 'badge-accent' : 'badge-success'}`}>
-                            {isAdmin ? 'Admin' : 'Vendeur'}
+                            {currentUser?.first_name || currentUser?.username || (isAdmin ? 'Admin' : 'Vendeur')}
                         </div>
                     </div>
                 </header>
 
                 {/* Page Content */}
-                <main className="page-content flex-1">
+                <main id="main-content" tabIndex={-1} className="page-content flex-1">
                     <Outlet />
                 </main>
             </div>
@@ -242,18 +270,31 @@ export default function Layout() {
             <nav className="mobile-bottom-nav" aria-label="Navigation mobile">
                 {mobileNavItems.map((item) => {
                     const Icon = item.icon;
-                    const isActive = location.pathname === item.path;
+                    const isActive = item.path === '/'
+                        ? location.pathname === '/'
+                        : location.pathname.startsWith(item.path);
                     return (
                         <Link
                             key={item.path}
                             to={item.path}
                             className={`mobile-bottom-item ${isActive ? 'active' : ''}`}
+                            aria-current={isActive ? 'page' : undefined}
                         >
                             <Icon size={20} />
                             <span>{item.label}</span>
                         </Link>
                     );
                 })}
+                <button
+                    type="button"
+                    className="mobile-bottom-item"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Afficher plus de rubriques"
+                    aria-expanded={sidebarOpen}
+                >
+                    <Menu size={20} />
+                    <span>Plus</span>
+                </button>
             </nav>
         </div>
     );

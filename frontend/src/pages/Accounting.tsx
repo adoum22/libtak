@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
     BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -21,6 +21,22 @@ const MONTHS_FR = [
 const PIE_COLORS = ['#0f766e', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#14b8a6', '#64748b', '#2563eb'];
 const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
 const gridStroke = 'var(--color-border-light)';
+
+type OperationAttempt = { fingerprint: string; key: string };
+
+const operationIdFor = (
+    attemptRef: { current: OperationAttempt | null },
+    payload: object,
+) => {
+    const fingerprint = JSON.stringify(payload);
+    if (attemptRef.current?.fingerprint !== fingerprint) {
+        attemptRef.current = {
+            fingerprint,
+            key: globalThis.crypto.randomUUID(),
+        };
+    }
+    return attemptRef.current.key;
+};
 
 const categoryLabel = (entry: unknown) => {
     if (typeof entry === 'object' && entry !== null && 'category' in entry) {
@@ -49,6 +65,7 @@ interface MonthData {
     revenue: number;
     gross_margin?: number;
     net_profit: number;
+    supplier_payments_total?: number;
     cash_after_withdrawal?: number;
     sales_margin_detail?: SalesMarginDetail;
 }
@@ -58,17 +75,20 @@ interface YearSummary {
         month: number; label: string;
         revenue: number; manager_withdrawal: number;
         expenses: number; net_profit: number;
+        supplier_payments?: number;
     }>;
     quarters: Array<{
         quarter: number; label: string;
         revenue: number; manager_withdrawal: number;
         expenses: number; net_profit: number;
+        supplier_payments?: number;
     }>;
     category_breakdown: Array<{ category: string; total: number }>;
     sales_margin_detail?: SalesMarginDetail;
     totals: {
         revenue: number; manager_withdrawal: number;
         expenses: number; net_profit: number;
+        supplier_payments?: number;
     };
 }
 
@@ -109,6 +129,7 @@ interface PeriodSummary {
     expenses: number;
     expenses_dated?: number;
     expenses_undated_share?: number;
+    supplier_payments?: number;
     net_profit: number;
     expenses_detail: Expense[];
     category_breakdown: Array<{ category: string; total: number }>;
@@ -118,6 +139,7 @@ interface PeriodSummary {
         revenue: number;
         gross_margin: number;
         expenses: number;
+        supplier_payments?: number;
         net_profit: number;
     }>;
     sales_margin_detail?: SalesMarginDetail;
@@ -131,7 +153,10 @@ export default function Accounting() {
     const [month, setMonth] = useState(now.getMonth() + 1);
     const [selectedDate, setSelectedDate] = useState(toLocalDateInputValue(now));
     const [tab, setTab] = useState<'day' | 'week' | 'month' | 'year' | 'categories'>('day');
-    const { data: currentUser, isLoading: currentUserLoading } = useQuery({
+    const [withdrawalAttempt, setWithdrawalAttempt] = useState<OperationAttempt | null>(null);
+    const [expenseAttempt, setExpenseAttempt] = useState<OperationAttempt | null>(null);
+    const cashierExpenseAttemptRef = useRef<OperationAttempt | null>(null);
+    const { data: currentUser, isLoading: currentUserLoading, isError: currentUserError, refetch: refetchCurrentUser } = useQuery({
         queryKey: ['currentUser'],
         queryFn: () => client.get('/auth/me/').then(r => r.data),
         retry: false,
@@ -140,7 +165,7 @@ export default function Accounting() {
     const isAdmin = currentUser?.role === 'ADMIN';
 
     // ---------- Queries ----------
-    const { data: categories = [] } = useQuery<Category[]>({
+    const { data: categories = [], isError: categoriesError, refetch: refetchCategories } = useQuery<Category[]>({
         queryKey: ['acc-categories'],
         queryFn: async () => {
             const r = await client.get('/accounting/categories/');
@@ -149,21 +174,21 @@ export default function Accounting() {
         enabled: Boolean(currentUser),
     });
 
-    const { data: monthData, isLoading: monthLoading } = useQuery<MonthData>({
+    const { data: monthData, isLoading: monthLoading, isError: monthIsError, refetch: refetchMonth } = useQuery<MonthData>({
         queryKey: ['acc-month', year, month],
         queryFn: () => client.get(`/accounting/monthly/by-period/${year}/${month}/`).then(r => r.data),
         enabled: isAdmin,
         staleTime: 0,
     });
 
-    const { data: summary } = useQuery<YearSummary>({
+    const { data: summary, isLoading: summaryLoading, isError: summaryIsError, refetch: refetchSummary } = useQuery<YearSummary>({
         queryKey: ['acc-summary', year],
         queryFn: () => client.get(`/accounting/summary/?year=${year}`).then(r => r.data),
         enabled: isAdmin,
         staleTime: 0,
     });
 
-    const { data: periodSummary, isLoading: periodLoading, isError: periodIsError, error: periodError } = useQuery<PeriodSummary>({
+    const { data: periodSummary, isLoading: periodLoading, isError: periodIsError, refetch: refetchPeriod } = useQuery<PeriodSummary>({
         queryKey: ['acc-period', tab, selectedDate],
         queryFn: () => client
             .get(`/accounting/period-summary/?type=${tab === 'week' ? 'week' : 'day'}&date=${selectedDate}`)
@@ -186,7 +211,7 @@ export default function Accounting() {
     });
 
     const addWithdrawal = useMutation({
-        mutationFn: async (payload: { amount: number; note: string; incurred_on: string }) => {
+        mutationFn: async (payload: { amount: number; note: string; incurred_on: string; operation_id: string }) => {
             try {
                 return await client.post(`/accounting/monthly/${monthData!.id}/withdraw/`, payload);
             } catch (error: unknown) {
@@ -214,12 +239,14 @@ export default function Accounting() {
                     description: payload.note,
                     incurred_on: payload.incurred_on,
                     paid_from_cash: true,
+                    operation_id: payload.operation_id,
                 });
             }
         },
         onSuccess: () => {
             toast.success('Retrait enregistré en dépense caisse');
             setWithdrawalDraft({ amount: '', note: '' });
+            setWithdrawalAttempt(null);
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
             qc.invalidateQueries({ queryKey: ['acc-period'] });
@@ -229,10 +256,12 @@ export default function Accounting() {
     });
 
     const addExpense = useMutation({
-        mutationFn: (payload: { category: number; amount: number; description: string; paid_from_cash: boolean; incurred_on?: string; year?: number; month?: number }) =>
+        mutationFn: (payload: { category: number; amount: number; description: string; paid_from_cash: boolean; incurred_on?: string; year?: number; month?: number; operation_id: string }) =>
             client.post('/accounting/expenses/', { ...payload, year: payload.year ?? year, month: payload.month ?? month }),
         onSuccess: () => {
             toast.success('Dépense ajoutée');
+            setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
+            setExpenseAttempt(null);
             qc.invalidateQueries({ queryKey: ['acc-month', year, month] });
             qc.invalidateQueries({ queryKey: ['acc-summary', year] });
             qc.invalidateQueries({ queryKey: ['acc-period'] });
@@ -242,10 +271,12 @@ export default function Accounting() {
     });
 
     const addCashierExpense = useMutation({
-        mutationFn: (payload: { category: number; amount: number; description: string; incurred_on: string }) =>
+        mutationFn: (payload: { category: number; amount: number; description: string; incurred_on: string; operation_id: string }) =>
             client.post('/accounting/cashier-expense/', payload),
         onSuccess: () => {
             toast.success('Dépense ajoutée');
+            setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
+            cashierExpenseAttemptRef.current = null;
             qc.invalidateQueries({ queryKey: ['cashRegister'] });
         },
         onError: (e: unknown) => toast.error(getApiErrorMessage(e, 'Erreur ajout depense')),
@@ -309,13 +340,51 @@ export default function Accounting() {
             toast.error('Montant invalide.');
             return;
         }
-        addCashierExpense.mutate({
+        const payload = {
             category: Number(newExp.category),
             amount,
             description: newExp.description,
             incurred_on: selectedDate,
-        }, {
-            onSuccess: () => setNewExp({ category: '', amount: '', description: '', paid_from_cash: true }),
+        };
+        addCashierExpense.mutate({
+            ...payload,
+            operation_id: operationIdFor(cashierExpenseAttemptRef, payload),
+        });
+    };
+
+    const submitWithdrawal = (payload: {
+        amount: number;
+        note: string;
+        incurred_on: string;
+    }) => {
+        const fingerprint = JSON.stringify(payload);
+        const operationId = withdrawalAttempt?.fingerprint === fingerprint
+            ? withdrawalAttempt.key
+            : globalThis.crypto.randomUUID();
+        setWithdrawalAttempt({ fingerprint, key: operationId });
+        addWithdrawal.mutate({
+            ...payload,
+            operation_id: operationId,
+        });
+    };
+
+    const submitAdminExpense = (payload: {
+        category: number;
+        amount: number;
+        description: string;
+        paid_from_cash: boolean;
+        incurred_on?: string;
+        year?: number;
+        month?: number;
+    }) => {
+        const fingerprint = JSON.stringify(payload);
+        const operationId = expenseAttempt?.fingerprint === fingerprint
+            ? expenseAttempt.key
+            : globalThis.crypto.randomUUID();
+        setExpenseAttempt({ fingerprint, key: operationId });
+        addExpense.mutate({
+            ...payload,
+            operation_id: operationId,
         });
     };
 
@@ -555,8 +624,9 @@ export default function Accounting() {
         if (periodLoading) return <div className="text-center py-12 text-muted">Chargement...</div>;
         if (periodIsError) {
             return (
-                <div className="card p-6 text-center text-danger">
-                    {getApiErrorMessage(periodError, 'Impossible de charger cette période')}
+                <div className="network-error-state" role="alert">
+                    <p className="font-semibold">Impossible de charger cette période.</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetchPeriod()}>Réessayer</button>
                 </div>
             );
         }
@@ -601,6 +671,14 @@ export default function Accounting() {
                     </div>
                 </div>
 
+                <div className="card p-4 flex items-center gap-3 border-l-4 border-l-warning">
+                    <Package size={22} className="text-warning" />
+                    <div>
+                        <p className="font-semibold">Règlements fournisseurs : {fmt(periodSummary.supplier_payments ?? 0)} DH</p>
+                        <p className="text-xs text-muted">Information de trésorerie uniquement, sans déduction de la marge ni du bénéfice.</p>
+                    </div>
+                </div>
+
                 {isWeek && (
                     <div className="card chart-card p-6">
                         <h2 className="chart-title mb-4">
@@ -608,7 +686,7 @@ export default function Accounting() {
                             Résultat par jour
                         </h2>
                         <div className="h-[280px] w-full">
-                            <ResponsiveContainer>
+                            <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                                 <BarChart data={periodSummary.daily}>
                                     <CartesianGrid stroke={gridStroke} vertical={false} />
                                     <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
@@ -668,7 +746,7 @@ export default function Accounting() {
                             disabled={!newExp.category || !newExp.amount || addExpense.isPending}
                             onClick={() => {
                                 const dateParts = selectedDate.split('-').map(Number);
-                                addExpense.mutate({
+                                const payload = {
                                     category: Number(newExp.category),
                                     amount: Number(newExp.amount),
                                     description: newExp.description,
@@ -676,12 +754,12 @@ export default function Accounting() {
                                     incurred_on: selectedDate,
                                     year: dateParts[0],
                                     month: dateParts[1],
-                                });
+                                };
+                                submitAdminExpense(payload);
                                 if (dateParts.length === 3) {
                                     setYear(dateParts[0]);
                                     setMonth(dateParts[1]);
                                 }
-                                setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
                             }}
                         >
                             <Plus size={18} /> Ajouter
@@ -768,7 +846,14 @@ export default function Accounting() {
     };
 
     const renderMonthTab = () => {
-        if (monthLoading || !monthData) return <div className="text-center py-12 text-muted">Chargement...</div>;
+        if (monthLoading) return <div className="text-center py-12 text-muted" role="status">Chargement…</div>;
+        if (monthIsError) return (
+            <div className="network-error-state" role="alert">
+                <p className="font-semibold">Les données mensuelles sont indisponibles.</p>
+                <button type="button" className="btn-secondary mt-4" onClick={() => void refetchMonth()}>Réessayer</button>
+            </div>
+        );
+        if (!monthData) return <div className="text-center py-12 text-muted">Aucune donnée pour ce mois.</div>;
 
         const revenue = monthData.revenue ?? 0;
         const totalExp = monthData.total_expenses ?? 0;
@@ -839,6 +924,14 @@ export default function Accounting() {
                     </div>
                 </div>
 
+                <div className="card p-4 flex items-center gap-3 border-l-4 border-l-warning">
+                    <Package size={22} className="text-warning" />
+                    <div>
+                        <p className="font-semibold">Règlements fournisseurs du mois : {fmt(monthData.supplier_payments_total ?? 0)} DH</p>
+                        <p className="text-xs text-muted">Flux de trésorerie affiché à part ; le coût des ventes reste reconnu lors de la vente.</p>
+                    </div>
+                </div>
+
                 {/* Charts row */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Décomposition CA -> Bénéfice */}
@@ -848,15 +941,15 @@ export default function Accounting() {
                             Décomposition du résultat
                         </h2>
                         <div className="h-[280px] w-full">
-                            <ResponsiveContainer>
+                            <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                                 <BarChart data={waterfall}>
                                     <CartesianGrid stroke={gridStroke} vertical={false} />
                                     <XAxis dataKey="name" tick={axisTick} tickLine={false} axisLine={false} />
                                     <YAxis tick={axisTick} tickLine={false} axisLine={false} width={48} />
                                     <Tooltip content={<PremiumChartTooltip valueSuffix=" DH" />} cursor={{ fill: 'var(--color-accent-light)' }} />
                                     <Bar dataKey="value" name="Montant" radius={[10, 10, 4, 4]} maxBarSize={48}>
-                                        {waterfall.map((d, i) => (
-                                            <Cell key={i} fill={d.fill} />
+                                        {waterfall.map(d => (
+                                            <Cell key={d.name} fill={d.fill} />
                                         ))}
                                     </Bar>
                                 </BarChart>
@@ -876,7 +969,7 @@ export default function Accounting() {
                                     Aucune dépense ce mois
                                 </div>
                             ) : (
-                                <ResponsiveContainer>
+                                <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                                     <PieChart>
                                         <Pie
                                             data={catData} dataKey="total" nameKey="category"
@@ -925,11 +1018,14 @@ export default function Accounting() {
                             <button
                                 className="btn-primary mt-4 w-full"
                                 disabled={!canAddWithdrawal || addWithdrawal.isPending}
-                                onClick={() => addWithdrawal.mutate({
-                                    amount: withdrawalAmount,
-                                    note: withdrawalDraft.note.trim() || 'Retrait gerant',
-                                    incurred_on: monthExpenseDate,
-                                })}
+                                onClick={() => {
+                                    const payload = {
+                                        amount: withdrawalAmount,
+                                        note: withdrawalDraft.note.trim() || 'Retrait gerant',
+                                        incurred_on: monthExpenseDate,
+                                    };
+                                    submitWithdrawal(payload);
+                                }}
                             >
                                 Ajouter le retrait
                             </button>
@@ -988,13 +1084,15 @@ export default function Accounting() {
                             className="btn-primary flex items-center justify-center gap-2"
                             disabled={!newExp.category || !newExp.amount || addExpense.isPending}
                             onClick={() => {
-                                addExpense.mutate({
+                                const payload = {
                                     category: Number(newExp.category),
                                     amount: Number(newExp.amount),
                                     description: newExp.description,
                                     paid_from_cash: newExp.paid_from_cash,
-                                });
-                                setNewExp({ category: '', amount: '', description: '', paid_from_cash: true });
+                                    year,
+                                    month,
+                                };
+                                submitAdminExpense(payload);
                             }}
                         >
                             <Plus size={18} /> Ajouter
@@ -1081,7 +1179,14 @@ export default function Accounting() {
     };
 
     const renderYearTab = () => {
-        if (!summary) return <div className="text-center py-12 text-muted">Chargement...</div>;
+        if (summaryLoading) return <div className="text-center py-12 text-muted" role="status">Chargement…</div>;
+        if (summaryIsError) return (
+            <div className="network-error-state" role="alert">
+                <p className="font-semibold">Le bilan annuel est indisponible.</p>
+                <button type="button" className="btn-secondary mt-4" onClick={() => void refetchSummary()}>Réessayer</button>
+            </div>
+        );
+        if (!summary) return <div className="text-center py-12 text-muted">Aucune donnée pour cette année.</div>;
         return (
             <div className="space-y-6">
                 {/* Year totals */}
@@ -1095,6 +1200,14 @@ export default function Accounting() {
                     <div className="stat-card"><div className="stat-icon bg-accent-light"><TrendingUp size={24} className="text-accent" /></div>
                         <div><p className="stat-label">Bénéfice net annuel</p>
                             <p className={`stat-value ${summary.totals.net_profit >= 0 ? 'text-success' : 'text-red-500'}`}>{fmt(summary.totals.net_profit)} DH</p></div></div>
+                </div>
+
+                <div className="card p-4 flex items-center gap-3 border-l-4 border-l-warning">
+                    <Package size={22} className="text-warning" />
+                    <div>
+                        <p className="font-semibold">Règlements fournisseurs annuels : {fmt(summary.totals.supplier_payments ?? 0)} DH</p>
+                        <p className="text-xs text-muted">Suivi de trésorerie séparé des dépenses d’exploitation et du bénéfice.</p>
+                    </div>
                 </div>
 
                 {/* Quarter cards */}
@@ -1115,7 +1228,7 @@ export default function Accounting() {
                         CA vs Dépenses
                     </h2>
                     <div className="h-[320px] w-full">
-                        <ResponsiveContainer>
+                        <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                             <BarChart data={summary.months}>
                                 <CartesianGrid stroke={gridStroke} vertical={false} />
                                 <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
@@ -1141,7 +1254,7 @@ export default function Accounting() {
                             {summary.category_breakdown.length === 0 ? (
                                 <div className="flex items-center justify-center h-full text-muted">Aucune dépense enregistrée</div>
                             ) : (
-                                <ResponsiveContainer>
+                                <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                                     <PieChart>
                                         <Pie
                                             data={summary.category_breakdown}
@@ -1168,7 +1281,7 @@ export default function Accounting() {
                             Bénéfice net mensuel
                         </h2>
                         <div className="h-[320px] w-full">
-                            <ResponsiveContainer>
+                            <ResponsiveContainer initialDimension={{ width: 1, height: 1 }}>
                                 <LineChart data={summary.months}>
                                     <CartesianGrid stroke={gridStroke} vertical={false} />
                                     <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
@@ -1254,7 +1367,14 @@ export default function Accounting() {
         );
     };
 
-    const renderCategoriesTab = () => (
+    const renderCategoriesTab = () => {
+        if (categoriesError) return (
+            <div className="network-error-state" role="alert">
+                <p className="font-semibold">Les catégories sont indisponibles.</p>
+                <button type="button" className="btn-secondary mt-4" onClick={() => void refetchCategories()}>Réessayer</button>
+            </div>
+        );
+        return (
         <div className="space-y-4">
             <div className="card p-6">
                 <h2 className="text-lg font-semibold mb-4">Nouvelle catégorie</h2>
@@ -1301,10 +1421,29 @@ export default function Accounting() {
                 </table>
             </div>
         </div>
-    );
+        );
+    };
 
     if (currentUserLoading) {
-        return <div className="text-center py-12 text-muted">Chargement...</div>;
+        return <div className="text-center py-12 text-muted" role="status">Chargement…</div>;
+    }
+
+    if (currentUserError) {
+        return (
+            <div className="network-error-state" role="alert">
+                <p className="font-semibold">Votre rôle ne peut pas être vérifié actuellement.</p>
+                <button type="button" className="btn-secondary mt-4" onClick={() => void refetchCurrentUser()}>Réessayer</button>
+            </div>
+        );
+    }
+
+    if (!isAdmin && categoriesError) {
+        return (
+            <div className="network-error-state" role="alert">
+                <p className="font-semibold">Le formulaire de dépense est indisponible.</p>
+                <button type="button" className="btn-secondary mt-4" onClick={() => void refetchCategories()}>Réessayer</button>
+            </div>
+        );
     }
 
     if (!isAdmin) {
@@ -1321,18 +1460,19 @@ export default function Accounting() {
 
             {/* Period selector */}
             <div className="card p-4 flex flex-wrap items-center gap-4">
-                <div className="flex bg-tertiary rounded-lg p-1">
-                    <button onClick={() => setTab('day')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'day' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarDays size={16} /> Quotidien</button>
-                    <button onClick={() => setTab('week')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'week' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarRange size={16} /> Hebdomadaire</button>
-                    <button onClick={() => setTab('month')} className={`px-4 py-2 rounded-md transition ${tab === 'month' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Mensuel</button>
-                    <button onClick={() => setTab('year')} className={`px-4 py-2 rounded-md transition ${tab === 'year' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Annuel</button>
-                    <button onClick={() => setTab('categories')} className={`px-4 py-2 rounded-md transition ${tab === 'categories' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Catégories</button>
+                <div className="flex bg-tertiary rounded-lg p-1" role="tablist" aria-label="Période comptable">
+                    <button type="button" role="tab" aria-selected={tab === 'day'} onClick={() => setTab('day')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'day' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarDays size={16} /> Quotidien</button>
+                    <button type="button" role="tab" aria-selected={tab === 'week'} onClick={() => setTab('week')} className={`px-4 py-2 rounded-md transition flex items-center gap-2 ${tab === 'week' ? 'bg-accent text-white' : 'hover:bg-hover'}`}><CalendarRange size={16} /> Hebdomadaire</button>
+                    <button type="button" role="tab" aria-selected={tab === 'month'} onClick={() => setTab('month')} className={`px-4 py-2 rounded-md transition ${tab === 'month' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Mensuel</button>
+                    <button type="button" role="tab" aria-selected={tab === 'year'} onClick={() => setTab('year')} className={`px-4 py-2 rounded-md transition ${tab === 'year' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Annuel</button>
+                    <button type="button" role="tab" aria-selected={tab === 'categories'} onClick={() => setTab('categories')} className={`px-4 py-2 rounded-md transition ${tab === 'categories' ? 'bg-accent text-white' : 'hover:bg-hover'}`}>Catégories</button>
                 </div>
 
                 {tab !== 'categories' && (
                     <div className="flex items-center gap-2 ml-auto">
                         {(tab === 'day' || tab === 'week') && (
                             <input
+                                aria-label="Date de la période comptable"
                                 type="date"
                                 value={selectedDate}
                                 onChange={(e) => setSelectedDate(e.target.value)}
@@ -1341,19 +1481,19 @@ export default function Accounting() {
                         )}
                         {tab === 'month' && (
                             <>
-                                <button className="btn-secondary btn-icon" onClick={() => {
+                                <button type="button" className="btn-secondary btn-icon" aria-label="Mois précédent" onClick={() => {
                                     if (month === 1) { setMonth(12); setYear(y => y - 1); } else { setMonth(m => m - 1); }
                                 }}><ChevronLeft size={20} /></button>
-                                <select value={month} onChange={(e) => setMonth(parseInt(e.target.value))} className="w-auto">
-                                    {MONTHS_FR.map((name, i) => <option key={i} value={i + 1}>{name}</option>)}
+                                <select aria-label="Mois comptable" value={month} onChange={(e) => setMonth(parseInt(e.target.value))} className="w-auto">
+                                    {MONTHS_FR.map((name, i) => <option key={name} value={i + 1}>{name}</option>)}
                                 </select>
-                                <button className="btn-secondary btn-icon" onClick={() => {
+                                <button type="button" className="btn-secondary btn-icon" aria-label="Mois suivant" onClick={() => {
                                     if (month === 12) { setMonth(1); setYear(y => y + 1); } else { setMonth(m => m + 1); }
                                 }}><ChevronRight size={20} /></button>
                             </>
                         )}
                         {(tab === 'month' || tab === 'year') && (
-                            <select value={year} onChange={(e) => setYear(parseInt(e.target.value))} className="w-auto">
+                            <select aria-label="Année comptable" value={year} onChange={(e) => setYear(parseInt(e.target.value))} className="w-auto">
                                 {Array.from({ length: 6 }, (_, i) => now.getFullYear() - i).map(y => (
                                     <option key={y} value={y}>{y}</option>
                                 ))}

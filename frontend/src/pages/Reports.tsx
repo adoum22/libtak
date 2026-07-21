@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import client, { getApiErrorMessage } from '../api/client';
+import client from '../api/client';
 import { useState } from 'react';
 import { useToast } from '../components/ToastContext';
 import {
@@ -70,7 +70,7 @@ export default function Reports() {
         }
     };
 
-    const { data: report, isLoading } = useQuery<ReportData>({
+    const { data: report, isLoading, isError, refetch } = useQuery<ReportData>({
         queryKey: ['report', reportType, selectedDate, weekOffset, selectedMonth],
         queryFn: () => client.get(`/reporting/${reportType}/${getQueryParams()}`).then(res => res.data)
     });
@@ -106,10 +106,8 @@ export default function Reports() {
             link.click();
             link.remove();
             window.URL.revokeObjectURL(url);
-        } catch (error: unknown) {
-            console.error('Erreur lors du téléchargement', error);
-            const message = getApiErrorMessage(error, 'Erreur lors du telechargement');
-            toast.error('Erreur : ' + message);
+        } catch {
+            toast.error('Le rapport n’a pas pu être téléchargé. Réessayez.');
         }
     };
 
@@ -123,6 +121,7 @@ export default function Reports() {
                 {report && (
                     <div className="flex items-center gap-2">
                         <button
+                            type="button"
                             onClick={handleDownloadPDF}
                             className="btn-outline flex items-center gap-2 text-primary border-primary hover:bg-primary hover:text-white"
                             title="PDF si disponible, sinon Excel automatiquement"
@@ -131,6 +130,7 @@ export default function Reports() {
                             <span>Télécharger PDF</span>
                         </button>
                         <button
+                            type="button"
                             onClick={handleDownloadExcel}
                             className="btn-outline flex items-center gap-2 text-success border-success hover:bg-success hover:text-white"
                             title="Forcer l'export Excel"
@@ -145,8 +145,11 @@ export default function Reports() {
             {/* Report Type Selector */}
             <div className="card p-4">
                 <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex bg-tertiary rounded-lg p-1">
+                    <div className="flex bg-tertiary rounded-lg p-1" role="tablist" aria-label="Type de rapport">
                         <button
+                            type="button"
+                            role="tab"
+                            aria-selected={reportType === 'daily'}
                             onClick={() => {
                                 setReportType('daily');
                                 setSelectedDate(new Date().toISOString().split('T')[0]);
@@ -157,6 +160,9 @@ export default function Reports() {
                             Journalier
                         </button>
                         <button
+                            type="button"
+                            role="tab"
+                            aria-selected={reportType === 'weekly'}
                             onClick={() => {
                                 setReportType('weekly');
                                 setWeekOffset(0);
@@ -167,6 +173,9 @@ export default function Reports() {
                             Hebdomadaire
                         </button>
                         <button
+                            type="button"
+                            role="tab"
+                            aria-selected={reportType === 'monthly'}
                             onClick={() => {
                                 setReportType('monthly');
                                 setSelectedMonth({
@@ -185,6 +194,7 @@ export default function Reports() {
                         {reportType === 'daily' && (
                             <div className="flex items-center gap-2">
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         const date = new Date(selectedDate);
                                         date.setDate(date.getDate() - 1);
@@ -192,16 +202,19 @@ export default function Reports() {
                                     }}
                                     className="btn-secondary btn-icon"
                                     title="Jour précédent"
+                                    aria-label="Jour précédent"
                                 >
                                     <ChevronLeft size={20} />
                                 </button>
                                 <input
+                                    aria-label="Date du rapport"
                                     type="date"
                                     value={selectedDate}
                                     onChange={(e) => setSelectedDate(e.target.value)}
                                     className="w-auto"
                                 />
                                 <button
+                                    type="button"
                                     onClick={() => {
                                         const date = new Date(selectedDate);
                                         date.setDate(date.getDate() + 1);
@@ -214,6 +227,7 @@ export default function Reports() {
                                     }}
                                     className="btn-secondary btn-icon"
                                     title="Jour suivant"
+                                    aria-label="Jour suivant"
                                     disabled={selectedDate >= new Date().toISOString().split('T')[0]}
                                 >
                                     <ChevronRight size={20} />
@@ -224,8 +238,10 @@ export default function Reports() {
                         {reportType === 'weekly' && (
                             <div className="flex items-center gap-2">
                                 <button
+                                    type="button"
                                     onClick={() => setWeekOffset(w => w + 1)}
                                     className="btn-secondary btn-icon"
+                                    aria-label="Semaine précédente"
                                 >
                                     <ChevronLeft size={20} />
                                 </button>
@@ -233,9 +249,11 @@ export default function Reports() {
                                     {weekOffset === 0 ? 'Cette semaine' : `Il y a ${weekOffset} semaine(s)`}
                                 </span>
                                 <button
+                                    type="button"
                                     onClick={() => setWeekOffset(w => Math.max(0, w - 1))}
                                     className="btn-secondary btn-icon"
                                     disabled={weekOffset === 0}
+                                    aria-label="Semaine suivante"
                                 >
                                     <ChevronRight size={20} />
                                 </button>
@@ -245,6 +263,7 @@ export default function Reports() {
                         {reportType === 'monthly' && (
                             <div className="flex items-center gap-2">
                                 <select
+                                    aria-label="Mois du rapport"
                                     value={selectedMonth.month}
                                     onChange={(e) => setSelectedMonth({ ...selectedMonth, month: parseInt(e.target.value) })}
                                     className="w-auto"
@@ -256,6 +275,7 @@ export default function Reports() {
                                     ))}
                                 </select>
                                 <select
+                                    aria-label="Année du rapport"
                                     value={selectedMonth.year}
                                     onChange={(e) => setSelectedMonth({ ...selectedMonth, year: parseInt(e.target.value) })}
                                     className="w-auto"
@@ -272,7 +292,12 @@ export default function Reports() {
             </div>
 
             {isLoading ? (
-                <div className="text-center py-12 text-muted">Chargement...</div>
+                <div className="text-center py-12 text-muted" role="status">Chargement…</div>
+            ) : isError ? (
+                <div className="network-error-state" role="alert">
+                    <p className="font-semibold">Le rapport n’a pas pu être chargé.</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                </div>
             ) : report ? (
                 <>
                     {/* Stats Cards */}
@@ -328,8 +353,12 @@ export default function Reports() {
                     {report.chart_data && report.chart_data.length > 0 && (
                         <div className="card p-6">
                             <h2 className="text-lg font-semibold mb-6">Évolution du Chiffre d'Affaires</h2>
-                            <div className="h-[300px] w-full">
-                                <ResponsiveContainer width="100%" height="100%">
+                            <div className="h-[300px] w-full" role="img" aria-label="Évolution du chiffre d’affaires sur la période sélectionnée">
+                                <ResponsiveContainer
+                                    width="100%"
+                                    height="100%"
+                                    initialDimension={{ width: 1, height: 1 }}
+                                >
                                     <AreaChart data={report.chart_data}>
                                         <defs>
                                             <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -410,13 +439,14 @@ export default function Reports() {
                         </div>
                         <div className="overflow-x-auto">
                             <table>
+                                <caption className="sr-only">Articles vendus pendant la période sélectionnée</caption>
                                 <thead>
                                     <tr>
-                                        <th>Produit</th>
-                                        <th className="text-right">Prix Unit.</th>
-                                        <th className="text-center">Qté</th>
-                                        <th className="text-right">Total</th>
-                                        <th className="text-right">Marge</th>
+                                        <th scope="col">Produit</th>
+                                        <th scope="col" className="text-right">Prix moyen vendu</th>
+                                        <th scope="col" className="text-center">Qté</th>
+                                        <th scope="col" className="text-right">Total</th>
+                                        <th scope="col" className="text-right">Marge</th>
                                     </tr>
                                 </thead>
                                 <tbody>

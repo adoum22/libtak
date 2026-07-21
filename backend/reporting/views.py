@@ -1,14 +1,16 @@
 from rest_framework.views import APIView
-from rest_framework import generics, viewsets
+from rest_framework import generics, status, viewsets
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
 from django.db.models import Sum, Count, F
 from django.utils import timezone
 from datetime import timedelta, datetime
 from decimal import Decimal
 
-from sales.models import Sale, SaleItem
+from sales.aggregates import completed_returns_for_period, financials_for_period
+from sales.models import Return, Sale
 from inventory.models import Product
 from core.permissions import IsAdminRole, CanAccessReports
 from django.http import HttpResponse
@@ -16,14 +18,26 @@ from .models import ReportSettings, ReportLog
 import logging
 
 logger = logging.getLogger(__name__)
-from .serializers import ReportSettingsSerializer, ReportLogSerializer
+from .serializers import (
+    ReportDataSerializer,
+    ReportSettingsSerializer,
+    ReportLogSerializer,
+)
 from .tasks import get_report_data
-import logging
 
 # reportlab is imported lazily inside the PDF endpoint so the rest of the
 # app keeps working on lightweight environments (e.g. PythonAnywhere free
 # tier) where reportlab can't fit in the disk quota.
 from io import BytesIO
+from xml.sax.saxutils import escape
+
+
+def _safe_spreadsheet_value(value):
+    """Prevent user-controlled text from becoming an Excel formula."""
+    text = '' if value is None else str(value)
+    if text.startswith(('=', '+', '-', '@')):
+        return "'" + text
+    return text
 
 class ExportReportView(APIView):
     """Exporter un rapport.
@@ -35,26 +49,56 @@ class ExportReportView(APIView):
     """
     permission_classes = [IsAuthenticated, CanAccessReports]
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('type', str, enum=['daily', 'weekly', 'monthly']),
+            OpenApiParameter('format', str, enum=['pdf', 'xlsx', 'excel']),
+            OpenApiParameter('date', OpenApiTypes.DATE),
+            OpenApiParameter('week_offset', int),
+            OpenApiParameter('month', int),
+            OpenApiParameter('year', int),
+        ],
+        responses={
+            (200, 'application/pdf'): OpenApiTypes.BINARY,
+            (
+                200,
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ): OpenApiTypes.BINARY,
+        },
+    )
     def get(self, request):
-        # Paramètres
         report_type = request.query_params.get('type', 'daily')
-        today = timezone.now().date()
-
-        if report_type == 'daily':
-            date_str = request.query_params.get('date')
-            start_date = end_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else today
-        elif report_type == 'weekly':
-            week_offset = int(request.query_params.get('week_offset', 0))
-            end_date = today - timedelta(days=7 * week_offset)
-            start_date = end_date - timedelta(days=6)
-        elif report_type == 'monthly':
-            month = int(request.query_params.get('month', today.month))
-            year = int(request.query_params.get('year', today.year))
-            start_date = today.replace(year=year, month=month, day=1)
-            if month == 12:
-                end_date = start_date.replace(year=year+1, month=1, day=1) - timedelta(days=1)
+        today = timezone.localdate()
+        if report_type not in {'daily', 'weekly', 'monthly'}:
+            return Response(
+                {'detail': 'Type de rapport invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            if report_type == 'daily':
+                date_str = request.query_params.get('date')
+                start_date = end_date = (
+                    datetime.strptime(date_str, '%Y-%m-%d').date()
+                    if date_str else today
+                )
+            elif report_type == 'weekly':
+                week_offset = int(request.query_params.get('week_offset', 0))
+                week_offset = max(-520, min(520, week_offset))
+                end_date = today - timedelta(days=7 * week_offset)
+                start_date = end_date - timedelta(days=6)
             else:
-                end_date = start_date.replace(month=month+1, day=1) - timedelta(days=1)
+                month = int(request.query_params.get('month', today.month))
+                year = int(request.query_params.get('year', today.year))
+                start_date = today.replace(year=year, month=month, day=1)
+                if month == 12:
+                    end_date = start_date.replace(year=year + 1, month=1, day=1) - timedelta(days=1)
+                else:
+                    end_date = start_date.replace(month=month + 1, day=1) - timedelta(days=1)
+        except (TypeError, ValueError, OverflowError):
+            return Response(
+                {'detail': 'Période de rapport invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Données
         data = get_report_data(start_date, end_date)
@@ -138,11 +182,11 @@ class ExportReportView(APIView):
             elements.append(Spacer(1, 10))
 
             # En-têtes tableau produits
-            table_data = [['Produit', 'Prix Unit.', 'Qté', 'Total', 'Marge']]
+            table_data = [['Produit', 'Prix moyen vendu', 'Qté', 'Total', 'Marge']]
 
             for item in data['items_sold']:
                 table_data.append([
-                    item['name'][:35] + ('...' if len(item['name']) > 35 else ''), # Tronquer noms longs
+                    escape(item['name'][:35] + ('...' if len(item['name']) > 35 else '')),
                     f"{item.get('unit_price', 0):.2f}",
                     str(item['quantity']),
                     f"{item['revenue']:.2f}",
@@ -288,7 +332,7 @@ class ExportReportView(APIView):
 
             # Tableau produits
             row += 2
-            headers = ['Produit', 'Code-barres', 'Prix unit.',
+            headers = ['Produit', 'Code-barres', 'Prix moyen vendu',
                        'Qté', 'CA', 'Marge']
             for col, h in enumerate(headers, start=1):
                 c = ws.cell(row=row, column=col, value=h)
@@ -299,8 +343,14 @@ class ExportReportView(APIView):
             row += 1
 
             for item in data.get('items_sold', []):
-                ws.cell(row=row, column=1, value=item.get('name', ''))
-                ws.cell(row=row, column=2, value=item.get('barcode', ''))
+                ws.cell(
+                    row=row, column=1,
+                    value=_safe_spreadsheet_value(item.get('name', '')),
+                )
+                ws.cell(
+                    row=row, column=2,
+                    value=_safe_spreadsheet_value(item.get('barcode', '')),
+                )
                 ws.cell(row=row, column=3,
                         value=float(item.get('unit_price', 0)))
                 ws.cell(row=row, column=4, value=item.get('quantity', 0))
@@ -349,13 +399,22 @@ class DailyReportView(APIView):
     """Rapport journalier"""
     permission_classes = [IsAuthenticated, CanAccessReports]
 
+    @extend_schema(
+        parameters=[OpenApiParameter('date', OpenApiTypes.DATE)],
+        responses=ReportDataSerializer,
+    )
     def get(self, request):
         date_str = request.query_params.get('date')
-        if date_str:
-            from datetime import datetime
-            date = datetime.strptime(date_str, '%Y-%m-%d').date()
-        else:
-            date = timezone.now().date()
+        try:
+            date = (
+                datetime.strptime(date_str, '%Y-%m-%d').date()
+                if date_str else timezone.localdate()
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Date invalide. Format attendu: AAAA-MM-JJ.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         data = get_report_data(date, date)
         data['date'] = date
@@ -367,11 +426,22 @@ class WeeklyReportView(APIView):
     """Rapport hebdomadaire"""
     permission_classes = [IsAuthenticated, CanAccessReports]
 
+    @extend_schema(
+        parameters=[OpenApiParameter('week_offset', int)],
+        responses=ReportDataSerializer,
+    )
     def get(self, request):
-        today = timezone.now().date()
+        today = timezone.localdate()
 
         # Semaine demandée ou courante
-        week_offset = int(request.query_params.get('week_offset', 0))
+        try:
+            week_offset = int(request.query_params.get('week_offset', 0))
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Décalage de semaine invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        week_offset = max(-520, min(520, week_offset))
         end_date = today - timedelta(days=7 * week_offset)
         start_date = end_date - timedelta(days=6)
 
@@ -386,13 +456,24 @@ class MonthlyReportView(APIView):
     """Rapport mensuel"""
     permission_classes = [IsAuthenticated, CanAccessReports]
 
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('month', int),
+            OpenApiParameter('year', int),
+        ],
+        responses=ReportDataSerializer,
+    )
     def get(self, request):
-        today = timezone.now().date()
-
-        month = int(request.query_params.get('month', today.month))
-        year = int(request.query_params.get('year', today.year))
-
-        start_date = today.replace(year=year, month=month, day=1)
+        today = timezone.localdate()
+        try:
+            month = int(request.query_params.get('month', today.month))
+            year = int(request.query_params.get('year', today.year))
+            start_date = today.replace(year=year, month=month, day=1)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Mois ou année invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Dernier jour du mois
         if month == 12:
@@ -411,70 +492,44 @@ class MonthlyReportView(APIView):
 
 class StatsView(APIView):
     """Statistiques générales"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, CanAccessReports]
 
+    @extend_schema(
+        parameters=[OpenApiParameter('days', int)],
+        responses=OpenApiTypes.OBJECT,
+    )
     def get(self, request):
-        today = timezone.now().date()
+        today = timezone.localdate()
 
-        # Helper : ventes encaissées (exclut les ventes à crédit non réglées).
-        def _cash_sales(qs):
-            return qs.exclude(payment_method=Sale.PaymentMethod.CREDIT)
-
-        def _credit_payments_sum(date_filter_kwargs):
-            try:
-                from credit.models import CreditPayment
-            except Exception:
-                return Decimal('0')
-            return (
-                CreditPayment.objects.filter(**date_filter_kwargs)
-                .aggregate(total=Sum('amount'))['total']
-                or Decimal('0')
-            )
-
-        # Ventes du jour (cash-basis : exclut crédit, ajoute règlements crédit)
+        # Ventes du jour
         today_sales = Sale.objects.filter(created_at__date=today)
-        today_cash_revenue = (
-            _cash_sales(today_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
-            or Decimal('0')
-        )
-        today_credit_payments = _credit_payments_sum({'created_at__date': today})
-        today_revenue = Decimal(today_cash_revenue) + Decimal(today_credit_payments)
+        today_revenue = financials_for_period(today, today)['net_revenue']
 
         # Ventes de la semaine
         week_start = today - timedelta(days=today.weekday())
         week_sales = Sale.objects.filter(created_at__date__gte=week_start)
-        week_cash_revenue = (
-            _cash_sales(week_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
-            or Decimal('0')
-        )
-        week_credit_payments = _credit_payments_sum(
-            {'created_at__date__gte': week_start}
-        )
-        week_revenue = Decimal(week_cash_revenue) + Decimal(week_credit_payments)
+        week_revenue = financials_for_period(week_start, today)['net_revenue']
 
         # Ventes du mois
         month_start = today.replace(day=1)
         month_sales = Sale.objects.filter(created_at__date__gte=month_start)
-        month_cash_revenue = (
-            _cash_sales(month_sales).aggregate(Sum('total_ttc'))['total_ttc__sum']
-            or Decimal('0')
-        )
-        month_credit_payments = _credit_payments_sum(
-            {'created_at__date__gte': month_start}
-        )
-        month_revenue = Decimal(month_cash_revenue) + Decimal(month_credit_payments)
+        month_revenue = financials_for_period(month_start, today)['net_revenue']
 
-        # Top produits : exclut les ventes à crédit (recettes non encaissées)
-        top_products = SaleItem.objects.filter(
-            sale__created_at__date__gte=month_start,
-        ).exclude(
-            sale__payment_method=Sale.PaymentMethod.CREDIT,
-        ).values(
-            'product__name', 'product__barcode'
-        ).annotate(
-            total_qty=Sum('quantity'),
-            total_revenue=Sum('total_price_ht')
-        ).order_by('-total_qty')[:5]
+        # Top produits: reuse the report's cent-accurate product allocation.
+        # A raw SUM(SaleItem.total_price_ht) would expose gross line amounts,
+        # ignoring both sale-level discounts and completed refunds.
+        monthly_product_report = get_report_data(month_start, today)
+        top_products = [
+            {
+                'product__name': row['name'],
+                'product__barcode': row['barcode'],
+                'total_qty': row['quantity'],
+                'total_revenue': row['revenue'],
+                'total_cost': row['cost'],
+                'total_margin': row['profit'],
+            }
+            for row in monthly_product_report['items_sold'][:5]
+        ]
 
         # Produits à réapprovisionner = stock <= min_stock (inclut ruptures)
         # On expose 3 chiffres pour qu'il n'y ait plus d'ambiguïté entre
@@ -484,22 +539,20 @@ class StatsView(APIView):
         #   - to_replenish_count : la somme (= stock <= min_stock)
         # `low_stock_count` est conservé pour rétrocompatibilité = même
         # valeur que to_replenish_count.
-        replenish_qs = Product.objects.filter(stock__lte=F('min_stock'))
-        out_of_stock_count = Product.objects.filter(stock__lte=0).count()
+        replenish_qs = Product.objects.filter(
+            active=True,
+            stock__lte=F('min_stock'),
+        )
+        out_of_stock_count = replenish_qs.filter(stock__lte=0).count()
         to_replenish_count = replenish_qs.count()
         low_stock_only_count = max(0, to_replenish_count - out_of_stock_count)
         low_stock = replenish_qs.values('id', 'name', 'stock', 'min_stock')[:10]
 
-        # Comparaison avec hier (cash-basis : exclut crédit, ajoute règlements)
+        # Comparaison avec hier
         yesterday = today - timedelta(days=1)
-        yesterday_cash = (
-            Sale.objects.filter(created_at__date=yesterday)
-            .exclude(payment_method=Sale.PaymentMethod.CREDIT)
-            .aggregate(Sum('total_ttc'))['total_ttc__sum']
-            or Decimal('0')
-        )
-        yesterday_credit = _credit_payments_sum({'created_at__date': yesterday})
-        yesterday_revenue = Decimal(yesterday_cash) + Decimal(yesterday_credit)
+        yesterday_revenue = financials_for_period(
+            yesterday, yesterday,
+        )['net_revenue']
 
         revenue_change = 0
         if yesterday_revenue > 0:
@@ -515,24 +568,10 @@ class StatsView(APIView):
         days = max(1, min(365, days))
 
         period_start = today - timedelta(days=days - 1)
-
-        # Helpers locaux : credit payments par jour/heure
-        def _credit_payments_by_day():
-            try:
-                from credit.models import CreditPayment
-            except Exception:
-                return {}
-            qs = (
-                CreditPayment.objects
-                .filter(created_at__date__gte=period_start)
-                .annotate(day=TruncDay('created_at'))
-                .values('day')
-                .annotate(total=Sum('amount'), c=Count('id'))
-            )
-            return {row['day'].date(): row for row in qs}
+        from credit.models import CreditPayment
 
         if days <= 31:
-            # granularité jour — cash-basis : exclut crédit, ajoute règlements
+            # granularité jour
             daily_qs = (
                 Sale.objects.filter(created_at__date__gte=period_start)
                 .exclude(payment_method=Sale.PaymentMethod.CREDIT)
@@ -542,25 +581,46 @@ class StatsView(APIView):
                 .order_by('day')
             )
             by_day = {row['day'].date(): row for row in daily_qs}
-            credit_by_day = _credit_payments_by_day()
+            credit_by_day = {
+                row['day'].date(): row
+                for row in CreditPayment.objects.filter(
+                    created_at__date__gte=period_start,
+                ).annotate(day=TruncDay('created_at')).values('day').annotate(
+                    revenue=Sum('amount'), count=Count('id'),
+                )
+                if row['day']
+            }
+            daily_returns = (
+                completed_returns_for_period(period_start, today)
+                .annotate(day=TruncDay('completed_at'))
+                .values('day')
+                .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+            )
+            returns_by_day = {
+                row['day'].date(): row for row in daily_returns if row['day']
+            }
             revenue_7d = []
             for i in range(days):
                 d = period_start + timedelta(days=i)
                 row = by_day.get(d)
                 credit_row = credit_by_day.get(d)
-                cash_rev = float(row['revenue'] or 0) if row else 0.0
-                credit_rev = float(credit_row['total'] or 0) if credit_row else 0.0
-                cash_count = row['count'] if row else 0
-                credit_count = credit_row['c'] if credit_row else 0
+                return_row = returns_by_day.get(d)
                 fmt = '%a %d/%m' if days <= 7 else '%d/%m'
                 revenue_7d.append({
                     'label': d.strftime(fmt),
                     'date': d.isoformat(),
-                    'revenue': cash_rev + credit_rev,
-                    'count': cash_count + credit_count,
+                    'revenue': float(
+                        ((row['revenue'] or 0) if row else 0)
+                        + ((credit_row['revenue'] or 0) if credit_row else 0)
+                        - ((return_row['refunds'] or 0) if return_row else 0)
+                    ),
+                    'count': (row['count'] if row else 0) + (
+                        credit_row['count'] if credit_row else 0
+                    ),
+                    'returns_count': return_row['returns_count'] if return_row else 0,
                 })
         else:
-            # granularité semaine pour > 1 mois — cash-basis
+            # granularité semaine pour > 1 mois (sinon trop dense)
             weekly_qs = (
                 Sale.objects.filter(created_at__date__gte=period_start)
                 .exclude(payment_method=Sale.PaymentMethod.CREDIT)
@@ -569,80 +629,90 @@ class StatsView(APIView):
                 .annotate(revenue=Sum('total_ttc'), count=Count('id'))
                 .order_by('w')
             )
-            # Ajout des règlements crédit semaine par semaine
-            credit_weekly = {}
-            try:
-                from credit.models import CreditPayment
-                cp_qs = (
-                    CreditPayment.objects
-                    .filter(created_at__date__gte=period_start)
-                    .annotate(w=TruncWeek('created_at'))
-                    .values('w')
-                    .annotate(total=Sum('amount'), c=Count('id'))
+            weekly_returns = (
+                completed_returns_for_period(period_start, today)
+                .annotate(w=TruncWeek('completed_at'))
+                .values('w')
+                .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+            )
+            sales_by_week = {
+                row['w'].date(): row for row in weekly_qs if row['w']
+            }
+            credit_by_week = {
+                row['w'].date(): row
+                for row in CreditPayment.objects.filter(
+                    created_at__date__gte=period_start,
+                ).annotate(w=TruncWeek('created_at')).values('w').annotate(
+                    revenue=Sum('amount'), count=Count('id'),
                 )
-                credit_weekly = {row['w']: row for row in cp_qs}
-            except Exception:
-                credit_weekly = {}
-            seen_weeks = set()
+                if row['w']
+            }
+            returns_by_week = {
+                row['w'].date(): row for row in weekly_returns if row['w']
+            }
             revenue_7d = []
-            for row in weekly_qs:
-                w = row['w']
-                cred = credit_weekly.get(w)
-                cred_rev = float(cred['total'] or 0) if cred else 0.0
-                cred_cnt = cred['c'] if cred else 0
+            for week_start in sorted(
+                set(sales_by_week) | set(credit_by_week) | set(returns_by_week)
+            ):
+                row = sales_by_week.get(week_start, {})
+                credit_row = credit_by_week.get(week_start, {})
+                return_row = returns_by_week.get(week_start, {})
                 revenue_7d.append({
-                    'label': w.strftime('S%V'),
-                    'date': w.date().isoformat(),
-                    'revenue': float(row['revenue'] or 0) + cred_rev,
-                    'count': row['count'] + cred_cnt,
+                    'label': week_start.strftime('S%V'),
+                    'date': week_start.isoformat(),
+                    'revenue': float(
+                        (row.get('revenue') or 0)
+                        + (credit_row.get('revenue') or 0)
+                        - (return_row.get('refunds') or 0)
+                    ),
+                    'count': row.get('count', 0) + credit_row.get('count', 0),
+                    'returns_count': return_row.get('returns_count', 0),
                 })
-                seen_weeks.add(w)
-            # Semaines avec seulement des règlements crédit (sans vente cash)
-            for w, cred in credit_weekly.items():
-                if w in seen_weeks:
-                    continue
-                revenue_7d.append({
-                    'label': w.strftime('S%V'),
-                    'date': w.date().isoformat(),
-                    'revenue': float(cred['total'] or 0),
-                    'count': cred['c'],
-                })
-            revenue_7d.sort(key=lambda r: r['date'])
 
-        # Série horaire pour aujourd'hui (BarChart) — cash-basis
+        # Série horaire pour aujourd'hui (BarChart)
         hourly_qs = (
-            today_sales.exclude(payment_method=Sale.PaymentMethod.CREDIT)
-            .annotate(hour=TruncHour('created_at'))
+            today_sales.exclude(
+                payment_method=Sale.PaymentMethod.CREDIT,
+            ).annotate(hour=TruncHour('created_at'))
             .values('hour')
             .annotate(revenue=Sum('total_ttc'), count=Count('id'))
             .order_by('hour')
         )
         by_hour = {row['hour'].hour: row for row in hourly_qs}
-        # Règlements crédit par heure aujourd'hui
-        credit_by_hour = {}
-        try:
-            from credit.models import CreditPayment
-            chp_qs = (
-                CreditPayment.objects.filter(created_at__date=today)
-                .annotate(hour=TruncHour('created_at'))
-                .values('hour')
-                .annotate(total=Sum('amount'), c=Count('id'))
+        credit_by_hour = {
+            row['hour'].hour: row
+            for row in CreditPayment.objects.filter(
+                created_at__date=today,
+            ).annotate(hour=TruncHour('created_at')).values('hour').annotate(
+                revenue=Sum('amount'), count=Count('id'),
             )
-            credit_by_hour = {row['hour'].hour: row for row in chp_qs}
-        except Exception:
-            credit_by_hour = {}
+            if row['hour']
+        }
+        hourly_returns = (
+            completed_returns_for_period(today, today)
+            .annotate(hour=TruncHour('completed_at'))
+            .values('hour')
+            .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+        )
+        returns_by_hour = {
+            row['hour'].hour: row for row in hourly_returns if row['hour']
+        }
         hourly_today = []
-        for h in range(8, 22):  # 8h -> 21h
+        for h in range(24):
             row = by_hour.get(h)
-            cred = credit_by_hour.get(h)
-            cash_rev = float(row['revenue'] or 0) if row else 0.0
-            credit_rev = float(cred['total'] or 0) if cred else 0.0
-            cash_cnt = row['count'] if row else 0
-            credit_cnt = cred['c'] if cred else 0
+            credit_row = credit_by_hour.get(h)
+            return_row = returns_by_hour.get(h)
             hourly_today.append({
-                'label': f'{h}h',
-                'revenue': cash_rev + credit_rev,
-                'count': cash_cnt + credit_cnt,
+                'label': f'{h:02d}h',
+                'revenue': float(
+                    ((row['revenue'] or 0) if row else 0)
+                    + ((credit_row['revenue'] or 0) if credit_row else 0)
+                    - ((return_row['refunds'] or 0) if return_row else 0)
+                ),
+                'count': (row['count'] if row else 0) + (
+                    credit_row['count'] if credit_row else 0
+                ),
+                'returns_count': return_row['returns_count'] if return_row else 0,
             })
 
         return Response({
@@ -659,7 +729,7 @@ class StatsView(APIView):
                 'sales_count': month_sales.count(),
                 'revenue': float(month_revenue)
             },
-            'top_products': list(top_products),
+            'top_products': top_products,
             'low_stock': list(low_stock),
             'low_stock_count': to_replenish_count,  # rétrocompat
             'to_replenish_count': to_replenish_count,
