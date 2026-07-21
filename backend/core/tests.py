@@ -360,6 +360,14 @@ class UserAPITest(APITestCase):
 
 
 class SecurityDefaultsTest(TestCase):
+    def test_sqlite_database_url_never_enables_sslmode(self):
+        from config.settings import _database_url_requires_ssl
+
+        self.assertFalse(_database_url_requires_ssl('sqlite:////tmp/app.sqlite3'))
+        self.assertTrue(
+            _database_url_requires_ssl('postgresql://db.example/app'),
+        )
+
     def test_drf_is_authenticated_by_default(self):
         permission_names = {
             permission.__name__ for permission in api_settings.DEFAULT_PERMISSION_CLASSES

@@ -173,6 +173,13 @@ ASGI_APPLICATION = 'config.asgi.application'
 DATABASE_URL = os.environ.get('DATABASE_URL')
 SQL_HOST = os.environ.get('SQL_HOST')
 
+
+def _database_url_requires_ssl(database_url):
+    """Return False for local SQLite URLs that cannot accept sslmode."""
+    scheme = database_url.split(':', 1)[0].lower()
+    return scheme != 'sqlite'
+
+
 if DATABASE_URL:
     import dj_database_url
 
@@ -183,6 +190,7 @@ if DATABASE_URL:
             conn_health_checks=True,
             ssl_require=(
                 not DEBUG
+                and _database_url_requires_ssl(DATABASE_URL)
                 and os.environ.get('DATABASE_SSL_REQUIRE', 'True').lower()
                 in ('true', '1', 'yes')
             ),
