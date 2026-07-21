@@ -1,9 +1,11 @@
+import hashlib
+import json
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
-from django.db.models import F, Sum
+from django.db import IntegrityError, transaction
+from django.db.models import DecimalField, ExpressionWrapper, F, Sum
 from django.db.models.functions import TruncDate
-from django.utils.dateparse import parse_date
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -11,28 +13,116 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import SAFE_METHODS, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from drf_spectacular.utils import OpenApiTypes, extend_schema
 
 from core.models import AuditLog
 from core.permissions import IsAdminRole
+from inventory.models import SupplierPayment
 from calendar import monthrange
 from datetime import date as _date
 
 from sales.aggregates import (
+    completed_returns_for_period,
+    financials_for_period,
     revenue_for_month,
     gross_margin_for_period,
     operating_expenses_for_period,
 )
-from sales.models import Return, Sale, SaleItem
+from sales.models import Return, ReturnItem, Sale, SaleItem
 
-from .models import CashRegisterAdjustment, ExpenseCategory, MonthlyAccounting, Expense
+from .models import (
+    CashRegisterAdjustment,
+    CashRegisterState,
+    ExpenseCategory,
+    MonthlyAccounting,
+    Expense,
+)
 from .serializers import (
     CashRegisterAdjustmentSerializer,
+    CashRegisterOperationSerializer,
+    CashRegisterSummarySerializer,
+    CashierExpenseCreateSerializer,
     ExpenseCategorySerializer,
     ExpenseSerializer,
+    ManagerWithdrawalCreateSerializer,
     MonthlyAccountingSerializer,
 )
 
 MANAGER_WITHDRAWAL_CATEGORY = 'Retrait gérant'
+
+
+def expense_operation_payload_hash(
+    action_name,
+    *,
+    monthly_id,
+    category_id,
+    amount,
+    description,
+    incurred_on,
+    paid_from_cash,
+):
+    """Canonical fingerprint used to make expense retries side-effect free."""
+    payload = json.dumps({
+        'action': action_name,
+        'monthly_id': int(monthly_id),
+        'category_id': int(category_id),
+        'amount': str(Decimal(amount).quantize(Decimal('0.01'))),
+        'description': str(description or '').strip(),
+        'incurred_on': incurred_on.isoformat() if incurred_on else None,
+        'paid_from_cash': bool(paid_from_cash),
+    }, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+def lock_and_find_expense_operation(request, operation_id, payload_hash):
+    """Serialize cash-affecting writes and validate an optional retry key."""
+    CashRegisterState.objects.get_or_create(pk=1)
+    CashRegisterState.objects.select_for_update().get(pk=1)
+    if not operation_id:
+        return None
+    existing = Expense.objects.select_for_update().filter(
+        operation_id=operation_id,
+    ).first()
+    if not existing:
+        return None
+    if (
+        existing.created_by_id != request.user.id
+        or existing.operation_payload_hash != payload_hash
+    ):
+        return Response(
+            {
+                'operation_id': [
+                    'Cet identifiant a déjà été utilisé pour une autre dépense.'
+                ],
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+    return existing
+
+
+def find_expense_after_integrity_error(request, operation_id, payload_hash):
+    if not operation_id:
+        return None
+    existing = Expense.objects.filter(operation_id=operation_id).first()
+    if (
+        existing
+        and existing.created_by_id == request.user.id
+        and existing.operation_payload_hash == payload_hash
+    ):
+        return existing
+    return None
+
+
+def supplier_payments_for_period(start, end, *, method=None):
+    """Trésorerie fournisseur informative, jamais intégrée au bénéfice."""
+    queryset = SupplierPayment.objects.filter(
+        status=SupplierPayment.PaymentStatus.ACTIVE,
+        paid_on__gte=start,
+        paid_on__lte=end,
+    )
+    if method:
+        queryset = queryset.filter(method=method)
+    return queryset.aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
 
 
 class CanReadExpenseCategories(IsAuthenticated):
@@ -44,17 +134,6 @@ class CanReadExpenseCategories(IsAuthenticated):
         if request.method in SAFE_METHODS:
             return True
         return request.user.is_admin_role
-
-
-class CanCreateExpense(IsAuthenticated):
-    """Admin a tous les droits, vendeur peut seulement creer une depense."""
-
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        if request.user.is_admin_role:
-            return True
-        return request.method == 'POST'
 
 
 def sync_manager_withdrawal(monthly):
@@ -94,6 +173,7 @@ def sales_margin_analytics(start, end):
     )
 
     sale_rows = []
+    return_rows = []
     product_map = {}
 
     for sale in sales:
@@ -118,13 +198,25 @@ def sales_margin_analytics(start, end):
             'margin': float(sale_margin),
         })
 
-        for item in items:
+        allocated_discount = Decimal('0')
+        for index, item in enumerate(items):
             line_revenue = (item.unit_price_ht or Decimal('0')) * item.quantity
             discount_share = Decimal('0')
             if gross_revenue > 0 and discount > 0:
-                discount_share = (discount * line_revenue / gross_revenue).quantize(
-                    Decimal('0.01'), rounding=ROUND_HALF_UP,
+                remaining_discount = max(
+                    discount - allocated_discount,
+                    Decimal('0'),
                 )
+                if index == len(items) - 1:
+                    discount_share = remaining_discount
+                else:
+                    discount_share = min(
+                        (discount * line_revenue / gross_revenue).quantize(
+                            Decimal('0.01'), rounding=ROUND_HALF_UP,
+                        ),
+                        remaining_discount,
+                    )
+                allocated_discount += discount_share
             net_revenue = line_revenue - discount_share
             cost = item.total_purchase_cost or Decimal('0')
             key = item.product_id or f"name:{item.product_name}"
@@ -143,6 +235,59 @@ def sales_margin_analytics(start, end):
             row['purchase_cost'] += cost
             row['margin'] += net_revenue - cost
 
+    completed_returns = completed_returns_for_period(start, end).prefetch_related(
+        'items__sale_item',
+    )
+    for return_order in completed_returns:
+        return_items = list(return_order.items.all())
+        gross_return_value = sum(
+            item.sale_item.unit_price_ht * item.quantity
+            for item in return_items
+        )
+        allocated_refund = Decimal('0')
+        for index, item in enumerate(return_items):
+            sale_item = item.sale_item
+            if index == len(return_items) - 1:
+                refund_share = return_order.refund_amount - allocated_refund
+            elif gross_return_value > 0:
+                refund_share = (
+                    return_order.refund_amount
+                    * sale_item.unit_price_ht
+                    * item.quantity
+                    / gross_return_value
+                ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            else:
+                refund_share = Decimal('0')
+            allocated_refund += refund_share
+            reversed_cost = (
+                sale_item.unit_purchase_price * item.quantity
+                if item.restock
+                else Decimal('0')
+            )
+            key = sale_item.product_id or f"name:{sale_item.product_name}"
+            row = product_map.setdefault(key, {
+                'product_id': sale_item.product_id,
+                'product_name': sale_item.product_name,
+                'quantity': 0,
+                'revenue': Decimal('0'),
+                'discount': Decimal('0'),
+                'purchase_cost': Decimal('0'),
+                'margin': Decimal('0'),
+            })
+            row['quantity'] -= item.quantity
+            row['revenue'] -= refund_share
+            row['purchase_cost'] -= reversed_cost
+            row['margin'] += -refund_share + reversed_cost
+
+        return_rows.append({
+            'id': return_order.id,
+            'sale_id': return_order.sale_id,
+            'completed_at': return_order.completed_at,
+            'refund_method': return_order.refund_method,
+            'refund_amount': float(return_order.refund_amount),
+            'items_count': sum(item.quantity for item in return_items),
+        })
+
     product_rows = [
         {
             'product_id': row['product_id'],
@@ -159,6 +304,7 @@ def sales_margin_analytics(start, end):
 
     return {
         'sales': sale_rows,
+        'returns': return_rows,
         'products': product_rows,
     }
 
@@ -196,7 +342,14 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path=r'by-period/(?P<year>\d+)/(?P<month>\d+)')
     def by_period(self, request, year=None, month=None):
         """Récupère ou crée l'entrée mensuelle, avec totaux et CA."""
-        year, month = int(year), int(month)
+        try:
+            year, month = int(year), int(month)
+            _date(year, month, 1)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Periode invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         monthly, _ = MonthlyAccounting.objects.get_or_create(year=year, month=month)
         sync_manager_withdrawal(monthly)
         data = self.get_serializer(monthly).data
@@ -214,61 +367,101 @@ class MonthlyAccountingViewSet(viewsets.ModelViewSet):
         data['gross_margin'] = gross_margin
         data['net_profit'] = gross_margin - data['total_expenses']
         data['cash_after_withdrawal'] = data['net_profit']
+        data['supplier_payments_total'] = float(
+            supplier_payments_for_period(start, end)
+        )
         data['sales_margin_detail'] = sales_margin_analytics(start, end)
         return Response(data)
 
     @action(detail=True, methods=['post'], url_path='withdraw')
     def withdraw(self, request, pk=None):
         """Enregistre un retrait gérant comme dépense payée depuis la caisse."""
+        input_serializer = ManagerWithdrawalCreateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        withdrawal = input_serializer.validated_data
         monthly = self.get_object()
-        try:
-            amount = Decimal(str(request.data.get('amount', '0'))).quantize(Decimal('0.01'))
-        except Exception:
+        amount = withdrawal['amount']
+        note = (withdrawal.get('note') or 'Retrait gérant').strip()
+        incurred_on = withdrawal.get('incurred_on', timezone.localdate())
+        if incurred_on.year != monthly.year or incurred_on.month != monthly.month:
             return Response(
-                {'detail': 'Montant invalide.'},
+                {
+                    'incurred_on': [
+                        'La date du retrait doit appartenir au mois comptable choisi.'
+                    ],
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if amount <= 0:
-            return Response(
-                {'detail': 'Le montant doit être positif.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        operation_id = withdrawal.get('operation_id')
+        payload_hash = ''
 
-        category, _ = ExpenseCategory.objects.get_or_create(
-            name=MANAGER_WITHDRAWAL_CATEGORY,
-        )
-        note = request.data.get('note') or 'Retrait gérant'
-        incurred_on_value = request.data.get('incurred_on')
-        incurred_on = parse_date(incurred_on_value) if incurred_on_value else timezone.localdate()
-        if incurred_on_value and incurred_on is None:
-            return Response(
-                {'detail': 'Date invalide.'},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            with transaction.atomic():
+                monthly = MonthlyAccounting.objects.select_for_update().get(
+                    pk=monthly.pk,
+                )
+                category, _ = ExpenseCategory.objects.get_or_create(
+                    name=MANAGER_WITHDRAWAL_CATEGORY,
+                )
+                payload_hash = expense_operation_payload_hash(
+                    'manager_withdrawal',
+                    monthly_id=monthly.pk,
+                    category_id=category.pk,
+                    amount=amount,
+                    description=note,
+                    incurred_on=incurred_on,
+                    paid_from_cash=True,
+                )
+                duplicate = lock_and_find_expense_operation(
+                    request,
+                    operation_id,
+                    payload_hash,
+                )
+                if isinstance(duplicate, Response):
+                    return duplicate
+                if duplicate is None:
+                    expense = Expense.objects.create(
+                        monthly=monthly,
+                        category=category,
+                        amount=amount,
+                        description=note,
+                        incurred_on=incurred_on,
+                        paid_from_cash=True,
+                        created_by=request.user,
+                        operation_id=operation_id,
+                        operation_payload_hash=(payload_hash if operation_id else ''),
+                    )
+                    sync_manager_withdrawal(monthly)
+                    AuditLog.log(
+                        user=request.user,
+                        action=AuditLog.ActionType.CREATE,
+                        model_name='Expense',
+                        object_id=expense.id,
+                        object_repr=f"Retrait gérant: {amount}",
+                        request=request,
+                    )
+        except IntegrityError:
+            existing = find_expense_after_integrity_error(
+                request,
+                operation_id,
+                payload_hash,
             )
-        expense = Expense.objects.create(
-            monthly=monthly,
-            category=category,
-            amount=amount,
-            description=note,
-            incurred_on=incurred_on,
-            paid_from_cash=True,
-        )
-        sync_manager_withdrawal(monthly)
-        AuditLog.log(
-            user=request.user,
-            action=AuditLog.ActionType.CREATE,
-            model_name='Expense',
-            object_id=expense.id,
-            object_repr=f"Retrait gérant: {amount}",
-            request=request,
-        )
+            if existing is None:
+                return Response(
+                    {'operation_id': ['Identifiant de dépense déjà utilisé.']},
+                    status=status.HTTP_409_CONFLICT,
+                )
         return self.by_period(request, year=monthly.year, month=monthly.month)
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
-    queryset = Expense.objects.select_related('category', 'monthly').all()
+    queryset = Expense.objects.select_related(
+        'category',
+        'monthly',
+        'created_by',
+    ).all()
     serializer_class = ExpenseSerializer
-    permission_classes = [CanCreateExpense]
+    permission_classes = [IsAuthenticated, IsAdminRole]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -280,24 +473,78 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             qs = qs.filter(monthly__month=month)
         return qs
 
-    def perform_create(self, serializer):
-        save_kwargs = {}
-        if not self.request.user.is_admin_role:
-            save_kwargs['paid_from_cash'] = True
-        instance = serializer.save(**save_kwargs)
-        if instance.category.name == MANAGER_WITHDRAWAL_CATEGORY:
-            sync_manager_withdrawal(instance.monthly)
-        AuditLog.log(
-            user=self.request.user,
-            action=AuditLog.ActionType.CREATE,
-            model_name='Expense',
-            object_id=instance.id,
-            object_repr=str(instance),
-            request=self.request,
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        expense_data = serializer.validated_data
+        operation_id = expense_data.get('operation_id')
+        payload_hash = expense_operation_payload_hash(
+            'admin_expense',
+            monthly_id=expense_data['monthly'].pk,
+            category_id=expense_data['category'].pk,
+            amount=expense_data['amount'],
+            description=expense_data.get('description', ''),
+            incurred_on=expense_data.get('incurred_on'),
+            paid_from_cash=expense_data.get('paid_from_cash', True),
+        )
+
+        try:
+            with transaction.atomic():
+                duplicate = lock_and_find_expense_operation(
+                    request,
+                    operation_id,
+                    payload_hash,
+                )
+                if isinstance(duplicate, Response):
+                    return duplicate
+                if duplicate is not None:
+                    return Response(
+                        self.get_serializer(duplicate).data,
+                        status=status.HTTP_200_OK,
+                    )
+
+                instance = serializer.save(
+                    created_by=request.user,
+                    operation_payload_hash=(payload_hash if operation_id else ''),
+                )
+                if instance.category.name == MANAGER_WITHDRAWAL_CATEGORY:
+                    sync_manager_withdrawal(instance.monthly)
+                AuditLog.log(
+                    user=request.user,
+                    action=AuditLog.ActionType.CREATE,
+                    model_name='Expense',
+                    object_id=instance.id,
+                    object_repr=str(instance),
+                    request=request,
+                )
+        except IntegrityError:
+            existing = find_expense_after_integrity_error(
+                request,
+                operation_id,
+                payload_hash,
+            )
+            if existing is not None:
+                return Response(
+                    self.get_serializer(existing).data,
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                {'operation_id': ['Identifiant de dépense déjà utilisé.']},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
         )
 
     def perform_update(self, serializer):
+        old_monthly = serializer.instance.monthly
         instance = serializer.save()
+        if old_monthly.pk != instance.monthly_id:
+            sync_manager_withdrawal(old_monthly)
         sync_manager_withdrawal(instance.monthly)
         AuditLog.log(
             user=self.request.user,
@@ -332,33 +579,40 @@ class CashRegisterView(APIView):
     """
     permission_classes = [IsAuthenticated, IsAdminRole]
 
+    @extend_schema(responses=CashRegisterSummarySerializer)
     def get(self, request):
         return Response(self._summary())
 
+    @extend_schema(
+        request=CashRegisterOperationSerializer,
+        responses={200: CashRegisterSummarySerializer, 201: CashRegisterSummarySerializer},
+    )
     def post(self, request):
-        action_name = request.data.get('action')
+        serializer = CashRegisterOperationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        operation = serializer.validated_data
+        action_name = operation['action']
         if action_name == 'set_opening':
-            return self._set_opening(request)
+            return self._set_opening(request, operation)
         if action_name == 'count':
-            return self._count(request)
-        return Response(
-            {'detail': "Action inconnue. Utilisez 'set_opening' ou 'count'."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+            return self._count(request, operation)
 
-    def _set_opening(self, request):
-        opening_amount = self._money(request.data.get('opening_amount'))
-        if opening_amount is None or opening_amount < 0:
-            return Response(
-                {'opening_amount': ['Montant de depart invalide.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    @transaction.atomic
+    def _set_opening(self, request, operation):
+        opening_amount = operation['opening_amount']
+        operation_id = operation.get('operation_id')
+        note = operation.get('note') or 'Fonds de caisse defini'
+        payload_hash = self._payload_hash('set_opening', opening_amount, note)
+        duplicate = self._lock_and_find_operation(operation_id, payload_hash)
+        if isinstance(duplicate, Response):
+            return duplicate
+        if duplicate:
+            return Response(self._summary(), status=status.HTTP_200_OK)
 
         existing_opening = self._adjustments_total(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
         )
         delta = opening_amount - existing_opening
-        note = request.data.get('note') or 'Fonds de caisse defini'
 
         adjustment = CashRegisterAdjustment.objects.create(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
@@ -366,6 +620,8 @@ class CashRegisterView(APIView):
             counted_amount=opening_amount,
             note=note,
             created_by=request.user,
+            operation_id=operation_id,
+            operation_payload_hash=payload_hash if operation_id else '',
         )
         AuditLog.log(
             user=request.user,
@@ -377,23 +633,28 @@ class CashRegisterView(APIView):
         )
         return Response(self._summary(), status=status.HTTP_201_CREATED)
 
-    def _count(self, request):
-        counted_amount = self._money(request.data.get('counted_amount'))
-        if counted_amount is None or counted_amount < 0:
-            return Response(
-                {'counted_amount': ['Montant compte invalide.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+    @transaction.atomic
+    def _count(self, request, operation):
+        counted_amount = operation['counted_amount']
+        note = operation.get('note') or 'Reglage apres comptage reel'
+        operation_id = operation.get('operation_id')
+        payload_hash = self._payload_hash('count', counted_amount, note)
+        duplicate = self._lock_and_find_operation(operation_id, payload_hash)
+        if isinstance(duplicate, Response):
+            return duplicate
+        if duplicate:
+            return Response(self._summary(), status=status.HTTP_200_OK)
 
         current_balance = self._balance()
         delta = counted_amount - current_balance
-        note = request.data.get('note') or 'Reglage apres comptage reel'
         adjustment = CashRegisterAdjustment.objects.create(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.COUNT,
             amount=delta,
             counted_amount=counted_amount,
             note=note,
             created_by=request.user,
+            operation_id=operation_id,
+            operation_payload_hash=payload_hash if operation_id else '',
         )
         AuditLog.log(
             user=request.user,
@@ -411,13 +672,14 @@ class CashRegisterView(APIView):
         credit_payments = self._credit_payments_total()
         completed_returns = self._completed_returns_total()
         expenses = self._expenses_total()
+        supplier_payments = self._supplier_cash_payments_total()
         adjustments = self._adjustments_total()
         opening = self._adjustments_total(
             adjustment_type=CashRegisterAdjustment.AdjustmentType.OPENING,
         )
         balance = (
             adjustments + cash_sales + credit_payments
-            - completed_returns - expenses
+            - completed_returns - expenses - supplier_payments
         )
         last_adjustment = CashRegisterAdjustment.objects.order_by('-created_at').first()
         recent_adjustments = CashRegisterAdjustment.objects.select_related(
@@ -431,6 +693,7 @@ class CashRegisterView(APIView):
             'credit_payments_total': float(credit_payments),
             'returns_total': float(completed_returns),
             'expenses_total': float(expenses),
+            'supplier_payments_total': float(supplier_payments),
             'adjustments_total': float(adjustments),
             'last_adjustment': (
                 CashRegisterAdjustmentSerializer(last_adjustment).data
@@ -448,13 +711,35 @@ class CashRegisterView(APIView):
             + self._credit_payments_total()
             - self._completed_returns_total()
             - self._expenses_total()
+            - self._supplier_cash_payments_total()
         )
 
-    def _money(self, value):
-        try:
-            return Decimal(str(value)).quantize(Decimal('0.01'))
-        except Exception:
+    def _payload_hash(self, action_name, amount, note):
+        payload = json.dumps({
+            'action': action_name,
+            'amount': str(amount),
+            'note': str(note).strip(),
+        }, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        return hashlib.sha256(payload).hexdigest()
+
+    def _lock_and_find_operation(self, operation_id, payload_hash):
+        CashRegisterState.objects.get_or_create(pk=1)
+        CashRegisterState.objects.select_for_update().get(pk=1)
+        if not operation_id:
             return None
+        existing = CashRegisterAdjustment.objects.filter(
+            operation_id=operation_id,
+        ).first()
+        if not existing:
+            return None
+        if existing.operation_payload_hash != payload_hash:
+            return Response(
+                {'operation_id': [
+                    'Cet identifiant a deja ete utilise avec une autre operation.'
+                ]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return existing
 
     def _cash_sales_total(self):
         return (
@@ -475,7 +760,10 @@ class CashRegisterView(APIView):
 
     def _completed_returns_total(self):
         return (
-            Return.objects.filter(status=Return.ReturnStatus.COMPLETED)
+            Return.objects.filter(
+                status=Return.ReturnStatus.COMPLETED,
+                refund_method=Sale.PaymentMethod.CASH,
+            )
             .aggregate(total=Sum('refund_amount'))['total']
             or Decimal('0')
         )
@@ -484,6 +772,15 @@ class CashRegisterView(APIView):
         return (
             Expense.objects.filter(paid_from_cash=True)
             .aggregate(total=Sum('amount'))['total']
+            or Decimal('0')
+        )
+
+    def _supplier_cash_payments_total(self):
+        return (
+            SupplierPayment.objects.filter(
+                method=SupplierPayment.PaymentMethod.CASH,
+                status=SupplierPayment.PaymentStatus.ACTIVE,
+            ).aggregate(total=Sum('amount'))['total']
             or Decimal('0')
         )
 
@@ -502,19 +799,24 @@ class CashierExpenseView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses=ExpenseCategorySerializer(many=True))
     def get(self, request):
-        categories = ExpenseCategory.objects.order_by('name')
+        categories = ExpenseCategory.objects.exclude(
+            name=MANAGER_WITHDRAWAL_CATEGORY,
+        ).order_by('name')
         return Response(ExpenseCategorySerializer(categories, many=True).data)
 
+    @extend_schema(
+        request=CashierExpenseCreateSerializer,
+        responses={201: ExpenseSerializer},
+    )
     def post(self, request):
-        amount = self._money(request.data.get('amount'))
-        if amount is None or amount <= 0:
-            return Response(
-                {'amount': ['Montant invalide.']},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        input_serializer = CashierExpenseCreateSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        expense_data = input_serializer.validated_data
+        amount = expense_data['amount']
 
-        category_id = request.data.get('category')
+        category_id = expense_data['category']
         try:
             category = ExpenseCategory.objects.get(pk=category_id)
         except (ExpenseCategory.DoesNotExist, ValueError, TypeError):
@@ -522,51 +824,107 @@ class CashierExpenseView(APIView):
                 {'category': ['Categorie invalide.']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        incurred_on_value = request.data.get('incurred_on')
-        incurred_on = parse_date(incurred_on_value) if incurred_on_value else timezone.localdate()
-        if incurred_on_value and incurred_on is None:
+        if category.name == MANAGER_WITHDRAWAL_CATEGORY:
             return Response(
-                {'incurred_on': ['Date invalide.']},
+                {
+                    'category': [
+                        'Cette categorie est reservee au retrait gere par un administrateur.'
+                    ],
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        monthly, _ = MonthlyAccounting.objects.get_or_create(
-            year=incurred_on.year,
-            month=incurred_on.month,
-        )
-        expense = Expense.objects.create(
-            monthly=monthly,
-            category=category,
-            amount=amount,
-            description=request.data.get('description') or '',
-            incurred_on=incurred_on,
-            paid_from_cash=True,
-        )
-        if category.name == MANAGER_WITHDRAWAL_CATEGORY:
-            sync_manager_withdrawal(monthly)
-        AuditLog.log(
-            user=request.user,
-            action=AuditLog.ActionType.CREATE,
-            model_name='Expense',
-            object_id=expense.id,
-            object_repr=str(expense),
-            request=request,
-        )
-        return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
+        incurred_on = expense_data.get('incurred_on', timezone.localdate())
+        description = expense_data.get('description', '')
+        operation_id = expense_data.get('operation_id')
+        payload_hash = ''
 
-    def _money(self, value):
         try:
-            return Decimal(str(value)).quantize(Decimal('0.01'))
-        except Exception:
-            return None
+            with transaction.atomic():
+                category = ExpenseCategory.objects.select_for_update().get(
+                    pk=category.pk,
+                )
+                if category.name == MANAGER_WITHDRAWAL_CATEGORY:
+                    return Response(
+                        {'category': ['Cette catégorie est réservée à un administrateur.']},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                monthly, _ = MonthlyAccounting.objects.get_or_create(
+                    year=incurred_on.year,
+                    month=incurred_on.month,
+                )
+                payload_hash = expense_operation_payload_hash(
+                    'cashier_expense',
+                    monthly_id=monthly.pk,
+                    category_id=category.pk,
+                    amount=amount,
+                    description=description,
+                    incurred_on=incurred_on,
+                    paid_from_cash=True,
+                )
+                duplicate = lock_and_find_expense_operation(
+                    request,
+                    operation_id,
+                    payload_hash,
+                )
+                if isinstance(duplicate, Response):
+                    return duplicate
+                if duplicate is not None:
+                    return Response(
+                        ExpenseSerializer(duplicate).data,
+                        status=status.HTTP_200_OK,
+                    )
+
+                expense = Expense.objects.create(
+                    monthly=monthly,
+                    category=category,
+                    amount=amount,
+                    description=description,
+                    incurred_on=incurred_on,
+                    paid_from_cash=True,
+                    created_by=request.user,
+                    operation_id=operation_id,
+                    operation_payload_hash=(payload_hash if operation_id else ''),
+                )
+                AuditLog.log(
+                    user=request.user,
+                    action=AuditLog.ActionType.CREATE,
+                    model_name='Expense',
+                    object_id=expense.id,
+                    object_repr=str(expense),
+                    request=request,
+                )
+        except IntegrityError:
+            existing = find_expense_after_integrity_error(
+                request,
+                operation_id,
+                payload_hash,
+            )
+            if existing is not None:
+                return Response(
+                    ExpenseSerializer(existing).data,
+                    status=status.HTTP_200_OK,
+                )
+            return Response(
+                {'operation_id': ['Identifiant de dépense déjà utilisé.']},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(ExpenseSerializer(expense).data, status=status.HTTP_201_CREATED)
 
 class YearSummaryView(APIView):
     """Synthèse annuelle: par mois, par trimestre, par catégorie."""
     permission_classes = [IsAuthenticated, IsAdminRole]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
-        year = int(request.query_params.get('year', timezone.now().year))
+        try:
+            year = int(request.query_params.get('year', timezone.localdate().year))
+            date(year, 1, 1)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Annee invalide.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         monthly_qs = MonthlyAccounting.objects.filter(year=year).prefetch_related(
             'expenses', 'expenses__category'
@@ -586,6 +944,10 @@ class YearSummaryView(APIView):
                 _date(year, m, 1), _date(year, m, last_day)
             ))
             net_profit = gross_margin - expenses_total
+            supplier_payments = float(supplier_payments_for_period(
+                _date(year, m, 1),
+                _date(year, m, last_day),
+            ))
             months.append({
                 'month': m,
                 'label': date(year, m, 1).strftime('%b'),
@@ -593,6 +955,7 @@ class YearSummaryView(APIView):
                 'gross_margin': gross_margin,
                 'manager_withdrawal': withdrawal,
                 'expenses': expenses_total,
+                'supplier_payments': supplier_payments,
                 'net_profit': net_profit,
             })
 
@@ -607,6 +970,7 @@ class YearSummaryView(APIView):
                 'gross_margin': sum(x['gross_margin'] for x in qmonths),
                 'manager_withdrawal': sum(x['manager_withdrawal'] for x in qmonths),
                 'expenses': sum(x['expenses'] for x in qmonths),
+                'supplier_payments': sum(x['supplier_payments'] for x in qmonths),
                 'net_profit': sum(x['net_profit'] for x in qmonths),
             })
 
@@ -627,6 +991,7 @@ class YearSummaryView(APIView):
             'gross_margin': sum(m['gross_margin'] for m in months),
             'manager_withdrawal': sum(m['manager_withdrawal'] for m in months),
             'expenses': sum(m['expenses'] for m in months),
+            'supplier_payments': sum(m['supplier_payments'] for m in months),
             'net_profit': sum(m['net_profit'] for m in months),
         }
 
@@ -651,14 +1016,21 @@ class PeriodSummaryView(APIView):
     """
     permission_classes = [IsAuthenticated, IsAdminRole]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         period_type = request.query_params.get('type', 'day')
         raw_date = request.query_params.get('date')
-        target = (
-            date.fromisoformat(raw_date)
-            if raw_date
-            else timezone.localdate()
-        )
+        try:
+            target = (
+                date.fromisoformat(raw_date)
+                if raw_date
+                else timezone.localdate()
+            )
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Date invalide. Format attendu: AAAA-MM-JJ.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if period_type == 'week':
             start = target - timedelta(days=target.weekday())
@@ -672,6 +1044,7 @@ class PeriodSummaryView(APIView):
         revenue_by_day = self._revenue_by_day(start, end)
         margin_by_day = self._gross_margin_by_day(start, end)
         dated_expenses_by_day = self._dated_expenses_by_day(start, end)
+        supplier_payments_by_day = self._supplier_payments_by_day(start, end)
 
         # Quote-part journalière des dépenses non-datées (calcul Python pur)
         undated_share_by_day = self._undated_share_by_day(start, end)
@@ -683,6 +1056,10 @@ class PeriodSummaryView(APIView):
         undated_total = sum(undated_share_by_day.values(), Decimal('0'))
         expenses = dated_total + undated_total
         net_profit = gross_margin - expenses
+        supplier_payments = sum(
+            supplier_payments_by_day.values(),
+            Decimal('0'),
+        )
 
         # Liste des dépenses datées dans la période (pas les non-datées,
         # qui sont des "moyennes mensuelles" - on les expose à part).
@@ -710,12 +1087,17 @@ class PeriodSummaryView(APIView):
                     dated_expenses_by_day.get(day, Decimal('0'))
                     + undated_share_by_day.get(day, Decimal('0'))
                 )
+                day_supplier_payments = supplier_payments_by_day.get(
+                    day,
+                    Decimal('0'),
+                )
                 daily.append({
                     'date': day.isoformat(),
                     'label': day.strftime('%a %d/%m'),
                     'revenue': float(day_revenue),
                     'gross_margin': float(day_margin),
                     'expenses': float(day_expenses),
+                    'supplier_payments': float(day_supplier_payments),
                     'net_profit': float(day_margin - day_expenses),
                 })
 
@@ -729,6 +1111,7 @@ class PeriodSummaryView(APIView):
             'expenses': float(expenses),
             'expenses_dated': float(dated_total),
             'expenses_undated_share': float(undated_total),
+            'supplier_payments': float(supplier_payments),
             'net_profit': float(net_profit),
             'expenses_detail': expenses_detail,
             'category_breakdown': category_breakdown,
@@ -737,6 +1120,18 @@ class PeriodSummaryView(APIView):
         })
 
     # ---- Helpers agrégés ----
+
+    def _supplier_payments_by_day(self, start, end):
+        rows = (
+            SupplierPayment.objects.filter(
+                status=SupplierPayment.PaymentStatus.ACTIVE,
+                paid_on__gte=start,
+                paid_on__lte=end,
+            )
+            .values('paid_on')
+            .annotate(total=Sum('amount'))
+        )
+        return {row['paid_on']: row['total'] for row in rows}
 
     def _revenue_by_day(self, start, end):
         start_dt, end_dt = local_datetime_bounds(start, end)
@@ -751,11 +1146,20 @@ class PeriodSummaryView(APIView):
             .values('d')
             .annotate(total=Sum('total_ttc'))
         )
-        revenue = {row['d']: row['total'] or Decimal('0') for row in rows}
-        # Ajouter les règlements de crédit à leur date
+        result = {row['d']: row['total'] or Decimal('0') for row in rows}
+        refunds = (
+            completed_returns_for_period(start, end)
+            .annotate(d=TruncDate('completed_at', tzinfo=tz))
+            .values('d')
+            .annotate(total=Sum('refund_amount'))
+        )
+        for row in refunds:
+            result[row['d']] = result.get(row['d'], Decimal('0')) - (
+                row['total'] or Decimal('0')
+            )
         for d, amount in self._credit_payments_by_day(start, end).items():
-            revenue[d] = revenue.get(d, Decimal('0')) + amount
-        return revenue
+            result[d] = result.get(d, Decimal('0')) + amount
+        return result
 
     def _gross_margin_by_day(self, start, end):
         # Marge brute = (vente - achat) - remise, agrégée par jour.
@@ -795,7 +1199,33 @@ class PeriodSummaryView(APIView):
             margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
                 row['total'] or Decimal('0')
             )
-        # Ajouter le revenu des règlements de crédit, et soustraire le coût au prorata
+        refunds = (
+            completed_returns_for_period(start, end)
+            .annotate(d=TruncDate('completed_at', tzinfo=tz))
+            .values('d')
+            .annotate(total=Sum('refund_amount'))
+        )
+        for row in refunds:
+            margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
+                row['total'] or Decimal('0')
+            )
+
+        returned_cost = (
+            ReturnItem.objects.filter(
+                return_order__in=completed_returns_for_period(start, end),
+                restock=True,
+            )
+            .annotate(d=TruncDate('return_order__completed_at', tzinfo=tz))
+            .values('d')
+            .annotate(total=Sum(ExpressionWrapper(
+                F('sale_item__unit_purchase_price') * F('quantity'),
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            )))
+        )
+        for row in returned_cost:
+            margin[row['d']] = margin.get(row['d'], Decimal('0')) + (
+                row['total'] or Decimal('0')
+            )
         payments_by_day = self._credit_payments_by_day(start, end)
         costs_by_day = self._credit_payment_costs_by_day(start, end)
         for d, amount in payments_by_day.items():
@@ -896,11 +1326,24 @@ class PeriodSummaryView(APIView):
                     monthly__month=cur.month,
                 ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
                 if month_undated:
-                    daily_share = (month_undated / Decimal(days_in_month)).quantize(
-                        Decimal('0.01'), rounding=ROUND_HALF_UP,
+                    days_overlap = (eff_end - eff_start).days + 1
+                    period_share = (
+                        month_undated
+                        * Decimal(days_overlap)
+                        / Decimal(days_in_month)
+                    ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    base_share = (
+                        period_share / Decimal(days_overlap)
+                    ).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+                    residual_cents = int(
+                        (period_share - base_share * days_overlap)
+                        / Decimal('0.01')
                     )
                     d = eff_start
-                    while d <= eff_end:
+                    for offset in range(days_overlap):
+                        daily_share = base_share
+                        if offset < residual_cents:
+                            daily_share += Decimal('0.01')
                         result[d] = result.get(d, Decimal('0')) + daily_share
                         d += timedelta(days=1)
             if cur.month == 12:

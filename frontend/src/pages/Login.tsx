@@ -1,12 +1,21 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Eye, EyeOff, LogIn } from 'lucide-react';
-import client, { getApiErrorMessage } from '../api/client';
+import client, {
+    clearAuthSession,
+    getApiErrorMessage,
+    setAuthSession,
+    setStoredUserRole,
+} from '../api/client';
+import { cacheCurrentUser, clearSessionQueryCache } from '../utils/sessionQueryCache';
 
 export default function Login() {
     const { t } = useTranslation();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const [searchParams] = useSearchParams();
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -20,22 +29,33 @@ export default function Login() {
 
         try {
             const response = await client.post('/auth/login/', { username, password });
-            localStorage.setItem('token', response.data.access);
-            if (response.data.refresh) {
-                localStorage.setItem('refreshToken', response.data.refresh);
+            if (!response.data?.access || !response.data?.refresh) {
+                throw new Error('Réponse de connexion invalide.');
             }
+            setAuthSession(response.data.access, response.data.refresh);
+            // A previous user may still be cached for one minute. Never let
+            // an admin profile leak into a newly opened cashier session.
+            await clearSessionQueryCache(queryClient);
 
             // Récupérer les infos utilisateur
+            let role = 'CASHIER';
             try {
                 const meResponse = await client.get('/auth/me/');
-                localStorage.setItem('userRole', meResponse.data.role);
+                role = meResponse.data.role;
+                setStoredUserRole(role);
+                cacheCurrentUser(queryClient, meResponse.data);
             } catch {
-                localStorage.setItem('userRole', 'CASHIER');
+                setStoredUserRole(role);
             }
 
-            navigate('/');
+            const requestedPath = searchParams.get('next');
+            const safeNext = requestedPath?.startsWith('/') && !requestedPath.startsWith('//')
+                ? requestedPath
+                : null;
+            navigate(safeNext || (role === 'ADMIN' ? '/' : '/pos'), { replace: true });
         } catch (err: unknown) {
-            console.error(err);
+            clearAuthSession();
+            queryClient.clear();
             const errorMessage = getApiErrorMessage(err, 'Identifiants incorrects');
             setError(errorMessage);
         } finally {
@@ -68,43 +88,59 @@ export default function Login() {
                 {/* Form */}
                 <div className="p-8">
                     {error && (
-                        <div className="bg-danger-light text-danger p-4 rounded-lg mb-6 flex items-center gap-2">
+                        <div
+                            id="login-error"
+                            role="alert"
+                            className="bg-danger-light text-danger p-4 rounded-lg mb-6 flex items-center gap-2"
+                        >
                             <span className="text-sm">{error}</span>
                         </div>
                     )}
 
                     <form onSubmit={handleSubmit} className="space-y-5">
                         <div>
-                            <label className="block text-sm font-medium mb-2">
+                            <label htmlFor="login-username" className="block text-sm font-medium mb-2">
                                 Nom d'utilisateur
                             </label>
                             <input
                                 type="text"
+                                id="login-username"
+                                name="username"
+                                autoComplete="username"
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
                                 placeholder="admin"
                                 required
                                 autoFocus
+                                aria-invalid={Boolean(error)}
+                                aria-describedby={error ? 'login-error' : undefined}
                             />
                         </div>
 
                         <div>
-                            <label className="block text-sm font-medium mb-2">
+                            <label htmlFor="login-password" className="block text-sm font-medium mb-2">
                                 Mot de passe
                             </label>
                             <div className="relative">
                                 <input
                                     type={showPassword ? 'text' : 'password'}
+                                    id="login-password"
+                                    name="password"
+                                    autoComplete="current-password"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     placeholder="••••••••"
                                     required
+                                    aria-invalid={Boolean(error)}
+                                    aria-describedby={error ? 'login-error' : undefined}
                                     style={{ paddingRight: '3rem' }}
                                 />
                                 <button
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-primary transition-colors"
+                                    aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                                    aria-pressed={showPassword}
                                 >
                                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                                 </button>
@@ -115,6 +151,7 @@ export default function Login() {
                             type="submit"
                             disabled={loading}
                             className="btn-primary w-full btn-lg"
+                            aria-busy={loading}
                         >
                             {loading ? (
                                 <span className="animate-pulse">Connexion...</span>

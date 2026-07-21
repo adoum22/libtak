@@ -1,3 +1,14 @@
+import base64
+import hashlib
+import json
+import os
+import sqlite3
+import tempfile
+import zipfile
+from contextlib import closing
+from pathlib import Path
+from unittest.mock import patch
+
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
@@ -8,9 +19,19 @@ from datetime import date, timedelta
 from django.utils import timezone
 
 from inventory.models import Product
-from sales.models import Sale, SaleItem
-from .models import ReportSettings, ReportLog
-from .tasks import email_config_error, get_report_data, send_report_email
+from sales.models import Return, ReturnItem, Sale, SaleItem
+from .models import ReportSettings, ReportLog, ScheduledJobClaim
+from .tasks import (
+    daily_database_backup,
+    email_config_error,
+    get_report_data,
+    send_report_email,
+)
+from .backup_utils import (
+    BackupValidationError,
+    decrypt_archive,
+    validate_zip_archive,
+)
 from io import StringIO
 
 User = get_user_model()
@@ -63,9 +84,104 @@ class ReportEmailConfigTest(TestCase):
         ReportSettings.get_settings().save()
         out = StringIO()
 
-        call_command('send_scheduled_reports', '--skip-backup', stdout=out)
+        call_command(
+            'send_scheduled_reports', '--skip-backup', '--force-all', stdout=out,
+        )
 
         self.assertIn('X daily report: No recipients configured', out.getvalue())
+
+    def test_scheduler_claim_prevents_duplicate_successful_send(self):
+        today = timezone.localdate()
+        report_settings = ReportSettings.get_settings()
+        report_settings.daily_enabled = True
+        report_settings.weekly_enabled = False
+        report_settings.monthly_enabled = False
+        report_settings.quarterly_enabled = False
+        report_settings.yearly_enabled = False
+        report_settings.low_stock_last_sent_on = today
+        report_settings.save()
+
+        target = 'reporting.management.commands.send_scheduled_reports.send_daily_report'
+        with patch(target, return_value='Daily report sent successfully') as sender:
+            call_command('send_scheduled_reports', '--force-all', '--skip-backup')
+            call_command('send_scheduled_reports', '--force-all', '--skip-backup')
+
+        self.assertEqual(sender.call_count, 1)
+        report_settings.refresh_from_db()
+        self.assertEqual(report_settings.daily_last_sent_on, today)
+        claim = ScheduledJobClaim.objects.get(job_name='DAILY', run_date=today)
+        self.assertEqual(claim.status, ScheduledJobClaim.Status.SUCCESS)
+
+
+class EncryptedBackupTest(TestCase):
+    def test_backup_is_encrypted_restorable_and_detects_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup_dir = root / 'backups'
+            media_dir = root / 'media'
+            media_dir.mkdir()
+            (media_dir / 'proof.txt').write_text('media preserved', encoding='utf-8')
+            source_db = root / 'source.sqlite3'
+            with closing(sqlite3.connect(source_db)) as connection:
+                connection.execute('CREATE TABLE proof (value TEXT)')
+                connection.execute("INSERT INTO proof VALUES ('database preserved')")
+                connection.commit()
+            key = base64.urlsafe_b64encode(b'b' * 32).decode('ascii')
+            database_settings = {
+                'default': {
+                    'ENGINE': 'django.db.backends.sqlite3',
+                    'NAME': source_db,
+                },
+            }
+
+            with override_settings(
+                DATABASES=database_settings,
+                MEDIA_ROOT=media_dir,
+            ), patch.dict(os.environ, {
+                'BACKUP_DIR': str(backup_dir),
+                'BACKUP_ENCRYPTION_KEY': key,
+            }), patch('reporting.tasks.ReportLog.objects.create'):
+                result = str(daily_database_backup())
+
+            self.assertTrue(result.startswith('Backup created: '), result)
+            encrypted = Path(result.split(': ', 1)[1])
+            self.assertEqual(encrypted.suffix, '.ltbk')
+            self.assertEqual(encrypted.read_bytes()[:5], b'LTBK1')
+            self.assertEqual(list(backup_dir.glob('*.sqlite3')), [])
+
+            decrypted = root / 'backup.zip'
+            with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}):
+                decrypt_archive(encrypted, decrypted)
+            manifest = validate_zip_archive(decrypted)
+            self.assertIn('database.sqlite3', manifest['files_sha256'])
+            self.assertIn('media/proof.txt', manifest['files_sha256'])
+
+            altered = bytearray(encrypted.read_bytes())
+            altered[len(altered) // 2] ^= 1
+            tampered = root / 'tampered.ltbk'
+            tampered.write_bytes(altered)
+            with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}):
+                with self.assertRaises(BackupValidationError):
+                    decrypt_archive(tampered, root / 'tampered.zip')
+
+    def test_archive_requires_checksums_for_every_member(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / 'unsafe.zip'
+            database = b'not a real database'
+            manifest = {
+                'format': 1,
+                'database_engine': 'django.db.backends.sqlite3',
+                'files_sha256': {
+                    'database.sqlite3': hashlib.sha256(database).hexdigest(),
+                },
+            }
+            with zipfile.ZipFile(archive_path, 'w') as archive:
+                archive.writestr('database.sqlite3', database)
+                archive.writestr('unexpected.txt', 'not covered')
+                archive.writestr('manifest.json', json.dumps(manifest))
+
+            with self.assertRaises(BackupValidationError):
+                validate_zip_archive(archive_path)
 
 
 class ReportDataTest(TestCase):
@@ -119,10 +235,51 @@ class ReportDataTest(TestCase):
         data = get_report_data(today, today)
 
         self.assertEqual(data['total_sales'], 1)
-        # Le rapport utilise le prix de vente simple * quantity = 20.0
-        self.assertEqual(data['total_revenue'], 20.0)
+        # La source comptable autoritaire est le total TTC enregistré.
+        self.assertEqual(data['total_revenue'], 24.0)
         self.assertGreater(data['total_profit'], 0)
         self.assertEqual(len(data['items_sold']), 1)
+
+    def test_completed_return_reverses_revenue_and_restocked_cost(self):
+        sale = Sale.objects.create(
+            user=self.user,
+            total_ht=Decimal('100.00'),
+            total_tva=Decimal('0.00'),
+            total_ttc=Decimal('100.00'),
+            payment_method=Sale.PaymentMethod.CASH,
+        )
+        item = SaleItem.objects.create(
+            sale=sale,
+            product=self.product,
+            product_name=self.product.name,
+            quantity=2,
+            unit_price_ht=Decimal('50.00'),
+            total_price_ht=Decimal('100.00'),
+            tva_rate=Decimal('0.00'),
+            unit_purchase_price=Decimal('30.00'),
+            total_purchase_cost=Decimal('60.00'),
+        )
+        returned = Return.objects.create(
+            sale=sale,
+            status=Return.ReturnStatus.COMPLETED,
+            reason='Retour partiel',
+            refund_amount=Decimal('50.00'),
+            completed_at=timezone.now(),
+        )
+        ReturnItem.objects.create(
+            return_order=returned,
+            sale_item=item,
+            quantity=1,
+            restock=True,
+        )
+
+        data = get_report_data(timezone.localdate(), timezone.localdate())
+
+        self.assertEqual(data['gross_revenue'], 100.0)
+        self.assertEqual(data['total_returns'], 50.0)
+        self.assertEqual(data['total_revenue'], 50.0)
+        self.assertEqual(data['net_cost'], 30.0)
+        self.assertEqual(data['gross_margin'], 20.0)
 
 
 class ReportLogTest(TestCase):

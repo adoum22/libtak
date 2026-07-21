@@ -17,8 +17,12 @@ build/
 *.log
 local_settings.py
 db.sqlite3
+*.sqlite3.pre-fix-*.bak
 media/
 staticfiles/
+.libtak-secure-backups/
+backend/backups/
+*.ltbk
 
 # Node.js
 node_modules/
@@ -62,10 +66,13 @@ dump.rdb
 htmlcov/
 .coverage
 .coverage.*
+coverage.xml
+frontend/coverage/
 
 # Misc
 *.bak
 *.tmp
+.tmp-business-e2e-*/
 
 # Local secrets / notes (never push)
 code secret*.txt

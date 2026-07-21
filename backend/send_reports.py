@@ -16,7 +16,8 @@ Usage: python send_reports.py
 import os
 import sys
 import smtplib
-import shutil
+import ssl
+from pathlib import Path
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -24,8 +25,9 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from decimal import Decimal
 
-# Configuration Django
-sys.path.insert(0, '/home/dido22/libtak/backend')
+# Configuration Django, independent of the installation directory.
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
 import django
@@ -52,21 +54,21 @@ def get_report_data(start_date, end_date):
         created_at__date__gte=start_date,
         created_at__date__lte=end_date
     )
-    
+
     returns = Return.objects.filter(
         created_at__date__gte=start_date,
         created_at__date__lte=end_date
     )
-    
+
     total_sales = sales.count()
     gross_revenue = float(sales.aggregate(total=Sum('total_ttc'))['total'] or 0)
     returns_amount = float(returns.aggregate(total=Sum('refund_amount'))['total'] or 0)
     total_revenue = gross_revenue - returns_amount
-    
+
     # Calcul du profit
     total_profit = 0
     items_sold = []
-    
+
     sale_items = SaleItem.objects.filter(sale__in=sales).select_related('product')
     for item in sale_items:
         if item.product:
@@ -74,7 +76,7 @@ def get_report_data(start_date, end_date):
             revenue = float(item.unit_price_ht) * item.quantity
             profit = revenue - cost
             total_profit += profit
-            
+
             items_sold.append({
                 'name': item.product.name,
                 'barcode': item.product.barcode,
@@ -83,7 +85,7 @@ def get_report_data(start_date, end_date):
                 'revenue': revenue,
                 'profit': profit
             })
-    
+
     return {
         'period_start': start_date,
         'period_end': end_date,
@@ -100,10 +102,10 @@ def generate_pdf_report(data, report_type):
     """Génère un PDF du rapport."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-    
+
     elements = []
     styles = getSampleStyleSheet()
-    
+
     # Titre
     title_style = ParagraphStyle(
         'CustomTitle',
@@ -113,7 +115,7 @@ def generate_pdf_report(data, report_type):
         spaceAfter=30,
         alignment=TA_CENTER
     )
-    
+
     type_labels = {
         'DAILY': 'Journalier',
         'WEEKLY': 'Hebdomadaire',
@@ -121,10 +123,10 @@ def generate_pdf_report(data, report_type):
         'QUARTERLY': 'Trimestriel',
         'YEARLY': 'Annuel'
     }
-    
+
     title = f"Rapport {type_labels.get(report_type, report_type)}"
     elements.append(Paragraph(title, title_style))
-    
+
     # Période
     period_style = ParagraphStyle(
         'Period',
@@ -137,7 +139,7 @@ def generate_pdf_report(data, report_type):
     period_text = f"Du {data['period_start'].strftime('%d/%m/%Y')} au {data['period_end'].strftime('%d/%m/%Y')}"
     elements.append(Paragraph(period_text, period_style))
     elements.append(Spacer(1, 20))
-    
+
     # Résumé
     summary_data = [
         ['Indicateur', 'Valeur'],
@@ -147,7 +149,7 @@ def generate_pdf_report(data, report_type):
         ['Chiffre d\'affaires net', f"{data['total_revenue']:.2f} MAD"],
         ['Bénéfice total', f"{data['total_profit']:.2f} MAD"],
     ]
-    
+
     summary_table = Table(summary_data, colWidths=[10*cm, 6*cm])
     summary_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#6366f1')),
@@ -161,12 +163,12 @@ def generate_pdf_report(data, report_type):
     ]))
     elements.append(summary_table)
     elements.append(Spacer(1, 30))
-    
+
     # Top 10 produits vendus
     if data['items_sold']:
         elements.append(Paragraph("Top 10 Produits Vendus", styles['Heading2']))
         elements.append(Spacer(1, 10))
-        
+
         # Agréger par produit
         product_summary = {}
         for item in data['items_sold']:
@@ -176,10 +178,10 @@ def generate_pdf_report(data, report_type):
             product_summary[name]['quantity'] += item['quantity']
             product_summary[name]['revenue'] += item['revenue']
             product_summary[name]['profit'] += item['profit']
-        
+
         # Trier par quantité et prendre top 10
         sorted_products = sorted(product_summary.items(), key=lambda x: x[1]['quantity'], reverse=True)[:10]
-        
+
         product_data = [['Produit', 'Quantité', 'CA', 'Bénéfice']]
         for name, stats in sorted_products:
             product_data.append([
@@ -188,7 +190,7 @@ def generate_pdf_report(data, report_type):
                 f"{stats['revenue']:.2f} MAD",
                 f"{stats['profit']:.2f} MAD"
             ])
-        
+
         product_table = Table(product_data, colWidths=[8*cm, 2.5*cm, 3*cm, 3*cm])
         product_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8b5cf6')),
@@ -200,7 +202,7 @@ def generate_pdf_report(data, report_type):
             ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e5e7eb')),
         ]))
         elements.append(product_table)
-    
+
     # Générer le PDF
     doc.build(elements)
     buffer.seek(0)
@@ -217,14 +219,17 @@ def send_email(report_settings, subject, body, attachments=None):
     smtp_user = os.environ.get('EMAIL_HOST_USER') or getattr(django_settings, 'EMAIL_HOST_USER', '')
     smtp_pass = os.environ.get('EMAIL_HOST_PASSWORD') or getattr(django_settings, 'EMAIL_HOST_PASSWORD', '')
     from_email = os.environ.get('DEFAULT_FROM_EMAIL') or getattr(django_settings, 'DEFAULT_FROM_EMAIL', smtp_user)
+    timeout = getattr(django_settings, 'EMAIL_TIMEOUT', 30)
+    use_tls = getattr(django_settings, 'EMAIL_USE_TLS', True)
+    use_ssl = getattr(django_settings, 'EMAIL_USE_SSL', False)
 
     if not smtp_host or not smtp_user or not smtp_pass:
-        print("❌ Configuration SMTP manquante (EMAIL_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD)")
+        print("[ERROR] Configuration SMTP manquante (EMAIL_HOST/EMAIL_HOST_USER/EMAIL_HOST_PASSWORD)")
         return False
 
     recipients = report_settings.get_recipients_list()
     if not recipients:
-        print("❌ Aucun destinataire configuré")
+        print("[ERROR] Aucun destinataire configuré")
         return False
 
     try:
@@ -241,72 +246,77 @@ def send_email(report_settings, subject, body, attachments=None):
                 attachment.add_header('Content-Disposition', 'attachment', filename=filename)
                 msg.attach(attachment)
 
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
+        if use_tls and use_ssl:
+            raise RuntimeError('EMAIL_USE_TLS and EMAIL_USE_SSL are mutually exclusive')
+
+        tls_context = ssl.create_default_context()
+        if use_ssl:
+            server_context = smtplib.SMTP_SSL(
+                smtp_host,
+                smtp_port,
+                timeout=timeout,
+                context=tls_context,
+            )
+        else:
+            server_context = smtplib.SMTP(
+                smtp_host,
+                smtp_port,
+                timeout=timeout,
+            )
+
+        with server_context as server:
+            if use_tls:
+                server.ehlo()
+                server.starttls(context=tls_context)
+                server.ehlo()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
 
-        print(f"✅ Email envoyé à: {', '.join(recipients)}")
+        print(f"[OK] Email envoyé à {len(recipients)} destinataire(s) configuré(s).")
         return True
 
     except Exception as e:
-        print(f"❌ Erreur d'envoi: {str(e)}")
+        print(f"[ERROR] Échec de l'envoi SMTP ({type(e).__name__}).")
         return False
 
 
 def backup_database():
-    """Crée une sauvegarde de la base de données SQLite."""
-    source_db = '/home/dido22/libtak/backend/db.sqlite3'
-    backup_dir = '/home/dido22/backups'
-    
-    # Créer le dossier de backup s'il n'existe pas
-    os.makedirs(backup_dir, exist_ok=True)
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    backup_filename = f'libtak_backup_{timestamp}.sqlite3'
-    backup_path = os.path.join(backup_dir, backup_filename)
-    
-    try:
-        shutil.copy2(source_db, backup_path)
-        print(f"✅ Backup créé: {backup_path}")
-        
-        # Garder seulement les 7 derniers backups
-        backups = sorted([f for f in os.listdir(backup_dir) if f.startswith('libtak_backup_')])
-        while len(backups) > 7:
-            old_backup = backups.pop(0)
-            os.remove(os.path.join(backup_dir, old_backup))
-            print(f"🗑️ Ancien backup supprimé: {old_backup}")
-        
-        return backup_path
-    except Exception as e:
-        print(f"❌ Erreur de backup: {str(e)}")
+    """Create the same encrypted, verified backup as the Django scheduler."""
+    from reporting.tasks import daily_database_backup
+
+    result = str(daily_database_backup())
+    if not result.startswith('Backup created: '):
+        print(f'[ERROR] {result}')
         return None
+    backup_path = result.split(': ', 1)[1]
+    print(f"[OK] Sauvegarde chiffrée créée: {Path(backup_path).name}")
+    return backup_path
 
 
 def should_send_report(report_type, settings, today):
     """Détermine si un rapport doit être envoyé aujourd'hui."""
     if report_type == 'DAILY':
         return settings.daily_enabled
-    
+
     elif report_type == 'WEEKLY':
         # weekly_day: 0=Lundi, 6=Dimanche
         return settings.weekly_enabled and today.weekday() == settings.weekly_day
-    
+
     elif report_type == 'MONTHLY':
         # Dernier jour du mois
         tomorrow = today + timedelta(days=1)
         return settings.monthly_enabled and tomorrow.month != today.month
-    
+
     elif report_type == 'QUARTERLY':
         # Fin de trimestre: 31 mars, 30 juin, 30 sept, 31 déc
         tomorrow = today + timedelta(days=1)
         is_end_of_quarter = (today.month in [3, 6, 9, 12]) and (tomorrow.month != today.month)
         return settings.quarterly_enabled and is_end_of_quarter
-    
+
     elif report_type == 'YEARLY':
         # 31 décembre
         return settings.yearly_enabled and today.month == 12 and today.day == 31
-    
+
     return False
 
 
@@ -314,50 +324,45 @@ def get_period_dates(report_type, today):
     """Retourne les dates de début et fin de période pour un type de rapport."""
     if report_type == 'DAILY':
         return today, today
-    
+
     elif report_type == 'WEEKLY':
         # 7 derniers jours
         start = today - timedelta(days=6)
         return start, today
-    
+
     elif report_type == 'MONTHLY':
         # Mois courant
         start = today.replace(day=1)
         return start, today
-    
+
     elif report_type == 'QUARTERLY':
         # Trimestre courant
         quarter_month = ((today.month - 1) // 3) * 3 + 1
         start = today.replace(month=quarter_month, day=1)
         return start, today
-    
+
     elif report_type == 'YEARLY':
         # Année courante
         start = today.replace(month=1, day=1)
         return start, today
-    
+
     return today, today
 
 
 def main():
     """Fonction principale."""
     print(f"\n{'='*60}")
-    print(f"📧 ENVOI AUTOMATIQUE DES RAPPORTS")
-    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("ENVOI AUTOMATIQUE DES RAPPORTS")
+    print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     print(f"{'='*60}\n")
-    
+
     # Charger les paramètres
     settings = ReportSettings.get_settings()
-    today = timezone.now().date()
-    
-    import os
-    print(f"📬 Destinataires: {settings.get_recipients_list()}")
-    print(f"📤 Expéditeur: {os.environ.get('EMAIL_HOST_USER', '(non configuré)')}")
-    print()
-    
+    today = timezone.localdate()
+
     # Liste des rapports à envoyer
     reports_to_send = []
-    
+
     for report_type in ['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY']:
         if should_send_report(report_type, settings, today):
             # Check if already sent
@@ -368,30 +373,31 @@ def main():
                 period_end=end_date,
                 success=True
             ).exists():
-                print(f"ℹ️ Rapport {report_type} déjà envoyé pour la période du {start_date} au {end_date}. Ignoré.")
+                print(f"[INFO] Rapport {report_type} déjà envoyé pour la période du {start_date} au {end_date}. Ignoré.")
                 continue
-                
+
             reports_to_send.append(report_type)
-    
+
     if not reports_to_send:
-        print("ℹ️ Aucun rapport à envoyer aujourd'hui")
+        print("[INFO] Aucun rapport à envoyer aujourd'hui")
         # Créer le backup quand même
         backup_database()
         return
-    
-    print(f"📊 Rapports à envoyer: {', '.join(reports_to_send)}")
+
+    print(f"Rapports à envoyer: {', '.join(reports_to_send)}")
     print()
-    
+
     # Générer et envoyer les rapports
     attachments = []
-    
+    pending_log_ids = []
+
     for report_type in reports_to_send:
         start_date, end_date = get_period_dates(report_type, today)
         data = get_report_data(start_date, end_date)
-        
-        print(f"📈 Génération du rapport {report_type}...")
+
+        print(f"Génération du rapport {report_type}...")
         pdf_buffer = generate_pdf_report(data, report_type)
-        
+
         type_labels = {
             'DAILY': 'Journalier',
             'WEEKLY': 'Hebdomadaire',
@@ -401,9 +407,9 @@ def main():
         }
         filename = f"Rapport_{type_labels[report_type]}_{today.strftime('%Y%m%d')}.pdf"
         attachments.append((filename, pdf_buffer))
-        
-        # Log dans la base de données
-        ReportLog.objects.create(
+
+        # Keep a pending log; only mark it successful after SMTP confirms send.
+        pending_log = ReportLog.objects.create(
             report_type=report_type,
             period_start=start_date,
             period_end=end_date,
@@ -412,19 +418,17 @@ def main():
             total_profit=Decimal(str(data['total_profit'])),
             items_sold={'count': len(data['items_sold'])},
             recipients=', '.join(settings.get_recipients_list()),
-            success=True
+            success=False
         )
-    
-    # Ajouter le backup de la base de données
-    backup_path = backup_database()
-    if backup_path:
-        with open(backup_path, 'rb') as f:
-            backup_content = f.read()
-        attachments.append((os.path.basename(backup_path), backup_content))
-    
+        pending_log_ids.append(pending_log.pk)
+
+    # Keep the database backup local. Raw databases contain password hashes,
+    # personal data and refresh tokens and must never be e-mail attachments.
+    backup_database()
+
     # Construire l'email
     subject = f"📊 LibTak - Rapports du {today.strftime('%d/%m/%Y')}"
-    
+
     body = f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.6;">
@@ -432,13 +436,12 @@ def main():
             <h1 style="margin: 0;">📊 Rapports LibTak</h1>
             <p style="margin: 5px 0 0 0;">{today.strftime('%d %B %Y')}</p>
         </div>
-        
+
         <div style="padding: 20px;">
             <p>Bonjour,</p>
             <p>Veuillez trouver ci-joint les rapports suivants :</p>
             <ul>
                 {''.join([f'<li>Rapport {type_labels[r]}</li>' for r in reports_to_send])}
-                {'<li>Sauvegarde de la base de données</li>' if backup_path else ''}
             </ul>
             <p style="color: #666; font-size: 12px; margin-top: 30px;">
                 Ce message a été envoyé automatiquement par LibTak.<br>
@@ -448,7 +451,7 @@ def main():
     </body>
     </html>
     """
-    
+
     # Envoyer l'email
     type_labels = {
         'DAILY': 'Journalier',
@@ -458,12 +461,17 @@ def main():
         'YEARLY': 'Annuel'
     }
     success = send_email(settings, subject, body, attachments)
-    
+
+    ReportLog.objects.filter(pk__in=pending_log_ids).update(
+        success=success,
+        error_message='' if success else 'SMTP delivery failed',
+    )
+
     if success:
-        print("\n✅ Tous les rapports ont été envoyés avec succès !")
+        print("\n[OK] Tous les rapports ont été envoyés avec succès !")
     else:
-        print("\n❌ Erreur lors de l'envoi des rapports")
-    
+        print("\n[ERROR] Erreur lors de l'envoi des rapports")
+
     print(f"\n{'='*60}\n")
 
 

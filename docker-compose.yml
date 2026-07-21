@@ -1,90 +1,137 @@
-version: '3.8'
+x-app-environment: &app-environment
+  DEBUG: "False"
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a long random value}
+  JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY to a distinct random value}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+  SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
+  DATABASE: postgres
+  SQL_ENGINE: django.db.backends.postgresql
+  SQL_DATABASE: ${POSTGRES_DB:-bookstore_db}
+  SQL_USER: ${POSTGRES_USER:-bookstore_user}
+  SQL_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a long random value}
+  SQL_HOST: db
+  SQL_PORT: "5432"
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}@redis:6379/0
+  CACHE_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/2
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/3
+  IS_CLOUD_SERVER: "False"
+
+x-app-service: &app-service
+  build: ./backend
+  environment: *app-environment
+  restart: unless-stopped
+  init: true
+  user: "10001:10001"
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=128m,noexec,nosuid
+  volumes:
+    - app_data:/app/data
+    - media_data:/app/media
+    - static_data:/app/staticfiles
+    - backup_data:/home/libtak/.libtak/backups
+  networks:
+    - app
+    - data
 
 services:
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=bookstore_db
-      - POSTGRES_USER=bookstore_user
-      - POSTGRES_PASSWORD=bookstore_password
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${POSTGRES_DB:-bookstore_db}
+      POSTGRES_USER: ${POSTGRES_USER:-bookstore_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a long random value}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set a URL-safe REDIS_PASSWORD}
+    networks:
+      - data
 
   backend:
-    build: ./backend
-    command: daphne -b 0.0.0.0 -p 8000 config.asgi:application
-    volumes:
-      - ./backend:/app
+    <<: *app-service
+    command: >-
+      sh -c "python create_users.py &&
+      unset BOOTSTRAP_ADMIN_USERNAME BOOTSTRAP_ADMIN_PASSWORD BOOTSTRAP_ADMIN_EMAIL &&
+      exec daphne -b 0.0.0.0 -p 8000 config.asgi:application"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      - DEBUG=1
-      - SECRET_KEY=dev_secret_key
-      - ALLOWED_HOSTS=localhost,127.0.0.1,[::1]
-      - DATABASE=postgres
-      - SQL_ENGINE=django.db.backends.postgresql
-      - SQL_DATABASE=bookstore_db
-      - SQL_USER=bookstore_user
-      - SQL_PASSWORD=bookstore_password
-      - SQL_HOST=db
-      - SQL_PORT=5432
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      <<: *app-environment
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/api/health/', headers={'Host':'localhost'}); urllib.request.urlopen(r, timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   celery_worker:
-    build: ./backend
-    command: celery -A config worker -l info
-    volumes:
-      - ./backend:/app
-    environment:
-      - DEBUG=1
-      - DATABASE=postgres
-      - SQL_ENGINE=django.db.backends.postgresql
-      - SQL_DATABASE=bookstore_db
-      - SQL_USER=bookstore_user
-      - SQL_PASSWORD=bookstore_password
-      - SQL_HOST=db
-      - SQL_PORT=5432
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    <<: *app-service
+    entrypoint: []
+    command: ["celery", "-A", "config", "worker", "-l", "info"]
     depends_on:
-      - db
-      - redis
-      - backend
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
 
   celery_beat:
-    build: ./backend
-    command: celery -A config beat -l info
-    volumes:
-      - ./backend:/app
-    environment:
-      - DEBUG=1
-      - DATABASE=postgres
-      - SQL_ENGINE=django.db.backends.postgresql
-      - SQL_DATABASE=bookstore_db
-      - SQL_USER=bookstore_user
-      - SQL_PASSWORD=bookstore_password
-      - SQL_HOST=db
-      - SQL_PORT=5432
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    <<: *app-service
+    entrypoint: []
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
     depends_on:
-      - db
-      - redis
-      - backend
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+networks:
+  app:
+  data:
+    internal: true
 
 volumes:
+  app_data:
+  backup_data:
+  media_data:
   postgres_data:
+  redis_data:
+  static_data:

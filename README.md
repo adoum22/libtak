@@ -22,7 +22,7 @@ A professional Point of Sale (POS) system for bookstores and stationery shops wi
 ## 📋 Prerequisites
 
 - Python 3.11+
-- Node.js 18+
+- Node.js 20.19+ ou 22.12+
 - PostgreSQL (optional, SQLite used for development)
 - Redis (for Channels and Celery)
 
@@ -36,10 +36,19 @@ cd backend
 # Install dependencies
 pip install -r requirements.txt
 
+# Generate per-installation signing keys for this shell (store them in a
+# private backend/.env file for subsequent starts).
+export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+export JWT_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
+export DEBUG=True
+
 # Run migrations
 python manage.py migrate
 
-# Create demo users (admin/admin123, cashier/cashier123)
+# Create the first administrator interactively (password is never stored here)
+python manage.py createsuperuser
+
+# Initialize application settings without overwriting existing values
 python create_users.py
 
 # Seed demo products
@@ -82,8 +91,15 @@ python manage.py runserver
 ## 🐳 Docker Setup (Optional)
 
 ```bash
+# First create a private .env file containing strong, installation-specific
+# SECRET_KEY, JWT_SIGNING_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD,
+# BOOTSTRAP_ADMIN_USERNAME and BOOTSTRAP_ADMIN_PASSWORD values.
+
 # Build and start all services
 docker-compose up --build
+
+# After the first healthy start, remove the BOOTSTRAP_ADMIN_* values from
+# .env. Existing administrator accounts are preserved on later restarts.
 
 # Backend will be at http://localhost:8000
 # Frontend will be at http://localhost:5173 (if build issues are resolved)

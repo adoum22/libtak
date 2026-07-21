@@ -25,10 +25,13 @@ class MonthlyAccountingAdmin(admin.ModelAdmin):
 
 @admin.register(Expense)
 class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ('category', 'amount', 'paid_from_cash', 'monthly', 'incurred_on', 'created_at')
+    list_display = (
+        'category', 'amount', 'paid_from_cash', 'monthly', 'incurred_on',
+        'created_by', 'created_at',
+    )
     list_filter = ('category', 'paid_from_cash', 'monthly__year', 'monthly__month')
-    search_fields = ('description',)
-    autocomplete_fields = ('category', 'monthly')
+    search_fields = ('description', 'created_by__username')
+    autocomplete_fields = ('category', 'monthly', 'created_by')
 
 
 @admin.register(CashRegisterAdjustment)

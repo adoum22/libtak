@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Category, Product, ProductCostLayer, Supplier, StockMovement
+from .models import (
+    Category,
+    Product,
+    ProductCostLayer,
+    Supplier,
+    SupplierPayment,
+    StockMovement,
+)
 
 
 @admin.register(Category)
@@ -15,6 +22,9 @@ class SupplierAdmin(admin.ModelAdmin):
     search_fields = ('name', 'contact_name', 'email')
     ordering = ('name',)
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
@@ -22,8 +32,14 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ('category', 'supplier', 'active')
     search_fields = ('name', 'barcode', 'description')
     ordering = ('name',)
-    readonly_fields = ('price_ttc', 'profit_margin', 'profit_percentage', 'stock_value')
-    
+    readonly_fields = (
+        'stock',
+        'price_ttc',
+        'profit_margin',
+        'profit_percentage',
+        'stock_value',
+    )
+
     fieldsets = (
         ('Informations Générales', {
             'fields': ('name', 'barcode', 'description', 'image', 'active')
@@ -39,6 +55,9 @@ class ProductAdmin(admin.ModelAdmin):
         }),
     )
 
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(StockMovement)
 class StockMovementAdmin(admin.ModelAdmin):
@@ -47,20 +66,47 @@ class StockMovementAdmin(admin.ModelAdmin):
     search_fields = ('product__name', 'product__barcode', 'reference')
     ordering = ('-created_at',)
     readonly_fields = ('stock_before', 'stock_after', 'created_at')
-    
+
     def has_change_permission(self, request, obj=None):
         return False  # Stock movements shouldn't be modified
 
 
 @admin.register(ProductCostLayer)
 class ProductCostLayerAdmin(admin.ModelAdmin):
-    list_display = ('product', 'unit_cost', 'sale_price', 'initial_quantity', 'remaining_quantity', 'created_at')
+    list_display = ('product', 'unit_cost', 'current_sale_price', 'initial_quantity', 'remaining_quantity', 'created_at')
     list_filter = ('created_at',)
     search_fields = ('product__name', 'product__barcode', 'note')
-    readonly_fields = ('product', 'source_movement', 'unit_cost', 'sale_price', 'initial_quantity', 'remaining_quantity', 'note', 'created_at')
+    exclude = ('sale_price',)
+    readonly_fields = ('product', 'source_movement', 'unit_cost', 'current_sale_price', 'initial_quantity', 'remaining_quantity', 'note', 'created_at')
+
+    @admin.display(description='Prix de vente courant')
+    def current_sale_price(self, obj):
+        return obj.product.sale_price_ht
 
     def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SupplierPayment)
+class SupplierPaymentAdmin(admin.ModelAdmin):
+    list_display = (
+        'order', 'amount', 'method', 'paid_on', 'status', 'reference',
+        'created_by', 'created_at',
+    )
+    list_filter = ('method', 'status', 'paid_on')
+    search_fields = ('order__reference', 'order__supplier__name', 'reference')
+    readonly_fields = tuple(
+        field.name for field in SupplierPayment._meta.fields
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

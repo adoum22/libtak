@@ -1,4 +1,5 @@
 import os
+import secrets
 import sys
 from pathlib import Path
 from datetime import timedelta
@@ -23,13 +24,15 @@ TESTING = 'test' in sys.argv
 # Commandes manage.py qui peuvent tourner sans SECRET_KEY réelle
 # (les commandes admin lancées en console PA n'héritent pas des
 # env vars définies dans le fichier WSGI). On accepte une SECRET_KEY
-# bidon UNIQUEMENT pour ces commandes utilitaires - le webapp web
-# continue d'exiger la vraie SECRET_KEY pour servir les requêtes.
+# éphémère UNIQUEMENT pour ces commandes utilitaires - le webapp web
+# continue d'exiger une SECRET_KEY persistante pour servir les requêtes.
 _MANAGEMENT_COMMANDS = {
     'migrate', 'makemigrations', 'showmigrations', 'sqlmigrate',
     'shell', 'createsuperuser', 'collectstatic', 'check',
     'send_scheduled_reports', 'init_users', 'dbshell', 'dumpdata',
-    'loaddata', 'changepassword',
+    'loaddata', 'changepassword', 'backup_database', 'restore_backup',
+    'verify_backup', 'local_backup_sync', 'spectacular',
+    'reconcile_fifo',
 }
 RUNNING_MANAGEMENT_COMMAND = any(arg in _MANAGEMENT_COMMANDS for arg in sys.argv)
 
@@ -60,11 +63,39 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     if DEBUG or TESTING or RUNNING_MANAGEMENT_COMMAND:
-        SECRET_KEY = 'django-insecure-dev-only-not-for-production'
+        # Never use a repository-known signing key, even for local runs.
+        SECRET_KEY = secrets.token_urlsafe(50)
     else:
         raise RuntimeError("SECRET_KEY environment variable is required in production")
+elif (
+    not DEBUG
+    and not TESTING
+    and not RUNNING_MANAGEMENT_COMMAND
+    and (len(SECRET_KEY) < 50 or SECRET_KEY.startswith('django-insecure-'))
+):
+    raise RuntimeError('SECRET_KEY must be a strong, installation-specific value')
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+JWT_SIGNING_KEY = os.environ.get('JWT_SIGNING_KEY', SECRET_KEY)
+if (
+    not DEBUG
+    and not TESTING
+    and not RUNNING_MANAGEMENT_COMMAND
+    and len(JWT_SIGNING_KEY) < 50
+):
+    raise RuntimeError('JWT_SIGNING_KEY must contain at least 50 characters')
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
+]
+
+# DRF and audit logging must apply the same trusted-proxy boundary.  Zero is
+# the safe default for local/direct deployments and prevents spoofed XFF
+# headers from bypassing anonymous/login throttles.
+AUDIT_TRUSTED_PROXY_COUNT = max(
+    0, int(os.environ.get('AUDIT_TRUSTED_PROXY_COUNT', '0'))
+)
 
 # CSRF (needed when frontend is on a different domain, e.g. Vercel)
 CSRF_TRUSTED_ORIGINS = [
@@ -115,6 +146,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'core.middleware.ApiSecurityHeadersMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -139,6 +171,7 @@ ASGI_APPLICATION = 'config.asgi.application'
 
 # Database
 DATABASE_URL = os.environ.get('DATABASE_URL')
+SQL_HOST = os.environ.get('SQL_HOST')
 
 if DATABASE_URL:
     import dj_database_url
@@ -148,13 +181,35 @@ if DATABASE_URL:
             default=DATABASE_URL,
             conn_max_age=600,
             conn_health_checks=True,
+            ssl_require=(
+                not DEBUG
+                and os.environ.get('DATABASE_SSL_REQUIRE', 'True').lower()
+                in ('true', '1', 'yes')
+            ),
         )
+    }
+elif SQL_HOST:
+    DATABASES = {
+        'default': {
+            'ENGINE': os.environ.get(
+                'SQL_ENGINE', 'django.db.backends.postgresql'
+            ),
+            'NAME': os.environ.get('SQL_DATABASE', 'bookstore_db'),
+            'USER': os.environ.get('SQL_USER', 'bookstore_user'),
+            'PASSWORD': os.environ.get('SQL_PASSWORD', ''),
+            'HOST': SQL_HOST,
+            'PORT': os.environ.get('SQL_PORT', '5432'),
+            'CONN_MAX_AGE': 600,
+            'CONN_HEALTH_CHECKS': True,
+        }
     }
 else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'NAME': Path(
+                os.environ.get('SQLITE_PATH', BASE_DIR / 'db.sqlite3')
+            ).expanduser(),
         }
     }
 
@@ -175,11 +230,15 @@ USE_TZ = True
 
 # Static files
 STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = Path(
+    os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles')
+).expanduser()
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = Path(
+    os.environ.get('MEDIA_ROOT', BASE_DIR / 'media')
+).expanduser()
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -189,9 +248,13 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 50,
     'COERCE_DECIMAL_TO_STRING': False,
+    'NUM_PROXIES': AUDIT_TRUSTED_PROXY_COUNT,
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.ScopedRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
@@ -199,6 +262,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_THROTTLE_RATES': {
         'login': '10/min',
+        'login_account': '5/min',
+        'file_upload': '20/day',
         'user': '1000/hour',
         'anon': '100/hour',
     },
@@ -211,16 +276,27 @@ if TESTING:
 
 # JWT Settings
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=2),
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
+    'CHECK_REVOKE_TOKEN': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'SIGNING_KEY': JWT_SIGNING_KEY,
 }
 
 # CORS
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000').split(',')
-CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000',
+    ).split(',')
+    if origin.strip()
+]
+CORS_ALLOW_CREDENTIALS = os.environ.get(
+    'CORS_ALLOW_CREDENTIALS', 'False'
+).lower() in ('true', '1', 'yes')
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_HEADERS = [
     'accept',
@@ -244,6 +320,24 @@ CORS_ALLOW_METHODS = [
 
 # Redis / Channels / Celery
 REDIS_URL = os.environ.get('REDIS_URL', '')
+CACHE_URL = os.environ.get('CACHE_URL', REDIS_URL)
+
+if CACHE_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': CACHE_URL,
+            'KEY_PREFIX': 'libtak',
+            'TIMEOUT': 300,
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'libtak-single-process',
+        }
+    }
 
 # Use InMemory for development, Redis for production
 if REDIS_URL:
@@ -308,7 +402,13 @@ AUTH_USER_MODEL = 'core.User'
 # Email Configuration
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.gmail.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
-EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False').lower() in (
+    'true', '1', 'yes'
+)
+EMAIL_USE_TLS = (
+    os.environ.get('EMAIL_USE_TLS', 'True').lower() in ('true', '1', 'yes')
+    and not EMAIL_USE_SSL
+)
 EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.environ.get(
@@ -334,30 +434,69 @@ SPECTACULAR_SETTINGS = {
     'TITLE': 'Librairie Attaquaddoum API',
     'DESCRIPTION': 'API pour le système de gestion de la Librairie Attaquaddoum',
     'VERSION': '1.0.0',
+    'ENUM_NAME_OVERRIDES': {
+        'SalePaymentMethodEnum': 'sales.models.Sale.PaymentMethod',
+        'ReturnStatusEnum': 'sales.models.Return.ReturnStatus',
+        'DiscountTypeEnum': 'sales.models.Discount.DiscountType',
+        'PurchaseOrderStatusEnum': 'inventory.models.PurchaseOrder.OrderStatus',
+        'InventoryCountStatusEnum': 'inventory.models.InventoryCount.CountStatus',
+    },
 }
 
 # ===== SYNC CONFIGURATION =====
 # For local server: set CLOUD_API_URL to point to your cloud deployment
 # For cloud server: set IS_CLOUD_SERVER=True
-CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '')  # e.g., 'https://librairie-api.onrender.com/api'
-SYNC_TOKEN = os.environ.get('SYNC_TOKEN')  # Shared secret for sync authentication
+CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '').strip()  # e.g., 'https://librairie-api.onrender.com/api'
+SYNC_TOKEN = os.environ.get('SYNC_TOKEN', '').strip()  # Shared secret for sync authentication
 # SYNC_TOKEN is only required when cloud sync is explicitly configured.
 # PythonAnywhere currently runs as the main app with SQLite and no sync, so
 # blocking startup on a missing token prevents migrations/reloads for no gain.
-if CLOUD_API_URL and not SYNC_TOKEN and not DEBUG:
-    raise RuntimeError("SYNC_TOKEN environment variable is required when CLOUD_API_URL is configured")
-IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'True') == 'True'  # Default True for PythonAnywhere
+IS_CLOUD_SERVER = os.environ.get('IS_CLOUD_SERVER', 'False').lower() in (
+    'true', '1', 'yes'
+)
+if (CLOUD_API_URL or IS_CLOUD_SERVER) and not SYNC_TOKEN and not DEBUG:
+    raise RuntimeError(
+        "SYNC_TOKEN is required when cloud synchronization is enabled"
+    )
+if (
+    (CLOUD_API_URL or IS_CLOUD_SERVER)
+    and not DEBUG
+    and not TESTING
+    and not RUNNING_MANAGEMENT_COMMAND
+    and len(SYNC_TOKEN) < 32
+):
+    raise RuntimeError('SYNC_TOKEN must contain at least 32 characters')
+ENABLE_API_DOCS = os.environ.get('ENABLE_API_DOCS', str(DEBUG)).lower() in (
+    'true', '1', 'yes'
+)
+ENABLE_DJANGO_ADMIN = os.environ.get(
+    'ENABLE_DJANGO_ADMIN', str(DEBUG)
+).lower() in ('true', '1', 'yes')
+
+# Bound ordinary multipart/form requests before application-level validation.
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.environ.get('DATA_UPLOAD_MAX_MEMORY_SIZE', 20 * 1024 * 1024)
+)
+FILE_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.environ.get('FILE_UPLOAD_MAX_MEMORY_SIZE', 5 * 1024 * 1024)
+)
 
 # ===== SECURITY HEADERS (production only) =====
 if not DEBUG and not TESTING:
-    SECURE_SSL_REDIRECT = True
+    SECURE_SSL_REDIRECT = os.environ.get(
+        'SECURE_SSL_REDIRECT', 'True'
+    ).lower() in ('true', '1', 'yes')
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    if os.environ.get('TRUST_PROXY_SSL_HEADER', 'False').lower() in (
+        'true', '1', 'yes'
+    ):
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
     SECURE_REFERRER_POLICY = 'same-origin'
     SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin'
     X_FRAME_OPTIONS = 'DENY'
 

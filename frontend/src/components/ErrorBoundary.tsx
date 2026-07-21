@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { isChunkLoadError, reloadOnceForNewVersion } from '../utils/reloadOnChunkError';
+import { clearAuthSession } from '../api/client';
 
 interface Props {
     children?: ReactNode;
@@ -23,7 +24,7 @@ class ErrorBoundary extends Component<Props, State> {
     }
 
     public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-        console.error("Uncaught error:", error, errorInfo);
+        if (import.meta.env.DEV) console.error('Uncaught error:', error, errorInfo);
         if (isChunkLoadError(error)) {
             void reloadOnceForNewVersion();
             return;
@@ -34,39 +35,44 @@ class ErrorBoundary extends Component<Props, State> {
     public render() {
         if (this.state.hasError) {
             return (
-                <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-                    <div className="bg-secondary p-8 rounded-lg shadow-xl max-w-2xl w-full">
-                        <h1 className="text-2xl font-bold text-red-600 mb-4">Une erreur est survenue</h1>
-                        <p className="mb-4 text-gray-700">L'application a rencontré un problème inattendu.</p>
+                <main className="min-h-screen flex items-center justify-center bg-primary p-4">
+                    <div className="bg-secondary p-8 rounded-lg shadow-xl max-w-2xl w-full" role="alert" aria-labelledby="fatal-error-title">
+                        <h1 id="fatal-error-title" className="text-2xl font-bold text-danger mb-4">Une erreur est survenue</h1>
+                        <p className="mb-4 text-secondary">L'application a rencontré un problème inattendu. Vous pouvez recharger la page ou réinitialiser votre session.</p>
 
-                        <div className="bg-gray-100 p-4 rounded overflow-auto max-h-60 mb-6 border border-gray-300">
-                            <p className="font-mono text-sm text-red-800 font-bold mb-2">
-                                {this.state.error?.toString()}
-                            </p>
-                            <pre className="font-mono text-xs text-gray-600">
-                                {this.state.errorInfo?.componentStack}
-                            </pre>
-                        </div>
+                        {import.meta.env.DEV && (
+                            <details className="bg-tertiary p-4 rounded overflow-auto max-h-60 mb-6 border">
+                                <summary className="font-semibold cursor-pointer">Détails techniques</summary>
+                                <p className="font-mono text-sm text-danger font-bold mt-2">
+                                    {this.state.error?.toString()}
+                                </p>
+                                <pre className="font-mono text-xs text-muted mt-2">
+                                    {this.state.errorInfo?.componentStack}
+                                </pre>
+                            </details>
+                        )}
 
+                        <div className="flex flex-wrap gap-3">
                         <button
+                            type="button"
                             onClick={() => window.location.reload()}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+                            className="btn-primary"
                         >
                             Recharger l'application
                         </button>
                         <button
+                            type="button"
                             onClick={() => {
-                                localStorage.removeItem('token');
-                                localStorage.removeItem('refreshToken');
-                                localStorage.removeItem('userRole');
+                                clearAuthSession();
                                 window.location.href = '/login';
                             }}
-                            className="ml-4 text-gray-600 hover:text-gray-800 underline"
+                            className="btn-secondary"
                         >
-                            Déconnexion et Reset
+                            Réinitialiser la session
                         </button>
+                        </div>
                     </div>
-                </div>
+                </main>
             );
         }
 

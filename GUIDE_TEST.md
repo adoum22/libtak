@@ -3,8 +3,8 @@
 ## 📋 Prérequis
 
 Assurez-vous d'avoir installé :
-- ✅ Python 3.11+ 
-- ✅ Node.js 18+
+- ✅ Python 3.11+
+- ✅ Node.js 20.19+ ou 22.12+
 
 ## 🚀 Étape 1 : Démarrer le Backend
 
@@ -20,13 +20,16 @@ pip install -r requirements.txt
 # 3. Appliquer les migrations de base de données
 python manage.py migrate
 
-# 4. Créer les utilisateurs de démonstration
+# 4. Créer votre administrateur avec un mot de passe choisi localement
+python manage.py createsuperuser
+
+# 5. Initialiser les paramètres sans écraser les valeurs existantes
 python create_users.py
 
-# 5. Charger les produits de démonstration
+# 6. Charger les produits de démonstration
 python seed_products.py
 
-# 6. Démarrer le serveur Django
+# 7. Démarrer le serveur Django
 python manage.py runserver
 ```
 
@@ -45,14 +48,15 @@ Ouvrez votre navigateur et allez sur :
 ### A. Avec le navigateur (Swagger UI)
 
 1. Allez sur http://localhost:8000/api/docs/
+   - Authentifiez-vous dans l'invite du navigateur avec votre compte administrateur.
 2. Testez l'endpoint de login :
    - Cliquez sur `POST /api/auth/login/`
    - Cliquez sur "Try it out"
    - Entrez :
      ```json
      {
-       "username": "admin",
-       "password": "admin123"
+       "username": "<votre-administrateur>",
+       "password": "<votre-mot-de-passe>"
      }
      ```
    - Cliquez sur "Execute"
@@ -63,15 +67,16 @@ Ouvrez votre navigateur et allez sur :
 Ouvrez un nouveau terminal PowerShell :
 
 ```powershell
-# 1. Test de connexion
+# 1. Test de connexion (saisie sécurisée, rien n'est stocké dans ce guide)
+$credential = Get-Credential -Message "Compte administrateur LibTak"
 $body = @{
-    username = "admin"
-    password = "admin123"
+    username = $credential.UserName
+    password = $credential.GetNetworkCredential().Password
 } | ConvertTo-Json
 
 $response = Invoke-RestMethod -Uri "http://localhost:8000/api/auth/login/" -Method Post -Body $body -ContentType "application/json"
 $token = $response.access
-Write-Host "Token reçu : $token"
+Write-Host "Token reçu."
 
 # 2. Récupérer la liste des produits
 $headers = @{
@@ -125,8 +130,8 @@ npm run dev
 ### Tester le Frontend
 
 1. **Page de Login** (http://localhost:5173/login)
-   - Username : `admin`
-   - Password : `admin123`
+   - Username : celui créé avec `createsuperuser`
+   - Password : celui saisi pendant la création
    - Cliquez sur "Login"
 
 2. **Dashboard** (http://localhost:5173/)
@@ -155,7 +160,7 @@ npm run dev
 ### Scénario 1 : Vente Simple
 
 1. ✅ Démarrer le backend
-2. ✅ Se connecter avec `admin/admin123`
+2. ✅ Se connecter avec le compte administrateur créé localement
 3. ✅ Aller sur l'interface POS
 4. ✅ Scanner/taper le code-barres : `9780747532743`
 5. ✅ Vérifier que "Livre Harry Potter" apparaît dans le panier
@@ -232,10 +237,10 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Proc
 ## 📊 Données de Test Disponibles
 
 ### Utilisateurs
-| Username | Password | Rôle |
-|----------|----------|------|
-| admin | admin123 | Admin |
-| cashier | cashier123 | Caissier |
+| Compte | Mot de passe | Rôle |
+|--------|--------------|------|
+| Créé avec `createsuperuser` | Défini par l'opérateur | Admin |
+| Créé depuis l'écran Utilisateurs | Défini par l'administrateur | Caissier |
 
 ### Produits (Code-barres)
 | Produit | Code-barres | Prix TTC |
@@ -270,7 +275,7 @@ Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Proc
 
 1. **Backend ne démarre pas** : Vérifiez que Python 3.11+ est installé
 2. **Erreur de migration** : Supprimez `db.sqlite3` et relancez `python manage.py migrate`
-3. **Frontend ne démarre pas** : Vérifiez que Node.js 18+ est installé
+3. **Frontend ne démarre pas** : Vérifiez que Node.js 20.19+ ou 22.12+ est installé
 4. **API ne répond pas** : Vérifiez que le backend tourne sur http://localhost:8000
 
 ---

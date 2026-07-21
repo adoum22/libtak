@@ -39,27 +39,35 @@ export default function Pagination({
     };
 
     return (
-        <div className="flex items-center justify-between px-4 py-3 border-t border-[var(--color-border)]">
-            <div className="text-sm text-muted">
+        <nav
+            className="accessible-pagination flex items-center justify-between px-4 py-3 border-t border-[var(--color-border)]"
+            aria-label="Pagination des résultats"
+        >
+            <p className="text-sm text-muted" aria-live="polite">
                 Affichage de <span className="font-medium">{startItem}</span> à{' '}
                 <span className="font-medium">{endItem}</span> sur{' '}
                 <span className="font-medium">{totalItems}</span> résultats
-            </div>
+            </p>
 
-            <div className="flex items-center gap-1">
+            <div className="accessible-pagination__pages">
                 <button
+                    type="button"
                     onClick={() => onPageChange(currentPage - 1)}
                     disabled={currentPage === 1}
                     className="p-2 rounded-lg hover:bg-tertiary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Page précédente"
                 >
-                    <ChevronLeft size={18} />
+                    <ChevronLeft size={18} aria-hidden="true" />
                 </button>
 
                 {getPageNumbers().map((page, index) => (
                     typeof page === 'number' ? (
                         <button
-                            key={index}
+                            type="button"
+                            key={`${page}-${index}`}
                             onClick={() => onPageChange(page)}
+                            aria-label={`Page ${page}`}
+                            aria-current={currentPage === page ? 'page' : undefined}
                             className={`w-9 h-9 rounded-lg text-sm font-medium transition-colors ${currentPage === page
                                     ? 'bg-accent text-white'
                                     : 'hover:bg-tertiary'
@@ -68,18 +76,20 @@ export default function Pagination({
                             {page}
                         </button>
                     ) : (
-                        <span key={index} className="px-2 text-muted">...</span>
+                        <span key={`ellipsis-${index}`} className="px-2 text-muted" aria-hidden="true">…</span>
                     )
                 ))}
 
                 <button
+                    type="button"
                     onClick={() => onPageChange(currentPage + 1)}
                     disabled={currentPage === totalPages}
                     className="p-2 rounded-lg hover:bg-tertiary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Page suivante"
                 >
-                    <ChevronRight size={18} />
+                    <ChevronRight size={18} aria-hidden="true" />
                 </button>
             </div>
-        </div>
+        </nav>
     );
 }

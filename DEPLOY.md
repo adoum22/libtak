@@ -1,7 +1,7 @@
 # Déploiement Libtak — PythonAnywhere + Vercel
 
 Architecture cible :
-- **Backend Django** → PythonAnywhere (`https://dido22.pythonanywhere.com`)
+- **Backend Django** → PythonAnywhere (`https://votre-compte.pythonanywhere.com`)
 - **Frontend React PWA** → Vercel (`https://libtak.vercel.app`)
 - **POS local** (ton PC) → continue à tourner en SQLite, et `sync_to_cloud.py` pousse les ventes vers PythonAnywhere toutes les 30 min.
 
@@ -10,7 +10,7 @@ Architecture cible :
 ## 1. Backend — PythonAnywhere (gratuit)
 
 ### 1.1 Créer le compte
-1. Va sur https://www.pythonanywhere.com/registration/register/beginner/ → crée un compte gratuit (username = `dido22` d'après ton code).
+1. Va sur https://www.pythonanywhere.com/registration/register/beginner/ et crée ton propre compte.
 2. Ouvre une **Bash console** depuis le dashboard.
 
 ### 1.2 Cloner le projet
@@ -30,25 +30,25 @@ pip install -r backend/requirements.txt
 Dashboard → onglet **Web** → **Add a new web app** :
 - Choisis **Manual configuration** → **Python 3.11**
 - Une fois créée, va dans la section **Code** :
-  - **Source code** : `/home/dido22/libtak/backend`
-  - **Working directory** : `/home/dido22/libtak/backend`
+  - **Source code** : `/home/votre-compte/libtak/backend`
+  - **Working directory** : `/home/votre-compte/libtak/backend`
   - **WSGI configuration file** : clique sur le lien → remplace tout le contenu par celui de [`deployment/pythonanywhere_wsgi.py`](./deployment/pythonanywhere_wsgi.py)
-- Section **Virtualenv** : `/home/dido22/.virtualenvs/libtak`
+- Section **Virtualenv** : `/home/votre-compte/.virtualenvs/libtak`
 - Section **Static files** :
   | URL | Directory |
   |---|---|
-  | `/static/` | `/home/dido22/libtak/backend/staticfiles` |
-  | `/media/` | `/home/dido22/libtak/backend/media` |
+| `/static/` | `/home/votre-compte/libtak/backend/staticfiles` |
+| `/media/` | `/home/votre-compte/libtak/backend/media` |
 
 ### 1.5 Variables d'environnement (Web tab → Environment variables)
 | Variable | Valeur |
 |---|---|
 | `DEBUG` | `False` |
 | `SECRET_KEY` | Générer avec `python -c "import secrets;print(secrets.token_urlsafe(60))"` |
-| `ALLOWED_HOSTS` | `dido22.pythonanywhere.com` |
+| `ALLOWED_HOSTS` | `votre-compte.pythonanywhere.com` |
 | `CORS_ALLOWED_ORIGINS` | `https://libtak.vercel.app` (mets ton vrai domaine Vercel après step 2) |
 | `CSRF_TRUSTED_ORIGINS` | `https://libtak.vercel.app` |
-| `DATABASE_URL` | `sqlite:////home/dido22/libtak/backend/db.sqlite3` |
+| `DATABASE_URL` | `sqlite:////home/votre-compte/libtak/backend/db.sqlite3` |
 | `EMAIL_HOST` | `smtp.gmail.com` |
 | `EMAIL_PORT` | `587` |
 | `EMAIL_HOST_USER` | ton email Gmail |
@@ -67,7 +67,7 @@ python manage.py createsuperuser   # crée DidoEl / Adoum1723 (ou autre)
 ```
 
 ### 1.7 Recharger
-Onglet **Web** → bouton vert **Reload** → visite `https://dido22.pythonanywhere.com/api/`.
+Onglet **Web** → bouton vert **Reload** → visite `https://votre-compte.pythonanywhere.com/api/`.
 
 ---
 
@@ -77,9 +77,9 @@ Le tier gratuit PA n'a pas Redis → Celery Beat ne tourne pas. À la place on u
 
 1. Va sur le dashboard PA → onglet **Tasks**.
 2. Dans **"Daily task"**, choisis l'heure : **23:00**.
-3. Dans la case commande, colle exactement (remplace `dido22` si besoin) :
+3. Dans la case commande, adapte `votre-compte` à ton identifiant :
    ```
-   workon libtak && cd /home/dido22/libtak/backend && python manage.py send_scheduled_reports
+   workon libtak && cd /home/votre-compte/libtak/backend && python manage.py send_scheduled_reports
    ```
 4. Clique **Create**.
 
@@ -120,7 +120,7 @@ Le code est sur https://github.com/adoum22/libtak.
 Project Settings → **Environment Variables** :
 | Name | Value | Environments |
 |---|---|---|
-| `VITE_API_URL` | `https://dido22.pythonanywhere.com/api` | Production, Preview |
+| `VITE_API_URL` | `https://votre-compte.pythonanywhere.com/api` | Production, Preview |
 
 ### 2.4 Deploy
 Clique **Deploy** → attend ~2 min → tu obtiens une URL `https://libtak-xxxxx.vercel.app`.
@@ -156,7 +156,7 @@ Lance la tâche manuellement → ouvre PythonAnywhere → onglet **Files** → `
 
 ## 4. Smoke test final
 
-1. ✅ `https://dido22.pythonanywhere.com/api/` → 200
+1. ✅ `https://votre-compte.pythonanywhere.com/api/` → 200
 2. ✅ `https://libtak.vercel.app` → écran de login
 3. ✅ Login DidoEl / Adoum1723 → dashboard
 4. ✅ Sur ton PC : fais une vente POS local

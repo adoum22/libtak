@@ -3,7 +3,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import ProductCreateModal from '../components/ProductCreateModal';
+import Pagination from '../components/Pagination';
 import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
+import {
+    buildReceiveOrderItem,
+    type ReceiveOrderItem,
+} from '../utils/purchaseOrderReceipt';
 import {
     ClipboardList,
     Plus,
@@ -17,7 +22,11 @@ import {
     Calendar,
     Search,
     Barcode,
-    AlertTriangle
+    AlertTriangle,
+    Banknote,
+    CreditCard,
+    RotateCcw,
+    Wallet,
 } from 'lucide-react';
 
 interface Supplier {
@@ -40,7 +49,6 @@ interface StockLayer {
     initial_quantity: number;
     remaining_quantity: number;
     unit_cost: number;
-    sale_price: number;
     created_at: string;
     note?: string;
 }
@@ -50,14 +58,6 @@ type PurchaseOrderForm = {
     notes: string;
     expected_date: string | null;
     items: Array<{ product: number; quantity: number; unit_cost: number; sale_price?: number }>;
-};
-
-type ReceiveOrderItem = {
-    item_id: number;
-    quantity: number;
-    unit_cost?: number;
-    update_purchase_price?: boolean;
-    new_sale_price?: number;
 };
 
 // État local de la modal de réception : un draft par ligne de commande.
@@ -108,9 +108,29 @@ interface PurchaseOrder {
     notes: string;
     expected_date: string | null;
     total_amount: number;
+    paid_amount: number;
+    balance_due: number;
+    payment_status: 'UNPAID' | 'PARTIAL' | 'PAID';
+    payments: SupplierPayment[];
     items_count: number;
     items: PurchaseOrderItem[];
     created_at: string;
+}
+
+interface SupplierPayment {
+    id: number;
+    amount: string | number;
+    method: 'CASH' | 'BANK' | 'OTHER';
+    method_display: string;
+    paid_on: string;
+    reference: string;
+    note: string;
+    status: 'ACTIVE' | 'REVERSED';
+    created_by_name: string | null;
+    created_at: string;
+    reversed_by_name: string | null;
+    reversed_at: string | null;
+    reversal_reason: string;
 }
 
 const asArray = <T,>(value: unknown): T[] => {
@@ -126,10 +146,29 @@ const asArray = <T,>(value: unknown): T[] => {
     return [];
 };
 
+type PurchaseOrdersPage = {
+    count: number;
+    results: PurchaseOrder[];
+};
+
+const PAGE_SIZE = 50;
+
 const normalizeOrder = (order: PurchaseOrder): PurchaseOrder => ({
     ...order,
     items: asArray<PurchaseOrderItem>(order.items),
+    payments: asArray<SupplierPayment>(order.payments),
+    total_amount: Number(order.total_amount) || 0,
+    paid_amount: Number(order.paid_amount) || 0,
+    balance_due: Number(order.balance_due) || 0,
 });
+
+const localDateInput = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
 
 export default function PurchaseOrders() {
     const queryClient = useQueryClient();
@@ -137,9 +176,30 @@ export default function PurchaseOrders() {
 
     const [showForm, setShowForm] = useState(false);
     const [showCreateProduct, setShowCreateProduct] = useState(false);
+    const [page, setPage] = useState(1);
     const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
     const [receivingOrder, setReceivingOrder] = useState<PurchaseOrder | null>(null);
     const [receiveDrafts, setReceiveDrafts] = useState<ReceiveDraft[]>([]);
+    const [receiptId, setReceiptId] = useState(() => globalThis.crypto.randomUUID());
+    const [payingOrder, setPayingOrder] = useState<PurchaseOrder | null>(null);
+    const [paymentOperationId, setPaymentOperationId] = useState(
+        () => globalThis.crypto.randomUUID(),
+    );
+    const [paymentForm, setPaymentForm] = useState({
+        amount: '',
+        method: 'CASH' as SupplierPayment['method'],
+        paid_on: localDateInput(),
+        reference: '',
+        note: '',
+    });
+    const [reversingPayment, setReversingPayment] = useState<{
+        order: PurchaseOrder;
+        payment: SupplierPayment;
+    } | null>(null);
+    const [reversalReason, setReversalReason] = useState('');
+    const [reversalOperationId, setReversalOperationId] = useState(
+        () => globalThis.crypto.randomUUID(),
+    );
     const [formData, setFormData] = useState({
         supplier: '',
         notes: '',
@@ -158,21 +218,28 @@ export default function PurchaseOrders() {
     const [searchProduct, setSearchProduct] = useState('');
 
     // Fetch orders
-    const { data: orders = [], isLoading } = useQuery<PurchaseOrder[]>({
-        queryKey: ['purchaseOrders'],
+    const { data: ordersPage, isLoading, isError, refetch } = useQuery<PurchaseOrdersPage>({
+        queryKey: ['purchaseOrders', page],
         queryFn: () => client
-            .get('/inventory/purchase-orders/')
-            .then(res => asArray<PurchaseOrder>(res.data).map(normalizeOrder))
+            .get(`/inventory/purchase-orders/?page=${page}`)
+            .then(res => ({
+                count: Number(res.data?.count ?? asArray<PurchaseOrder>(res.data).length),
+                results: asArray<PurchaseOrder>(res.data).map(normalizeOrder),
+            })),
+        placeholderData: previous => previous,
     });
+    const orders = ordersPage?.results ?? [];
+    const ordersCount = ordersPage?.count ?? 0;
+    const totalPages = Math.max(1, Math.ceil(ordersCount / PAGE_SIZE));
 
     // Fetch suppliers
-    const { data: suppliers = [] } = useQuery<Supplier[]>({
+    const { data: suppliers = [], isError: suppliersError } = useQuery<Supplier[]>({
         queryKey: ['suppliers'],
         queryFn: () => client.get('/inventory/suppliers/').then(res => asArray<Supplier>(res.data))
     });
 
     // Search products
-    const { data: products = [] } = useQuery<Product[]>({
+    const { data: products = [], isError: productsError } = useQuery<Product[]>({
         queryKey: ['products', searchProduct],
         queryFn: () => client
             .get(`/inventory/products/?search=${searchProduct}`)
@@ -189,8 +256,7 @@ export default function PurchaseOrders() {
             resetForm();
         },
         onError: (err: unknown) => {
-            console.error("Create Order Error:", err);
-            toast.error(getApiErrorMessage(err, 'Erreur lors de la creation'));
+            toast.error(getApiErrorMessage(err, 'Impossible de créer la commande. Réessayez.'));
         }
     });
 
@@ -205,16 +271,16 @@ export default function PurchaseOrders() {
 
     // Receive order
     const receiveOrder = useMutation({
-        mutationFn: ({ id, items }: { id: number, items: ReceiveOrderItem[] }) =>
-            client.post(`/inventory/purchase-orders/${id}/receive/`, { items }),
+        mutationFn: ({ id, items, receipt_id }: { id: number, items: ReceiveOrderItem[], receipt_id: string }) =>
+            client.post(`/inventory/purchase-orders/${id}/receive/`, { items, receipt_id }),
         onSuccess: () => {
             toast.success('Réception validée - Stock mis à jour');
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
+            setReceiptId(globalThis.crypto.randomUUID());
         },
-        onError: (err: unknown) => {
-            toast.error('Erreur lors de la réception');
-            console.error(err);
+        onError: () => {
+            toast.error('La réception n’a pas pu être enregistrée. Vous pouvez réessayer sans risque de doublon.');
         }
     });
 
@@ -226,6 +292,96 @@ export default function PurchaseOrders() {
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
         }
     });
+
+    const createPayment = useMutation({
+        mutationFn: ({ orderId, payload }: {
+            orderId: number;
+            payload: typeof paymentForm & { operation_id: string };
+        }) => client.post(
+            `/inventory/purchase-orders/${orderId}/payments/`,
+            payload,
+        ),
+        onSuccess: () => {
+            toast.success('Règlement fournisseur enregistré.');
+            queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
+            queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-month'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-period'] });
+            setPayingOrder(null);
+            setPaymentOperationId(globalThis.crypto.randomUUID());
+        },
+        onError: (error: unknown) => {
+            toast.error(getApiErrorMessage(
+                error,
+                'Impossible d’enregistrer le règlement.',
+            ));
+        },
+    });
+
+    const reversePayment = useMutation({
+        mutationFn: ({ orderId, paymentId, reason, operationId }: {
+            orderId: number;
+            paymentId: number;
+            reason: string;
+            operationId: string;
+        }) => client.post(
+            `/inventory/purchase-orders/${orderId}/payments/${paymentId}/reverse/`,
+            { reason, operation_id: operationId },
+        ),
+        onSuccess: () => {
+            toast.success('Règlement fournisseur contrepassé.');
+            queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
+            queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-month'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
+            queryClient.invalidateQueries({ queryKey: ['acc-period'] });
+            setReversingPayment(null);
+            setReversalReason('');
+            setReversalOperationId(globalThis.crypto.randomUUID());
+        },
+        onError: (error: unknown) => {
+            toast.error(getApiErrorMessage(
+                error,
+                'Impossible de contrepasser le règlement.',
+            ));
+        },
+    });
+
+    const openPayment = (order: PurchaseOrder) => {
+        setPayingOrder(order);
+        setPaymentForm({
+            amount: order.balance_due.toFixed(2),
+            method: 'CASH',
+            paid_on: localDateInput(),
+            reference: '',
+            note: '',
+        });
+        setPaymentOperationId(globalThis.crypto.randomUUID());
+    };
+
+    const submitPayment = () => {
+        if (!payingOrder) return;
+        const amount = parseDecimalInput(paymentForm.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+            toast.error('Saisissez un montant positif.');
+            return;
+        }
+        if (amount > payingOrder.balance_due + 0.0001) {
+            toast.error('Le montant dépasse le solde restant.');
+            return;
+        }
+        createPayment.mutate({
+            orderId: payingOrder.id,
+            payload: {
+                ...paymentForm,
+                amount: amount.toFixed(2),
+                reference: paymentForm.reference.trim(),
+                note: paymentForm.note.trim(),
+                operation_id: paymentOperationId,
+            },
+        });
+    };
 
     const resetForm = () => {
         setFormData({ supplier: '', notes: '', expected_date: '', items: [] });
@@ -253,7 +409,7 @@ export default function PurchaseOrders() {
                     product: selectedProduct.id,
                     quantity: itemQty,
                     unit_cost: String(selectedProduct.purchase_price ?? 0),
-                    sale_price: String(selectedProduct.price_ttc ?? selectedProduct.sale_price_ht ?? 0),
+                    sale_price: String(selectedProduct.sale_price_ht ?? selectedProduct.price_ttc ?? 0),
                     productName: selectedProduct.name,
                     barcode: selectedProduct.barcode
                 }]
@@ -340,23 +496,13 @@ export default function PurchaseOrders() {
     const handleReceiveConfirm = () => {
         if (!receivingOrder) return;
 
+        if (receiveDrafts.some(d => (Number(d.quantity) || 0) > d.remaining)) {
+            toast.error('Une quantité reçue dépasse la quantité restante.');
+            return;
+        }
+
         const items: ReceiveOrderItem[] = receiveDrafts
-            .map(d => {
-                const qty = Number(d.quantity) || 0;
-                const cost = parseDecimalInput(d.unit_cost);
-                const newSale = parseDecimalInput(d.new_sale_price);
-                if (qty <= 0) return null;
-                const payload: ReceiveOrderItem = {
-                    item_id: d.item_id,
-                    quantity: qty,
-                };
-                // unit_cost envoyé seulement si différent du prix d'origine
-                // OU si l'utilisateur veut le propager comme nouveau défaut
-                if (Number.isFinite(cost) && cost > 0) payload.unit_cost = cost;
-                if (d.update_purchase_price) payload.update_purchase_price = true;
-                if (Number.isFinite(newSale) && newSale > 0) payload.new_sale_price = newSale;
-                return payload;
-            })
+            .map(buildReceiveOrderItem)
             .filter((item): item is ReceiveOrderItem => item !== null);
 
         if (items.length === 0) {
@@ -365,7 +511,7 @@ export default function PurchaseOrders() {
         }
 
         receiveOrder.mutate(
-            { id: receivingOrder.id, items },
+            { id: receivingOrder.id, items, receipt_id: receiptId },
             {
                 onSuccess: () => {
                     setReceivingOrder(null);
@@ -376,8 +522,10 @@ export default function PurchaseOrders() {
     };
 
     const handleReceiveCancel = () => {
+        if (receiveOrder.isPending) return;
         setReceivingOrder(null);
         setReceiveDrafts([]);
+        setReceiptId(globalThis.crypto.randomUUID());
     };
 
     const handleProductCreated = (newProduct: CreatedProduct) => {
@@ -423,7 +571,7 @@ export default function PurchaseOrders() {
                     </h1>
                     <p className="text-muted mt-1">Gérez vos commandes d'approvisionnement</p>
                 </div>
-                <button onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2">
+                <button type="button" onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2" aria-expanded={showForm} aria-controls="purchase-order-form">
                     <Plus size={18} />
                     Nouvelle Commande
                 </button>
@@ -431,28 +579,30 @@ export default function PurchaseOrders() {
 
             {/* Create Order Form */}
             {showForm && (
-                <div className="card p-6 border-accent border-2">
+                <form id="purchase-order-form" className="card p-6 border-accent border-2" onSubmit={(event) => { event.preventDefault(); handleSubmit(); }}>
                     <h2 className="text-xl font-bold mb-4">Nouvelle Commande</h2>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="block text-sm font-medium mb-1">Fournisseur *</label>
+                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-supplier">Fournisseur *</label>
                             <select
+                                id="purchase-order-supplier"
                                 value={formData.supplier}
                                 onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
                                 className="input w-full"
                             >
-                                <option value="">Sélectionner...</option>
+                                <option value="">{suppliersError ? 'Fournisseurs indisponibles' : 'Sélectionner…'}</option>
                                 {suppliers.map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                             </select>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium mb-1">Date prévue</label>
+                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-date">Date prévue</label>
                             <div className="relative">
                                 <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                                 <input
+                                    id="purchase-order-date"
                                     type="date"
                                     value={formData.expected_date}
                                     onChange={(e) => setFormData({ ...formData, expected_date: e.target.value })}
@@ -464,19 +614,28 @@ export default function PurchaseOrders() {
 
                     {/* Add Product Section */}
                     <div className="mb-4 bg-tertiary/30 p-4 rounded-lg">
-                        <label className="block text-sm font-medium mb-2">Ajouter des articles</label>
+                        <label className="block text-sm font-medium mb-2" htmlFor="purchase-order-product-search">Ajouter des articles</label>
                         <div className="flex flex-wrap gap-2 items-start">
                             <div className="flex-1 min-w-[250px] relative z-50">
                                 <div className="relative">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                                     <input
+                                        id="purchase-order-product-search"
                                         type="text"
                                         placeholder="Nom ou Code-barres..."
                                         className="input w-full pl-10"
                                         value={searchProduct}
-                                        onChange={(e) => setSearchProduct(e.target.value)}
+                                        onChange={(e) => {
+                                            setSearchProduct(e.target.value);
+                                            setSelectedProduct(null);
+                                        }}
+                                        role="combobox"
+                                        aria-autocomplete="list"
+                                        aria-controls="purchase-product-suggestions"
+                                        aria-expanded={products.length > 0 && Boolean(searchProduct) && !selectedProduct}
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter' && products.length > 0) {
+                                                e.preventDefault();
                                                 setSelectedProduct(products[0]);
                                                 setSearchProduct(products[0].name);
                                             }
@@ -486,33 +645,37 @@ export default function PurchaseOrders() {
 
                                 {/* Product Suggestions Dropdown */}
                                 {products.length > 0 && searchProduct && !selectedProduct && (
-                                    <div className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-xl z-[100] max-h-60 overflow-auto mt-1 ring-1 ring-black/5">
+                                    <ul id="purchase-product-suggestions" role="listbox" className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-xl z-[100] max-h-60 overflow-auto mt-1 ring-1 ring-black/5">
                                         {products.slice(0, 10).map(p => (
-                                            <div
-                                                key={p.id}
-                                                className="p-3 hover:bg-tertiary cursor-pointer border-b border-border last:border-0"
-                                                onClick={() => {
-                                                    setSelectedProduct(p);
-                                                    setSearchProduct(p.name);
-                                                }}
-                                            >
-                                                <div className="font-medium text-primary">{p.name}</div>
-                                                <div className="flex items-center justify-between text-xs text-muted mt-1">
-                                                    <span className="flex items-center gap-1">
-                                                        <Barcode size={12} /> {p.barcode}
-                                                    </span>
-                                                    <span className="font-bold text-accent">{p.purchase_price} DH</span>
-                                                </div>
-                                            </div>
+                                            <li key={p.id} role="option" aria-selected={false}>
+                                                <button
+                                                    type="button"
+                                                    className="w-full p-3 hover:bg-tertiary border-b border-border last:border-0 text-left"
+                                                    onClick={() => { setSelectedProduct(p); setSearchProduct(p.name); }}
+                                                >
+                                                    <div className="font-medium text-primary">{p.name}</div>
+                                                    <div className="flex items-center justify-between text-xs text-muted mt-1">
+                                                        <span className="flex items-center gap-1">
+                                                            <Barcode size={12} /> {p.barcode}
+                                                        </span>
+                                                        <span className="font-bold text-accent">{p.purchase_price} DH</span>
+                                                    </div>
+                                                </button>
+                                            </li>
                                         ))}
-                                    </div>
+                                    </ul>
+                                )}
+
+                                {productsError && searchProduct.length > 1 && (
+                                    <p className="text-sm text-danger mt-2" role="alert">La recherche de produits est indisponible.</p>
                                 )}
 
                                 {/* "New Product" Prompt if no results */}
-                                {searchProduct.length > 1 && products.length === 0 && (
+                                {searchProduct.length > 1 && products.length === 0 && !productsError && (
                                     <div className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-lg z-20 p-2 mt-1 text-center">
                                         <p className="text-sm text-muted mb-2">Aucun produit trouvé</p>
                                         <button
+                                            type="button"
                                             onClick={() => setShowCreateProduct(true)}
                                             className="btn-primary-outline text-xs w-full"
                                         >
@@ -523,6 +686,7 @@ export default function PurchaseOrders() {
                             </div>
 
                             <input
+                                aria-label="Quantité à ajouter"
                                 type="number"
                                 min={1}
                                 value={itemQty}
@@ -532,15 +696,18 @@ export default function PurchaseOrders() {
                             />
 
                             <button
+                                type="button"
                                 onClick={addItem}
                                 disabled={!selectedProduct}
                                 className="btn-secondary h-[42px]"
                                 title="Ajouter à la liste"
+                                aria-label="Ajouter le produit sélectionné à la commande"
                             >
                                 <Plus size={18} />
                             </button>
 
                             <button
+                                type="button"
                                 onClick={() => setShowCreateProduct(true)}
                                 className="btn-primary h-[42px]"
                                 title="Créer un nouveau produit"
@@ -558,7 +725,7 @@ export default function PurchaseOrders() {
                                 <div className="bg-tertiary px-3 py-2 text-xs font-semibold uppercase text-muted flex">
                                     <div className="flex-1">Produit</div>
                                     <div className="w-24 text-right">Prix Achat</div>
-                                    <div className="w-24 text-right">Prix Vente</div>
+                                    <div className="w-24 text-right">Prix vente prévu</div>
                                     <div className="w-20 text-center">Qté</div>
                                     <div className="w-24 text-right">Total</div>
                                     <div className="w-10"></div>
@@ -573,6 +740,7 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div className="w-24">
                                             <input
+                                                aria-label={`Prix d'achat de ${item.productName || `produit ${item.product}`}`}
                                                 type="number"
                                                 step="0.01"
                                                 min="0"
@@ -594,6 +762,7 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div className="w-24">
                                             <input
+                                                aria-label={`Prix de vente de ${item.productName || `produit ${item.product}`}`}
                                                 type="text"
                                                 step="0.01"
                                                 min="0"
@@ -615,6 +784,7 @@ export default function PurchaseOrders() {
                                         </div>
                                         <div className="w-20">
                                             <input
+                                                aria-label={`Quantité de ${item.productName || `produit ${item.product}`}`}
                                                 type="text"
                                                 min="1"
                                                 value={item.quantity}
@@ -636,8 +806,8 @@ export default function PurchaseOrders() {
                                             {(item.quantity * (parseDecimalInput(item.unit_cost) || 0)).toFixed(2)}
                                         </div>
                                         <div className="w-10 text-right">
-                                            <button onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded">
-                                                <Trash2 size={16} />
+                                            <button type="button" onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded" aria-label={`Retirer ${item.productName || `produit ${item.product}`}`}>
+                                                <Trash2 size={16} aria-hidden="true" />
                                             </button>
                                         </div>
                                     </div>
@@ -652,8 +822,9 @@ export default function PurchaseOrders() {
 
                     {/* Notes */}
                     <div className="mb-4">
-                        <label className="block text-sm font-medium mb-1">Notes</label>
+                        <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-notes">Notes</label>
                         <textarea
+                            id="purchase-order-notes"
                             value={formData.notes}
                             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                             className="input w-full h-20 resize-none"
@@ -663,12 +834,12 @@ export default function PurchaseOrders() {
 
                     {/* Actions */}
                     <div className="flex gap-3 pt-4 border-t border-border">
-                        <button onClick={handleSubmit} disabled={createOrder.isPending} className="btn-primary flex-1 py-3 text-lg">
+                        <button type="submit" disabled={createOrder.isPending} className="btn-primary flex-1 py-3 text-lg">
                             {createOrder.isPending ? 'Création...' : 'Valider la Commande'}
                         </button>
-                        <button onClick={resetForm} className="btn-secondary px-6">Annuler</button>
+                        <button type="button" onClick={resetForm} className="btn-secondary px-6">Annuler</button>
                     </div>
-                </div>
+                </form>
             )}
 
             {/* Orders List */}
@@ -678,7 +849,14 @@ export default function PurchaseOrders() {
                 </div>
                 <div className="divide-y">
                     {isLoading ? (
-                        <div className="p-8 text-center text-muted">Chargement...</div>
+                        <div className="p-8 text-center text-muted" role="status">Chargement…</div>
+                    ) : isError ? (
+                        <div className="network-error-state m-4" role="alert">
+                            <p className="font-semibold">Impossible de charger les commandes.</p>
+                            <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>
+                                Réessayer
+                            </button>
+                        </div>
                     ) : orders.length === 0 ? (
                         <div className="p-8 text-center text-muted">
                             <ClipboardList size={48} className="mx-auto mb-4 opacity-50" />
@@ -687,9 +865,12 @@ export default function PurchaseOrders() {
                     ) : (
                         orders.map((order) => (
                             <div key={order.id} className="p-4">
-                                <div
-                                    className="flex items-center justify-between cursor-pointer"
+                                <button
+                                    type="button"
+                                    className="w-full flex items-center justify-between text-left"
                                     onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+                                    aria-expanded={expandedOrder === order.id}
+                                    aria-controls={`purchase-order-${order.id}`}
                                 >
                                     <div className="flex items-center gap-4">
                                         <div className="w-10 h-10 bg-tertiary rounded-full flex items-center justify-center">
@@ -713,10 +894,10 @@ export default function PurchaseOrders() {
                                         <span className="font-bold">{order.total_amount?.toFixed(2) || '0.00'} DH</span>
                                         {expandedOrder === order.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                                     </div>
-                                </div>
+                                </button>
 
                                 {expandedOrder === order.id && (
-                                    <div className="mt-4 pl-14 space-y-3">
+                                    <div id={`purchase-order-${order.id}`} className="mt-4 pl-14 space-y-3">
                                         <div className="bg-tertiary/20 rounded-lg p-3">
                                             {/* Order Items Detail */}
                                             <h4 className="font-medium text-sm mb-2">Détails de la commande</h4>
@@ -754,9 +935,8 @@ export default function PurchaseOrders() {
                                                                             <span className="font-semibold">Lot FIFO #{idx + 1}</span>
                                                                             <span className="badge badge-accent">{layer.remaining_quantity}/{layer.initial_quantity} pcs</span>
                                                                         </div>
-                                                                        <div className="mt-1 flex justify-between text-muted">
+                                                                        <div className="mt-1 text-muted">
                                                                             <span>Achat {Number(layer.unit_cost).toFixed(2)} DH</span>
-                                                                            <span>Vente {Number(layer.sale_price).toFixed(2)} DH</span>
                                                                         </div>
                                                                     </div>
                                                                 ))}
@@ -767,6 +947,72 @@ export default function PurchaseOrders() {
                                             </div>
                                         </div>
 
+                                        <div className="rounded-lg border border-border bg-secondary p-3 space-y-3">
+                                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                <div className="flex items-center gap-2">
+                                                    <Wallet size={18} className="text-accent" />
+                                                    <h4 className="font-semibold text-sm">Règlements fournisseur</h4>
+                                                </div>
+                                                <div className="flex gap-3 text-sm flex-wrap">
+                                                    <span>Payé : <b>{order.paid_amount.toFixed(2)} DH</b></span>
+                                                    <span>Solde : <b className={order.balance_due > 0 ? 'text-warning' : 'text-success'}>{order.balance_due.toFixed(2)} DH</b></span>
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-muted">
+                                                Mouvement de trésorerie uniquement : ces règlements ne réduisent ni la marge ni le bénéfice.
+                                            </p>
+                                            {order.payments.length === 0 ? (
+                                                <p className="text-sm text-muted">Aucun règlement enregistré.</p>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {order.payments.map(payment => (
+                                                        <div
+                                                            key={payment.id}
+                                                            className={`rounded-lg border px-3 py-2 text-sm ${payment.status === 'REVERSED' ? 'opacity-60' : ''}`}
+                                                        >
+                                                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                                                                <div>
+                                                                    <span className="font-semibold">{Number(payment.amount).toFixed(2)} DH</span>
+                                                                    <span className="text-muted ml-2">
+                                                                        {payment.method === 'CASH' ? 'Espèces' : payment.method === 'BANK' ? 'Banque' : 'Autre'} · {payment.paid_on}
+                                                                    </span>
+                                                                    {payment.reference && <span className="text-muted ml-2">Réf. {payment.reference}</span>}
+                                                                </div>
+                                                                {payment.status === 'ACTIVE' ? (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="btn-secondary text-xs"
+                                                                        onClick={() => {
+                                                                            setReversingPayment({ order, payment });
+                                                                            setReversalReason('');
+                                                                            setReversalOperationId(globalThis.crypto.randomUUID());
+                                                                        }}
+                                                                    >
+                                                                        <RotateCcw size={14} /> Contrepasser
+                                                                    </button>
+                                                                ) : (
+                                                                    <span className="badge badge-danger">Contrepassé</span>
+                                                                )}
+                                                            </div>
+                                                            {payment.note && <p className="text-xs text-muted mt-1">{payment.note}</p>}
+                                                            {payment.status === 'REVERSED' && payment.reversal_reason && (
+                                                                <p className="text-xs text-danger mt-1">Motif : {payment.reversal_reason}</p>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {order.balance_due > 0 && !['DRAFT', 'CANCELLED'].includes(order.status) && (
+                                                <button
+                                                    type="button"
+                                                    className="btn-primary text-sm"
+                                                    onClick={() => openPayment(order)}
+                                                >
+                                                    <CreditCard size={16} /> Enregistrer un règlement
+                                                </button>
+                                            )}
+                                        </div>
+
                                         {order.notes && (
                                             <p className="text-sm bg-tertiary/50 p-2 rounded italic">{order.notes}</p>
                                         )}
@@ -775,12 +1021,14 @@ export default function PurchaseOrders() {
                                             {order.status === 'DRAFT' && (
                                                 <>
                                                     <button
+                                                        type="button"
                                                         onClick={() => sendOrder.mutate(order.id)}
                                                         className="btn-info flex items-center gap-1 text-sm"
                                                     >
                                                         <Send size={16} /> Envoyer
                                                     </button>
                                                     <button
+                                                        type="button"
                                                         onClick={() => cancelOrder.mutate(order.id)}
                                                         className="btn-danger flex items-center gap-1 text-sm"
                                                     >
@@ -790,6 +1038,7 @@ export default function PurchaseOrders() {
                                             )}
                                             {(order.status === 'SENT' || (order.status === 'PARTIAL' && !receiveOrder.isPending)) && (
                                                 <button
+                                                    type="button"
                                                     onClick={() => handleReceiveClick(order)}
                                                     className="btn-success flex items-center gap-1 text-sm"
                                                     disabled={receiveOrder.isPending}
@@ -805,6 +1054,18 @@ export default function PurchaseOrders() {
                         ))
                     )}
                 </div>
+                {!isLoading && !isError && (
+                    <Pagination
+                        currentPage={page}
+                        totalPages={totalPages}
+                        totalItems={ordersCount}
+                        pageSize={PAGE_SIZE}
+                        onPageChange={nextPage => {
+                            setExpandedOrder(null);
+                            setPage(nextPage);
+                        }}
+                    />
+                )}
             </div>
 
             {/* Product Creation Modal */}
@@ -816,25 +1077,143 @@ export default function PurchaseOrders() {
                 />
             )}
 
+            {payingOrder && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="presentation">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true" />
+                    <div className="relative card w-full max-w-lg p-0" role="dialog" aria-modal="true" aria-labelledby="supplier-payment-title">
+                        <div className="card-header flex items-center justify-between">
+                            <div>
+                                <h2 id="supplier-payment-title" className="text-xl font-bold flex items-center gap-2">
+                                    <Wallet size={20} className="text-accent" /> Règlement fournisseur
+                                </h2>
+                                <p className="text-sm text-muted mt-1">{payingOrder.reference} · solde {payingOrder.balance_due.toFixed(2)} DH</p>
+                            </div>
+                            <button type="button" className="btn-icon" aria-label="Fermer" disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}><X size={20} /></button>
+                        </div>
+                        <div className="card-body space-y-4">
+                            <label className="block">
+                                <span className="text-sm font-semibold">Montant (DH)</span>
+                                <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={paymentForm.amount}
+                                    onChange={event => setPaymentForm(current => ({ ...current, amount: normalizeDecimalInput(event.target.value) }))}
+                                    className="w-full mt-1"
+                                    autoFocus
+                                />
+                            </label>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <label className="block">
+                                    <span className="text-sm font-semibold">Mode</span>
+                                    <select
+                                        value={paymentForm.method}
+                                        onChange={event => setPaymentForm(current => ({ ...current, method: event.target.value as SupplierPayment['method'] }))}
+                                        className="w-full mt-1"
+                                    >
+                                        <option value="CASH">Espèces (sortie de caisse)</option>
+                                        <option value="BANK">Banque</option>
+                                        <option value="OTHER">Autre</option>
+                                    </select>
+                                </label>
+                                <label className="block">
+                                    <span className="text-sm font-semibold">Date</span>
+                                    <input type="date" value={paymentForm.paid_on} onChange={event => setPaymentForm(current => ({ ...current, paid_on: event.target.value }))} className="w-full mt-1" />
+                                </label>
+                            </div>
+                            <label className="block">
+                                <span className="text-sm font-semibold">Référence (optionnelle)</span>
+                                <input value={paymentForm.reference} maxLength={100} onChange={event => setPaymentForm(current => ({ ...current, reference: event.target.value }))} className="w-full mt-1" placeholder="Virement, reçu, chèque…" />
+                            </label>
+                            <label className="block">
+                                <span className="text-sm font-semibold">Note (optionnelle)</span>
+                                <textarea value={paymentForm.note} onChange={event => setPaymentForm(current => ({ ...current, note: event.target.value }))} className="w-full mt-1" rows={2} />
+                            </label>
+                            <div className="rounded-lg bg-tertiary p-3 text-xs text-muted">
+                                <Banknote size={15} className="inline mr-1" />
+                                Un paiement en espèces réduit la caisse physique. Aucun mode ne modifie la marge ou le bénéfice.
+                            </div>
+                        </div>
+                        <div className="card-header border-t flex justify-end gap-3">
+                            <button type="button" className="btn-secondary" disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}>Annuler</button>
+                            <button type="button" className="btn-primary" disabled={createPayment.isPending} onClick={submitPayment}>
+                                {createPayment.isPending ? 'Enregistrement…' : 'Enregistrer le règlement'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {reversingPayment && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="presentation">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true" />
+                    <div className="relative card w-full max-w-md p-0" role="dialog" aria-modal="true" aria-labelledby="reverse-payment-title">
+                        <div className="card-header">
+                            <h2 id="reverse-payment-title" className="text-xl font-bold">Contrepasser le règlement</h2>
+                            <p className="text-sm text-muted mt-1">
+                                {Number(reversingPayment.payment.amount).toFixed(2)} DH · {reversingPayment.order.reference}
+                            </p>
+                        </div>
+                        <div className="card-body">
+                            <label className="block">
+                                <span className="text-sm font-semibold">Motif obligatoire</span>
+                                <textarea
+                                    value={reversalReason}
+                                    onChange={event => setReversalReason(event.target.value)}
+                                    maxLength={255}
+                                    rows={3}
+                                    className="w-full mt-1"
+                                    autoFocus
+                                />
+                            </label>
+                            <p className="text-xs text-muted mt-3">L’historique sera conservé. Si le paiement était en espèces, le montant sera réintégré au solde théorique de caisse.</p>
+                        </div>
+                        <div className="card-header border-t flex justify-end gap-3">
+                            <button type="button" className="btn-secondary" disabled={reversePayment.isPending} onClick={() => setReversingPayment(null)}>Annuler</button>
+                            <button
+                                type="button"
+                                className="btn-danger"
+                                disabled={!reversalReason.trim() || reversePayment.isPending}
+                                onClick={() => reversePayment.mutate({
+                                    orderId: reversingPayment.order.id,
+                                    paymentId: reversingPayment.payment.id,
+                                    reason: reversalReason.trim(),
+                                    operationId: reversalOperationId,
+                                })}
+                            >
+                                <RotateCcw size={16} /> {reversePayment.isPending ? 'Contrepassation…' : 'Confirmer'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Receive Order Modal */}
             {receivingOrder && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={handleReceiveCancel} />
-                    <div className="relative card w-full max-w-5xl max-h-[90vh] overflow-y-auto p-0 animate-slideUp">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="presentation">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={handleReceiveCancel} aria-hidden="true" />
+                    <div
+                        className="relative card w-full max-w-5xl max-h-[90vh] overflow-y-auto p-0 animate-slideUp"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="receive-order-title"
+                        aria-describedby="receive-order-description"
+                    >
                         <div className="card-header sticky top-0 bg-secondary z-10 flex items-center justify-between">
                             <div>
-                                <h2 className="text-xl font-bold flex items-center gap-2">
+                                <h2 id="receive-order-title" className="text-xl font-bold flex items-center gap-2">
                                     <Check size={22} className="text-success" />
                                     Réception — {receivingOrder.reference}
                                 </h2>
-                                <p className="text-sm text-muted mt-1">
+                                <p id="receive-order-description" className="text-sm text-muted mt-1">
                                     Saisis les quantités réellement reçues. Tu peux ajuster le prix
                                     payé si le fournisseur l'a modifié, et propager ce nouveau prix
                                     sur la fiche produit.
                                 </p>
                             </div>
                             <button
+                                type="button"
                                 onClick={handleReceiveCancel}
+                                disabled={receiveOrder.isPending}
                                 className="btn-ghost btn-icon"
                                 aria-label="Fermer"
                             >
@@ -875,28 +1254,32 @@ export default function PurchaseOrders() {
 
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                             <div>
-                                                <label className="block text-xs font-semibold text-muted mb-1">
+                                                <label htmlFor={`receive-quantity-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
                                                     Quantité reçue
                                                 </label>
                                                 <input
-                                                type="text"
+                                                    id={`receive-quantity-${draft.item_id}`}
+                                                    type="number"
                                                     min="0"
                                                     max={draft.remaining}
                                                     value={draft.quantity}
                                                     onChange={(e) => updateDraft(draft.item_id, { quantity: e.target.value })}
                                                     className={`w-full text-center font-bold ${tooMany ? 'border-danger' : ''}`}
+                                                    aria-invalid={tooMany}
+                                                    aria-describedby={tooMany ? `receive-quantity-error-${draft.item_id}` : undefined}
                                                 />
                                                 {tooMany && (
-                                                    <p className="text-xs text-danger mt-1">
+                                                    <p id={`receive-quantity-error-${draft.item_id}`} className="text-xs text-danger mt-1" role="alert">
                                                         Max {draft.remaining}
                                                     </p>
                                                 )}
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold text-muted mb-1">
+                                                <label htmlFor={`receive-cost-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
                                                     Prix d'achat appliqué (DH)
                                                 </label>
                                                 <input
+                                                    id={`receive-cost-${draft.item_id}`}
                                                     type="text"
                                                     step="0.01"
                                                     min="0"
@@ -910,10 +1293,11 @@ export default function PurchaseOrders() {
                                                 </p>
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-semibold text-muted mb-1">
-                                                    Nouveau prix de vente (optionnel)
+                                                <label htmlFor={`receive-sale-price-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
+                                                    Prix de vente unique après réception (optionnel)
                                                 </label>
                                                 <input
+                                                    id={`receive-sale-price-${draft.item_id}`}
                                                     type="text"
                                                     step="0.01"
                                                     min="0"
@@ -924,7 +1308,7 @@ export default function PurchaseOrders() {
                                                     className="w-full text-right"
                                                 />
                                                 <p className="text-xs text-muted mt-1">
-                                                    Si rempli, met à jour la fiche produit.
+                                                    Si rempli, ce prix s'applique immédiatement à tout le stock, ancien et nouveau.
                                                 </p>
                                             </div>
                                         </div>
@@ -946,10 +1330,11 @@ export default function PurchaseOrders() {
                         </div>
 
                         <div className="card-header sticky bottom-0 bg-secondary z-10 flex items-center justify-end gap-3 border-t">
-                            <button onClick={handleReceiveCancel} className="btn-secondary">
+                            <button type="button" onClick={handleReceiveCancel} disabled={receiveOrder.isPending} className="btn-secondary">
                                 Annuler
                             </button>
                             <button
+                                type="button"
                                 onClick={handleReceiveConfirm}
                                 disabled={receiveOrder.isPending}
                                 className="btn-primary flex items-center gap-2"

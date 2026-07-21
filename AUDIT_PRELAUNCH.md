@@ -4,11 +4,45 @@
 **Scope:** Full backend (Django 5 + DRF + SimpleJWT + Celery + Channels) and full frontend (React 19 + TS + Vite + tanstack-query + recharts) for [Libtak](.) — Librairie Attaquaddoum SaaS.
 **Method:** Code review with file:line verification. No runtime testing. No dependency vulnerability scanner.
 
+## Remediation update — 2026-07-20
+
+> This document keeps the original findings as an audit trail. The warning and
+> unchecked lists below describe the pre-remediation state from 2026-04-23.
+
+All code findings **C1–C11, H1–H13, M1–M10 and L1–L8** have now been
+remediated. The remediation also covers additional runtime findings discovered
+during desktop and mobile browser testing: zero-price sales, cost-data exposure
+across roles, misleading delete confirmations, mobile checkout overlap,
+initial Recharts sizing warnings, incomplete export filtering, and stale local
+Python dependencies.
+
+Final verification on the remediated tree:
+
+- Django: **214/214 tests passed** on the final remediated tree.
+- Frontend: **20/20 tests passed**, ESLint passed, production/PWA build passed.
+- OpenAPI validation passed without warnings; no pending model migrations.
+- `manage.py check --deploy` passed with production-like settings.
+- SQLite integrity and foreign keys passed; FIFO reconciliation found no drift.
+- An isolated end-to-end bookstore scenario passed with two supplier orders,
+  changed receipt costs, a product-wide selling-price increase and decrease,
+  four sales (simple and discounted), a completed return, supplier payments,
+  expenses, role isolation, and exact stock/margin/cash reconciliation. FIFO is
+  used only for acquisition cost; the current product selling price applies to
+  every unsold unit.
+- Offline npm advisory cache reported **0 known vulnerabilities**.
+
+The remaining unchecked production items are operator configuration or real
+environment exercises, not missing code: set unique production secrets and
+domains, TLS, SMTP and backup encryption settings; configure persistent media;
+assign real positive prices to legacy zero-priced products; and run live
+cloud-sync, restore, scheduler, printer and monitoring drills on the target
+infrastructure.
+
 ---
 
 ## Executive Summary
 
-The application is feature-complete and largely follows Django/DRF and React idioms, but it **must not go live in its current state**. Five issues are immediately exploitable by anyone who can reach the URL: an unauthenticated `init-users` endpoint that resets `admin / admin123`, those same demo credentials printed on the public login page, a hardcoded fallback `SECRET_KEY`, a hardcoded fallback `SYNC_TOKEN` shared between local and cloud servers, and a `DEBUG=True` default that leaks tracebacks. Two further server-side issues — a broken database backup endpoint that 500s on every call, and a JWT blacklist that silently does nothing because the required Django app isn't installed — make production unsafe even after the auth holes are closed.
+The application is feature-complete and largely follows Django/DRF and React idioms, but it **must not go live in its current state**. Five issues are immediately exploitable by anyone who can reach the URL: an unauthenticated `init-users` endpoint that reset a published static administrator credential, those same demo credentials printed on the public login page, a hardcoded fallback `SECRET_KEY`, a hardcoded fallback `SYNC_TOKEN` shared between local and cloud servers, and a `DEBUG=True` default that leaks tracebacks. Two further server-side issues — a broken database backup endpoint that 500s on every call, and a JWT blacklist that silently does nothing because the required Django app isn't installed — make production unsafe even after the auth holes are closed.
 
 Frontend role enforcement is a defense-in-depth gap rather than a true vulnerability (the backend `IsAdminRole` class does enforce server-side), but a CASHIER can URL-hop to `/users`, `/accounting`, `/reports`, etc. and see the page render with empty data, which is confusing UX and a confidentiality concern if any list endpoint is ever loosened. Code quality is acceptable but has duplication around revenue/profit calculations between `reporting/` and the new `accounting/` app, and a few race conditions in stock and discount counters that will surface under multi-cashier load.
 
@@ -20,11 +54,11 @@ Frontend role enforcement is a defense-in-depth gap rather than a true vulnerabi
 
 | # | Severity | Category | Issue | Location |
 |---|---|---|---|---|
-| C1 | **Critical** | Auth | `init-users` endpoint open to public, creates `admin / admin123` | [backend/core/urls.py:18-67](backend/core/urls.py) |
+| C1 | **Critical** | Auth | `init-users` endpoint open to public, creates a static administrator credential | [backend/core/urls.py:18-67](backend/core/urls.py) |
 | C2 | **Critical** | Auth | Demo credentials displayed on login page | [frontend/src/pages/Login.tsx:127-140](frontend/src/pages/Login.tsx) |
 | C3 | **Critical** | Config | `SECRET_KEY` has insecure fallback string | [backend/config/settings.py:10](backend/config/settings.py) |
 | C4 | **Critical** | Config | `DEBUG` defaults to `True` | [backend/config/settings.py:11](backend/config/settings.py) |
-| C5 | **Critical** | Sync | `SYNC_TOKEN` has hardcoded fallback `libtak-sync-token-2025` | [backend/config/settings.py:242](backend/config/settings.py) |
+| C5 | **Critical** | Sync | `SYNC_TOKEN` had a published hardcoded fallback (redacted) | [backend/config/settings.py:242](backend/config/settings.py) |
 | C6 | **Critical** | Sync | Sync token compared with `==` (timing attack) | [backend/core/sync_api.py:29, 48, 202](backend/core/sync_api.py) |
 | C7 | **Critical** | Sync | `SyncTokenPermission` class defined but unused; sync endpoints use `AllowAny` | [backend/core/sync_api.py:19-30, 33, 189](backend/core/sync_api.py) |
 | C8 | **Critical** | Auth | JWT `BLACKLIST_AFTER_ROTATION=True` but `token_blacklist` app not installed → silently no-op | [backend/config/settings.py:128, 21-43](backend/config/settings.py) |
@@ -67,11 +101,11 @@ Frontend role enforcement is a defense-in-depth gap rather than a true vulnerabi
 
 ## Critical Issues — Detailed Fixes
 
-### C1. `init-users` endpoint open to public, creates `admin / admin123`
+### C1. `init-users` endpoint open to public, creates a static administrator credential
 
 **File:** [backend/core/urls.py:18-67](backend/core/urls.py)
 
-The `init-users/` URL is decorated `@permission_classes([AllowAny])` and creates an admin user with the static password `admin123` if it doesn't exist. Anyone on the internet can hit this endpoint. If you delete the admin user (intentionally or via migration mistake), the next caller of the URL gets superuser access.
+The `init-users/` URL is decorated `@permission_classes([AllowAny])` and creates an admin user with a published static password if it doesn't exist. Anyone on the internet can hit this endpoint. If you delete the admin user (intentionally or via migration mistake), the next caller of the URL gets superuser access.
 
 **Fix:** delete the endpoint. Replace it with a Django management command for first-time setup:
 
@@ -107,8 +141,8 @@ Then in `core/urls.py`, **remove lines 17–67 and 77 entirely**. Run `python ma
 **File:** [frontend/src/pages/Login.tsx:127-140](frontend/src/pages/Login.tsx)
 
 ```tsx
-<p className="mt-1 font-mono">admin / admin123</p>
-<p className="mt-1 font-mono">vendeur / vendeur123</p>
+<p className="mt-1 font-mono">[historical administrator credential redacted]</p>
+<p className="mt-1 font-mono">[historical cashier credential redacted]</p>
 ```
 
 Anyone who loads the login page sees the credentials. Combined with C1, this is account takeover.
@@ -122,7 +156,7 @@ Anyone who loads the login page sees the credentials. Combined with C1, this is 
 **File:** [backend/config/settings.py:10](backend/config/settings.py)
 
 ```python
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-dev-key-change-in-prod')
+SECRET_KEY = os.environ.get('SECRET_KEY', '[redacted insecure fallback]')
 ```
 
 If the env var is unset on the production server, Django boots with a globally known key. Sessions, password reset tokens, and signed cookies are all forgeable.
@@ -160,7 +194,7 @@ DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
 **File:** [backend/config/settings.py:242](backend/config/settings.py)
 
 ```python
-SYNC_TOKEN = os.environ.get('SYNC_TOKEN', 'libtak-sync-token-2025')
+SYNC_TOKEN = os.environ.get('SYNC_TOKEN', '[redacted insecure fallback]')
 ```
 
 If env var missing on either side, sync auth uses the literal string above — published in this repo. Anyone can push fake sales or pull master data.

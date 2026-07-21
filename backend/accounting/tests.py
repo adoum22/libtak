@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import uuid4
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -19,12 +20,13 @@ class AccountingPermissionsTests(TestCase):
         )
         ExpenseCategory.objects.create(name='Test', is_default=True)
 
-    def test_cashier_forbidden(self):
+    def test_cashier_can_read_categories_but_not_financial_data(self):
         c = APIClient()
         c.force_authenticate(self.cashier)
-        for url in ['/api/accounting/categories/', '/api/accounting/monthly/',
-                    '/api/accounting/expenses/', '/api/accounting/summary/',
-                    '/api/accounting/cash-register/']:
+        categories = c.get('/api/accounting/categories/')
+        self.assertEqual(categories.status_code, 200)
+        for url in ['/api/accounting/monthly/', '/api/accounting/expenses/',
+                    '/api/accounting/summary/', '/api/accounting/cash-register/']:
             r = c.get(url)
             self.assertEqual(r.status_code, 403, msg=url)
 
@@ -191,6 +193,7 @@ class CashRegisterTests(TestCase):
             status=Return.ReturnStatus.COMPLETED,
             reason='Test',
             refund_amount=Decimal('20.00'),
+            refund_method=Sale.PaymentMethod.CARD,
             processed_by=self.admin,
         )
         self.client.post('/api/accounting/expenses/', {
@@ -212,9 +215,9 @@ class CashRegisterTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['opening_amount'], 500.0)
         self.assertEqual(response.data['cash_sales_total'], 120.0)
-        self.assertEqual(response.data['returns_total'], 20.0)
+        self.assertEqual(response.data['returns_total'], 0.0)
         self.assertEqual(response.data['expenses_total'], 30.0)
-        self.assertEqual(response.data['balance'], 570.0)
+        self.assertEqual(response.data['balance'], 590.0)
 
     def test_count_creates_adjustment_to_real_amount(self):
         CashRegisterAdjustment.objects.create(
@@ -241,3 +244,36 @@ class CashRegisterTests(TestCase):
         adjustment = CashRegisterAdjustment.objects.latest('created_at')
         self.assertEqual(adjustment.adjustment_type, CashRegisterAdjustment.AdjustmentType.COUNT)
         self.assertEqual(adjustment.amount, Decimal('-10.00'))
+
+    def test_register_operation_is_idempotent(self):
+        operation_id = str(uuid4())
+        payload = {
+            'action': 'set_opening',
+            'opening_amount': '500.00',
+            'operation_id': operation_id,
+        }
+
+        first = self.client.post('/api/accounting/cash-register/', payload, format='json')
+        replay = self.client.post('/api/accounting/cash-register/', payload, format='json')
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(CashRegisterAdjustment.objects.count(), 1)
+        self.assertEqual(replay.data['balance'], 500.0)
+
+    def test_register_operation_id_cannot_be_reused_for_other_payload(self):
+        operation_id = str(uuid4())
+        first = self.client.post('/api/accounting/cash-register/', {
+            'action': 'count',
+            'counted_amount': '100.00',
+            'operation_id': operation_id,
+        }, format='json')
+        conflict = self.client.post('/api/accounting/cash-register/', {
+            'action': 'count',
+            'counted_amount': '200.00',
+            'operation_id': operation_id,
+        }, format='json')
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(CashRegisterAdjustment.objects.count(), 1)

@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import client from '../api/client';
+import Pagination from '../components/Pagination';
 import {
     Calculator,
     Package,
-    ChevronLeft,
-    ChevronRight,
     DollarSign
 } from 'lucide-react';
+
+const PAGE_SIZE = 50;
 
 interface Product {
     id: number;
@@ -27,16 +28,16 @@ interface ProductsResponse {
 
 export default function Zakat() {
     const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(20);
 
     // Fetch products with pagination
-    const { data: productsData, isLoading } = useQuery<ProductsResponse>({
-        queryKey: ['products-zakat', page, pageSize],
-        queryFn: () => client.get(`/inventory/products/?page=${page}&page_size=${pageSize}`).then(res => res.data)
+    const { data: productsData, isLoading, isError: productsError, refetch: refetchProducts } = useQuery<ProductsResponse>({
+        queryKey: ['products-zakat', page],
+        queryFn: () => client.get(`/inventory/products/?page=${page}`).then(res => res.data),
+        placeholderData: previous => previous,
     });
 
     // Fetch stock stats using optimized backend endpoint (database aggregation)
-    const { data: statsData, isLoading: isLoadingStats } = useQuery<{
+    const { data: statsData, isLoading: isLoadingStats, isError: statsError, refetch: refetchStats } = useQuery<{
         total_products: number;
         stock_value: number;
     }>({
@@ -52,14 +53,14 @@ export default function Zakat() {
 
     const products = productsData?.results || [];
     const totalProducts = productsData?.count || 0;
-    const totalPages = Math.ceil(totalProducts / pageSize);
+    const totalPages = Math.max(1, Math.ceil(totalProducts / PAGE_SIZE));
 
     return (
         <div className="space-y-6 animate-fadeIn">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent flex items-center gap-3">
+                    <h1 className="text-3xl font-bold text-primary flex items-center gap-3">
                         <Calculator size={32} />
                         Zakat
                     </h1>
@@ -80,8 +81,10 @@ export default function Zakat() {
                                 <div className="h-10 flex items-center">
                                     <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
                                 </div>
+                            ) : statsError ? (
+                                <p className="text-lg font-bold">Données indisponibles</p>
                             ) : (
-                                <p className="text-4xl font-bold">{totalCapital.toFixed(2)} <span className="text-lg">MAD</span></p>
+                                <p className="text-4xl font-bold">{totalCapital.toFixed(2)} <span className="text-lg">DH</span></p>
                             )}
                             <p className="text-white/60 text-sm mt-1">
                                 Somme (Quantité × Prix d'Achat)
@@ -101,8 +104,10 @@ export default function Zakat() {
                                 <div className="h-10 flex items-center">
                                     <div className="loader w-6 h-6 border-2 border-white/30 border-t-white"></div>
                                 </div>
+                            ) : statsError ? (
+                                <p className="text-lg font-bold">Calcul indisponible</p>
                             ) : (
-                                <p className="text-4xl font-bold">{zakatAmount.toFixed(2)} <span className="text-lg">MAD</span></p>
+                                <p className="text-4xl font-bold">{zakatAmount.toFixed(2)} <span className="text-lg">DH</span></p>
                             )}
                             <p className="text-white/60 text-sm mt-1">
                                 Montant à verser
@@ -112,7 +117,14 @@ export default function Zakat() {
                 </div>
             </div>
 
-            {/* Page Size Selector */}
+            {statsError && (
+                <div className="network-error-state" role="alert">
+                    <p className="font-semibold">Le capital et la Zakat ne peuvent pas être calculés actuellement.</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetchStats()}>Réessayer</button>
+                </div>
+            )}
+
+            {/* Product count */}
             <div className="card p-4 flex justify-between items-center">
                 <div className="flex items-center gap-4">
                     <Package size={20} className="text-muted" />
@@ -120,36 +132,21 @@ export default function Zakat() {
                         <strong>{totalProducts}</strong> produits au total
                     </span>
                 </div>
-                <div className="flex items-center gap-2">
-                    <span className="text-sm text-muted">Afficher :</span>
-                    <select
-                        value={pageSize}
-                        onChange={(e) => {
-                            setPageSize(Number(e.target.value));
-                            setPage(1);
-                        }}
-                        className="input py-1 px-3 w-20"
-                    >
-                        <option value={10}>10</option>
-                        <option value={20}>20</option>
-                        <option value={50}>50</option>
-                        <option value={100}>100</option>
-                    </select>
-                    <span className="text-sm text-muted">par page</span>
-                </div>
+                <span className="text-sm text-muted">{PAGE_SIZE} produits par page</span>
             </div>
 
             {/* Products Table */}
             <div className="card overflow-hidden">
                 <div className="overflow-x-auto">
                     <table className="table-premium w-full">
+                        <caption className="sr-only">Valeur du stock par produit pour le calcul de la Zakat</caption>
                         <thead>
                             <tr>
-                                <th className="text-left">Produit</th>
-                                <th className="text-left">Catégorie</th>
-                                <th className="text-right">Quantité</th>
-                                <th className="text-right">Prix d'Achat</th>
-                                <th className="text-right">Valeur Totale</th>
+                                <th scope="col" className="text-left">Produit</th>
+                                <th scope="col" className="text-left">Catégorie</th>
+                                <th scope="col" className="text-right">Quantité</th>
+                                <th scope="col" className="text-right">Prix d'achat</th>
+                                <th scope="col" className="text-right">Valeur totale</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -158,6 +155,15 @@ export default function Zakat() {
                                     <td colSpan={5} className="text-center py-12">
                                         <div className="loader mx-auto"></div>
                                         <p className="mt-4 text-muted">Chargement...</p>
+                                    </td>
+                                </tr>
+                            ) : productsError ? (
+                                <tr>
+                                    <td colSpan={5} className="text-center py-12">
+                                        <div className="network-error-state" role="alert">
+                                            <p>Les produits n’ont pas pu être chargés.</p>
+                                            <button type="button" className="btn-secondary mt-4" onClick={() => void refetchProducts()}>Réessayer</button>
+                                        </div>
                                     </td>
                                 </tr>
                             ) : products.length === 0 ? (
@@ -184,10 +190,10 @@ export default function Zakat() {
                                                 {product.stock}
                                             </td>
                                             <td className="text-right font-mono">
-                                                {product.purchase_price.toFixed(2)} MAD
+                                                {product.purchase_price.toFixed(2)} DH
                                             </td>
                                             <td className="text-right font-mono font-bold text-primary">
-                                                {totalValue.toFixed(2)} MAD
+                                                {totalValue.toFixed(2)} DH
                                             </td>
                                         </tr>
                                     );
@@ -201,7 +207,7 @@ export default function Zakat() {
                                         Total de cette page :
                                     </td>
                                     <td className="text-right font-mono text-primary">
-                                        {products.reduce((sum, p) => sum + (p.stock * p.purchase_price), 0).toFixed(2)} MAD
+                                        {products.reduce((sum, p) => sum + (p.stock * p.purchase_price), 0).toFixed(2)} DH
                                     </td>
                                 </tr>
                             </tfoot>
@@ -210,56 +216,14 @@ export default function Zakat() {
                 </div>
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
-                <div className="flex justify-center items-center gap-2">
-                    <button
-                        onClick={() => setPage(p => Math.max(1, p - 1))}
-                        disabled={page === 1}
-                        className="btn-ghost btn-icon disabled:opacity-50"
-                    >
-                        <ChevronLeft size={20} />
-                    </button>
-
-                    <div className="flex gap-1">
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                            let pageNum;
-                            if (totalPages <= 5) {
-                                pageNum = i + 1;
-                            } else if (page <= 3) {
-                                pageNum = i + 1;
-                            } else if (page >= totalPages - 2) {
-                                pageNum = totalPages - 4 + i;
-                            } else {
-                                pageNum = page - 2 + i;
-                            }
-                            return (
-                                <button
-                                    key={pageNum}
-                                    onClick={() => setPage(pageNum)}
-                                    className={`w-10 h-10 rounded-lg font-medium transition-all ${page === pageNum
-                                        ? 'bg-primary text-white shadow-lg'
-                                        : 'bg-tertiary/20 hover:bg-tertiary/40'
-                                        }`}
-                                >
-                                    {pageNum}
-                                </button>
-                            );
-                        })}
-                    </div>
-
-                    <button
-                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                        disabled={page === totalPages}
-                        className="btn-ghost btn-icon disabled:opacity-50"
-                    >
-                        <ChevronRight size={20} />
-                    </button>
-
-                    <span className="text-sm text-muted ml-4">
-                        Page {page} sur {totalPages}
-                    </span>
-                </div>
+            {!productsError && (
+                <Pagination
+                    currentPage={page}
+                    totalPages={totalPages}
+                    totalItems={totalProducts}
+                    pageSize={PAGE_SIZE}
+                    onPageChange={setPage}
+                />
             )}
         </div>
     );

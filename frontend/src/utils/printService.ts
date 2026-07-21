@@ -3,18 +3,20 @@
  * Uses the browser's print dialog with receipt-optimized styling
  */
 
-interface CartItem {
+export interface PrintReceiptItem {
     product: {
         name: string;
         barcode: string;
         price_ttc: number;
     };
     quantity: number;
+    unitPrice?: number;
+    lineTotal?: number;
 }
 
 interface PrintReceiptData {
     saleId: number;
-    items: CartItem[];
+    items: PrintReceiptItem[];
     subtotal: number;
     discount?: { name: string; amount: number };
     total: number;
@@ -60,10 +62,21 @@ function escapeHtml(value: string | number | null | undefined): string {
         .replace(/'/g, '&#039;');
 }
 
+function safeImageUrl(value: string | null | undefined): string | null {
+    if (!value) return null;
+    try {
+        const parsed = new URL(value, window.location.origin);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+        return parsed.href;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Generate receipt HTML for thermal printer (80mm width)
  */
-function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = defaultSettings): string {
+export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = defaultSettings): string {
     const now = new Date();
     const dateStr = now.toLocaleDateString('fr-FR');
     const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
@@ -71,25 +84,28 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
     const paymentLabels: Record<string, string> = {
         'CASH': 'Espèces',
         'CARD': 'Carte Bancaire',
-        'TRANSFER': 'Virement',
         'CREDIT': 'Crédit (à régler)',
         'OTHER': 'Autre',
+        'TRANSFER': 'Virement',
     };
 
     let itemsHTML = '';
     for (const item of data.items) {
-        const lineTotal = item.product.price_ttc * item.quantity;
+        const unitPrice = item.unitPrice ?? item.product.price_ttc;
+        const lineTotal = item.lineTotal ?? unitPrice * item.quantity;
         itemsHTML += `
             <tr>
                 <td colspan="3" class="item-name">${escapeHtml(item.product.name)}</td>
             </tr>
             <tr>
-                <td class="qty">${item.quantity} x ${formatPrice(item.product.price_ttc)}</td>
+                <td class="qty">${item.quantity} x ${formatPrice(unitPrice)}</td>
                 <td></td>
                 <td class="price">${formatPrice(lineTotal)}</td>
             </tr>
         `;
     }
+
+    const logoUrl = safeImageUrl(settings.logoUrl);
 
     return `
 <!DOCTYPE html>
@@ -208,7 +224,7 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
 </head>
 <body>
     <div class="header">
-        ${settings.logoUrl ? `<img class="store-logo" src="${escapeHtml(settings.logoUrl)}" alt="Logo" />` : ''}
+        ${logoUrl ? `<img class="store-logo" src="${escapeHtml(logoUrl)}" alt="Logo" />` : ''}
         <div class="store-name">${escapeHtml(settings.storeName)}</div>
         ${settings.address ? `<div class="store-info">${escapeHtml(settings.address)}</div>` : ''}
         ${settings.phone ? `<div class="store-info">Tel: ${escapeHtml(settings.phone)}</div>` : ''}
@@ -245,9 +261,9 @@ function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = d
     </div>
 
     <div class="payment-info">
-        <div><span>Mode de paiement:</span><span>${paymentLabels[data.paymentMethod] || data.paymentMethod}</span></div>
-        ${data.amountGiven ? `<div><span>Montant reçu:</span><span>${formatPrice(data.amountGiven)}</span></div>` : ''}
-        ${data.change && data.change > 0 ? `<div><span>Monnaie rendue:</span><span>${formatPrice(data.change)}</span></div>` : ''}
+        <div><span>Mode de paiement:</span><span>${escapeHtml(paymentLabels[data.paymentMethod] || data.paymentMethod)}</span></div>
+        ${data.paymentMethod === 'CASH' && data.amountGiven !== undefined ? `<div><span>Montant reçu:</span><span>${formatPrice(data.amountGiven)}</span></div>` : ''}
+        ${data.paymentMethod === 'CASH' && data.change !== undefined && data.change > 0 ? `<div><span>Monnaie rendue:</span><span>${formatPrice(data.change)}</span></div>` : ''}
     </div>
 
     <div class="footer">
@@ -313,7 +329,7 @@ export function printReceipt(data: PrintReceiptData, settings?: StoreSettings): 
             win.focus();
             win.print();
         } catch (err) {
-            console.error('Print failed:', err);
+            if (import.meta.env.DEV) console.error('Print failed:', err);
         }
         // Modern browsers fire afterprint on the iframe window
         const afterPrint = () => cleanup();
@@ -331,7 +347,7 @@ export function printReceipt(data: PrintReceiptData, settings?: StoreSettings): 
     const doc = iframe.contentDocument || iframe.contentWindow?.document;
     if (!doc) {
         cleanup();
-        console.error('Could not access print iframe document');
+        if (import.meta.env.DEV) console.error('Could not access print iframe document');
         return;
     }
     doc.open();
@@ -354,7 +370,7 @@ export async function printReceiptDirect(data: PrintReceiptData, settings?: Stor
         });
         return response.ok;
     } catch (error) {
-        console.error('Direct print failed:', error);
+        if (import.meta.env.DEV) console.error('Direct print failed:', error);
         // Fallback to browser print
         printReceipt(data, settings);
         return false;

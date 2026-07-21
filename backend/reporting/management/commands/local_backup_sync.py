@@ -27,10 +27,9 @@ class Command(BaseCommand):
             sync_result = {'status': 'error', 'message': str(exc)}
 
         status = sync_result.get('status')
-        message = sync_result.get('message', '')
         if status == 'success':
             self.stdout.write(self.style.SUCCESS(f'sync: {sync_result}'))
-        elif message == 'Cloud sync not configured':
+        elif sync_result.get('code') == 'not_configured':
             self.stdout.write(self.style.WARNING('sync: non configure, backup local uniquement'))
         else:
             self.stdout.write(self.style.WARNING(f'sync: {sync_result}'))

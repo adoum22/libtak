@@ -1,4 +1,5 @@
 from django.urls import path, include
+from django.conf import settings
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
@@ -50,13 +51,19 @@ urlpatterns = [
     # Database export/backup
     path('backup/', DatabaseExportView.as_view(), name='database_export'),
 
-    # Sync API (for local-to-cloud synchronization)
-    path('sync/receive/', receive_sync_data, name='sync_receive'),
-    path('sync/master-data/', get_master_data, name='sync_master_data'),
+    # Authenticated local synchronization controls.
     path('sync/status/', sync_status, name='sync_status'),
     path('sync/trigger/', trigger_sync, name='sync_trigger'),
-    path('sync/credits/', receive_credits_snapshot, name='sync_credits'),
 
     # User management (admin)
     path('', include(router.urls)),
 ]
+
+# Inbound shared-secret endpoints exist only on an explicitly configured
+# cloud receiver.  Local installations therefore do not expose them at all.
+if settings.IS_CLOUD_SERVER:
+    urlpatterns += [
+        path('sync/receive/', receive_sync_data, name='sync_receive'),
+        path('sync/master-data/', get_master_data, name='sync_master_data'),
+        path('sync/credits/', receive_credits_snapshot, name='sync_credits'),
+    ]

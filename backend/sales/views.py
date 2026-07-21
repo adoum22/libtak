@@ -1,30 +1,69 @@
+from decimal import Decimal, ROUND_HALF_UP
+
 from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db import transaction
-from django.db.models import F
+from django.db import IntegrityError, transaction
+from django.db.models import F, IntegerField, Prefetch, Q, Sum, Value
+from django.db.models.functions import Coalesce
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from core.models import AuditLog
 from core.permissions import IsAdminRole
-from inventory.models import Product, ProductCostLayer
-from .models import Sale, Discount, Return
+from inventory.models import Product, StockMovement
+from .models import Sale, SaleItem, Discount, Return
 from .serializers import (
     SaleSerializer, SaleDetailSerializer,
     DiscountSerializer, DiscountApplySerializer,
-    ReturnSerializer
+    ReturnSerializer, return_payload_hash, sale_payload_hash,
 )
+
+
+def _discount_audit_snapshot(discount):
+    return {
+        'name': discount.name,
+        'code': discount.code,
+        'discount_type': discount.discount_type,
+        'value': str(discount.value),
+        'min_purchase': str(discount.min_purchase),
+        'max_uses': discount.max_uses,
+        'uses_count': discount.uses_count,
+        'active': discount.active,
+        'start_date': discount.start_date.isoformat() if discount.start_date else None,
+        'end_date': discount.end_date.isoformat() if discount.end_date else None,
+    }
 
 
 class SaleViewSet(viewsets.ModelViewSet):
     queryset = (
         Sale.objects.select_related('user')
-        .prefetch_related('items__product')
+        .prefetch_related(Prefetch(
+            'items',
+            queryset=(
+                SaleItem.objects.select_related('product')
+                .annotate(returned_quantity=Coalesce(
+                    Sum(
+                        'returnitem__quantity',
+                        filter=~Q(
+                            returnitem__return_order__status=(
+                                Return.ReturnStatus.REJECTED
+                            ),
+                        ),
+                    ),
+                    Value(0),
+                    output_field=IntegerField(),
+                ))
+                .order_by('id')
+            ),
+        ))
         .order_by('-created_at')
     )
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get', 'post', 'head', 'options']
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['payment_method', 'user']
+    search_fields = ['=id', 'items__product_name', 'items__product__barcode', 'user__username']
     ordering_fields = ['created_at', 'total_ttc']
     ordering = ['-created_at']
 
@@ -32,6 +71,71 @@ class SaleViewSet(viewsets.ModelViewSet):
         if self.action == 'retrieve':
             return SaleDetailSerializer
         return SaleSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if user.is_authenticated and not user.is_admin_role:
+            queryset = queryset.filter(user=user)
+        return queryset.distinct()
+
+    def create(self, request, *args, **kwargs):
+        key = request.data.get('idempotency_key')
+        if key:
+            existing = Sale.objects.filter(local_sync_id=key).first()
+            if existing:
+                if existing.user_id != request.user.id:
+                    return Response(
+                        {
+                            'detail': (
+                                'Cette cle d idempotence est deja utilisee '
+                                'pour une autre vente.'
+                            ),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                try:
+                    request_hash = sale_payload_hash(request.data)
+                except (KeyError, TypeError, ValueError):
+                    request_hash = None
+                if (
+                    not request_hash
+                    or not existing.idempotency_payload_hash
+                    or existing.idempotency_payload_hash != request_hash
+                ):
+                    return Response(
+                        {'detail': 'Cette cle d idempotence est deja utilisee pour une autre vente.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                return Response(
+                    SaleSerializer(existing, context=self.get_serializer_context()).data,
+                    status=status.HTTP_200_OK,
+                )
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            if key:
+                existing = Sale.objects.filter(local_sync_id=key).first()
+                request_hash = sale_payload_hash(request.data)
+                if (
+                    existing
+                    and existing.user_id == request.user.id
+                    and existing.idempotency_payload_hash == request_hash
+                ):
+                    return Response(
+                        SaleSerializer(existing, context=self.get_serializer_context()).data,
+                        status=status.HTTP_200_OK,
+                    )
+                return Response(
+                    {
+                        'detail': (
+                            'Cette cle d idempotence est deja utilisee '
+                            'pour une autre vente.'
+                        ),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            raise
 
     def perform_create(self, serializer):
         sale = serializer.save(user=self.request.user)
@@ -52,7 +156,7 @@ class DiscountViewSet(viewsets.ModelViewSet):
     search_fields = ['name', 'code']
     ordering_fields = ['created_at', 'value', 'end_date']
     ordering = ['-created_at']
-    
+
     def get_queryset(self):
         queryset = super().get_queryset()
         # Filter active only if requested
@@ -65,99 +169,273 @@ class DiscountViewSet(viewsets.ModelViewSet):
         if self.action == 'apply':
             return [permissions.IsAuthenticated()]
         return super().get_permissions()
-    
+
+    def perform_create(self, serializer):
+        discount = serializer.save()
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.CREATE,
+            model_name='Discount',
+            object_id=discount.pk,
+            object_repr=str(discount),
+            changes={'after': _discount_audit_snapshot(discount)},
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        before = _discount_audit_snapshot(serializer.instance)
+        discount = serializer.save()
+        AuditLog.log(
+            user=self.request.user,
+            action=AuditLog.ActionType.UPDATE,
+            model_name='Discount',
+            object_id=discount.pk,
+            object_repr=str(discount),
+            changes={
+                'before': before,
+                'after': _discount_audit_snapshot(discount),
+            },
+            request=self.request,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        with transaction.atomic():
+            discount = get_object_or_404(
+                Discount.objects.select_for_update(),
+                pk=kwargs['pk'],
+            )
+            self.check_object_permissions(request, discount)
+            if discount.uses_count > 0:
+                return Response(
+                    {
+                        'detail': (
+                            'Une remise deja utilisee doit etre desactivee '
+                            'et ne peut pas etre supprimee.'
+                        ),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            object_id = discount.pk
+            object_repr = str(discount)
+            before = _discount_audit_snapshot(discount)
+            discount.delete()
+            AuditLog.log(
+                user=request.user,
+                action=AuditLog.ActionType.DELETE,
+                model_name='Discount',
+                object_id=object_id,
+                object_repr=object_repr,
+                changes={'before': before},
+                request=request,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @action(detail=False, methods=['post'])
     def apply(self, request):
         """Apply a discount code and calculate the discount amount"""
         serializer = DiscountApplySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
-        discount = Discount.objects.get(code__iexact=serializer.validated_data['code'])
+
+        discount = serializer.discount
         subtotal = serializer.validated_data['subtotal']
-        discount_amount = discount.calculate_discount(subtotal)
-        
+        discount_amount = Decimal(
+            discount.calculate_discount(subtotal)
+        ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        new_total = (subtotal - discount_amount).quantize(
+            Decimal('0.01'),
+            rounding=ROUND_HALF_UP,
+        )
+
         return Response({
             'discount': DiscountSerializer(discount).data,
             'discount_amount': discount_amount,
-            'new_total': subtotal - discount_amount
+            'new_total': new_total,
         })
-    
+
     @action(detail=True, methods=['post'])
     def use(self, request, pk=None):
         """Increment the usage count of a discount"""
-        discount = self.get_object()
-        if not discount.is_valid:
-            return Response(
-                {'error': 'This discount is no longer valid.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        Discount.objects.filter(pk=discount.pk).update(uses_count=F('uses_count') + 1)
-        discount.refresh_from_db()
+        with transaction.atomic():
+            self.get_object()
+            discount = Discount.objects.select_for_update().get(pk=pk)
+            if not discount.is_valid:
+                return Response(
+                    {'error': "Cette remise n'est plus valide."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            discount.uses_count = F('uses_count') + 1
+            discount.save(update_fields=['uses_count'])
+            discount.refresh_from_db()
         return Response(DiscountSerializer(discount).data)
 
 
 class ReturnViewSet(viewsets.ModelViewSet):
     """API for managing product returns"""
-    queryset = Return.objects.all().select_related('sale', 'processed_by')
+    queryset = (
+        Return.objects.select_related('sale', 'processed_by')
+        .prefetch_related('items__sale_item__product')
+    )
     serializer_class = ReturnSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdminRole]
     filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ['status', 'sale']
     ordering_fields = ['created_at', 'refund_amount']
     ordering = ['-created_at']
-    
+    http_method_names = ['get', 'post', 'head', 'options']
+
+    def create(self, request, *args, **kwargs):
+        key = request.data.get('idempotency_key')
+        if key:
+            existing = Return.objects.filter(local_sync_id=key).first()
+            if existing:
+                if existing.processed_by_id != request.user.id:
+                    return Response(
+                        {
+                            'detail': (
+                                'Cette cle d idempotence est deja utilisee '
+                                'pour un autre retour.'
+                            ),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                try:
+                    request_hash = return_payload_hash(request.data)
+                except (KeyError, TypeError, ValueError):
+                    request_hash = None
+                if (
+                    not request_hash
+                    or not existing.idempotency_payload_hash
+                    or existing.idempotency_payload_hash != request_hash
+                ):
+                    return Response(
+                        {'detail': 'Cette cle d idempotence est deja utilisee pour un autre retour.'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                return Response(
+                    self.get_serializer(existing).data,
+                    status=status.HTTP_200_OK,
+                )
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            if key:
+                existing = Return.objects.filter(local_sync_id=key).first()
+                request_hash = return_payload_hash(request.data)
+                if (
+                    existing
+                    and existing.processed_by_id == request.user.id
+                    and existing.idempotency_payload_hash == request_hash
+                ):
+                    return Response(self.get_serializer(existing).data)
+                return Response(
+                    {
+                        'detail': (
+                            'Cette cle d idempotence est deja utilisee '
+                            'pour un autre retour.'
+                        ),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            raise
+
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
         """Approve a return request"""
-        return_order = self.get_object()
-        if return_order.status != Return.ReturnStatus.PENDING:
-            return Response(
-                {'error': 'Only pending returns can be approved.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        return_order.status = Return.ReturnStatus.APPROVED
-        return_order.save()
-        AuditLog.log(
-            user=request.user, action=AuditLog.ActionType.RETURN,
-            model_name='Return', object_id=return_order.id,
-            object_repr=f"Return #{return_order.id} -> {return_order.status}",
-            request=request,
-        )
-        return Response(ReturnSerializer(return_order).data)
-    
-    @action(detail=True, methods=['post'])
-    def reject(self, request, pk=None):
-        """Reject a return request and roll back the stock that was added on
-        create. Wrapped in a transaction with select_for_update so concurrent
-        sales on the same product cannot interleave with the rollback."""
-        return_order = self.get_object()
-        if return_order.status != Return.ReturnStatus.PENDING:
-            return Response(
-                {'error': 'Only pending returns can be rejected.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         with transaction.atomic():
-            items = list(return_order.items.select_related('sale_item').all())
+            self.get_object()
+            return_order = (
+                Return.objects.select_for_update()
+                .select_related('sale')
+                .get(pk=pk)
+            )
+            if return_order.status != Return.ReturnStatus.PENDING:
+                return Response(
+                    {'error': 'Seul un retour en attente peut etre approuve.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            items = list(
+                return_order.items.select_related('sale_item__product')
+                .order_by('id')
+            )
             product_ids = sorted({
                 item.sale_item.product_id
                 for item in items
-                if item.sale_item.product_id
+                if item.restock and item.sale_item.product_id
             })
-            locked_products = {
+            products = {
                 product.id: product
                 for product in Product.objects.select_for_update()
                 .filter(id__in=product_ids)
                 .order_by('id')
             }
+            missing = [
+                item.sale_item.product_name
+                for item in items
+                if item.restock and item.sale_item.product_id not in products
+            ]
+            if missing:
+                return Response(
+                    {
+                        'error': (
+                            'Impossible de remettre en stock les produits supprimes: '
+                            + ', '.join(missing)
+                        ),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             for item in items:
-                product = locked_products.get(item.sale_item.product_id)
-                if product:
-                    ProductCostLayer.consume_fifo(product, item.quantity)
-                    product.stock = max(0, product.stock - item.quantity)
-                    product.save(update_fields=['stock', 'updated_at'])
+                if not item.restock:
+                    continue
+                sale_item = item.sale_item
+                product = products[sale_item.product_id]
+                StockMovement.objects.create(
+                    product=product,
+                    movement_type=StockMovement.MovementType.RETURN,
+                    quantity=item.quantity,
+                    unit_cost=sale_item.unit_purchase_price,
+                    # Le remboursement conserve le prix historique de la vente,
+                    # mais l'exemplaire remis en rayon reprend le prix courant.
+                    sale_price=product.sale_price_ht,
+                    reference=f'RETOUR-{return_order.id}',
+                    notes=f'Retour approuve pour la vente #{return_order.sale_id}.',
+                    created_by=request.user,
+                )
+
+            now = timezone.now()
+            return_order.status = Return.ReturnStatus.APPROVED
+            return_order.stock_restored_at = now
+            return_order.processed_by = request.user
+            return_order.synced = False
+            return_order.save(update_fields=[
+                'status', 'stock_restored_at', 'processed_by', 'synced', 'updated_at',
+            ])
+        AuditLog.log(
+            user=request.user, action=AuditLog.ActionType.RETURN,
+            model_name='Return', object_id=return_order.id,
+            object_repr=f"Return #{return_order.id} -> {return_order.status}",
+            request=request,
+        )
+        return Response(self.get_serializer(return_order).data)
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        """Reject a pending request. Pending returns have no stock effect."""
+        with transaction.atomic():
+            self.get_object()
+            return_order = Return.objects.select_for_update().get(pk=pk)
+            if return_order.status != Return.ReturnStatus.PENDING:
+                return Response(
+                    {'error': 'Seul un retour en attente peut etre rejete.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
             return_order.status = Return.ReturnStatus.REJECTED
-            return_order.save(update_fields=['status', 'updated_at'])
+            return_order.processed_by = request.user
+            return_order.synced = False
+            return_order.save(update_fields=[
+                'status', 'processed_by', 'synced', 'updated_at',
+            ])
 
         AuditLog.log(
             user=request.user, action=AuditLog.ActionType.RETURN,
@@ -165,24 +443,31 @@ class ReturnViewSet(viewsets.ModelViewSet):
             object_repr=f"Return #{return_order.id} -> {return_order.status}",
             request=request,
         )
-        return Response(ReturnSerializer(return_order).data)
-    
+        return Response(self.get_serializer(return_order).data)
+
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         """Mark a return as completed (refund processed)"""
-        return_order = self.get_object()
-        if return_order.status != Return.ReturnStatus.APPROVED:
-            return Response(
-                {'error': 'Only approved returns can be completed.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        return_order.status = Return.ReturnStatus.COMPLETED
-        return_order.save()
+        with transaction.atomic():
+            self.get_object()
+            return_order = Return.objects.select_for_update().get(pk=pk)
+            if return_order.status != Return.ReturnStatus.APPROVED:
+                return Response(
+                    {'error': 'Seul un retour approuve peut etre rembourse.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            return_order.status = Return.ReturnStatus.COMPLETED
+            return_order.completed_at = timezone.now()
+            return_order.processed_by = request.user
+            return_order.synced = False
+            return_order.save(update_fields=[
+                'status', 'completed_at', 'processed_by', 'synced', 'updated_at',
+            ])
         AuditLog.log(
             user=request.user, action=AuditLog.ActionType.RETURN,
             model_name='Return', object_id=return_order.id,
             object_repr=f"Return #{return_order.id} -> {return_order.status}",
             request=request,
         )
-        return Response(ReturnSerializer(return_order).data)
+        return Response(self.get_serializer(return_order).data)
 

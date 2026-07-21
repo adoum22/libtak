@@ -144,8 +144,8 @@ import dj_database_url
 import os
 
 # En haut du fichier
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
-SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-me')
+DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 'yes')
+SECRET_KEY = os.environ['SECRET_KEY']
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 if os.environ.get('ALLOWED_HOSTS'):

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import client, { getApiErrorMessage } from '../api/client';
 import { X, Upload, Save } from 'lucide-react';
@@ -44,6 +44,8 @@ interface Supplier {
 
 export default function ProductCreateModal({ onClose, onSuccess, initialBarcode = '', initialName = '' }: ProductCreateModalProps) {
     const toast = useToast();
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const formId = useId();
     const [formData, setFormData] = useState({
         name: initialName,
         barcode: initialBarcode,
@@ -60,13 +62,13 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
     // Fetch Categories
-    const { data: categories = [] } = useQuery<Category[]>({
+    const { data: categories = [], isLoading: categoriesLoading, isError: categoriesError } = useQuery<Category[]>({
         queryKey: ['categories'],
         queryFn: () => client.get('/inventory/categories/').then(res => res.data.results || res.data)
     });
 
     // Fetch Suppliers
-    const { data: suppliers = [] } = useQuery<Supplier[]>({
+    const { data: suppliers = [], isLoading: suppliersLoading, isError: suppliersError } = useQuery<Supplier[]>({
         queryKey: ['suppliers'],
         queryFn: () => client.get('/inventory/suppliers/').then(res => res.data.results || res.data)
     });
@@ -78,6 +80,19 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
     const marginPercent = purchasePrice > 0
         ? ((margin / purchasePrice) * 100).toFixed(1)
         : '0.0';
+
+    useEffect(() => {
+        dialogRef.current?.focus();
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onClose]);
+
+    useEffect(() => () => {
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+    }, [previewUrl]);
 
     const createProduct = useMutation({
         mutationFn: async (data: ProductFormData) => {
@@ -104,7 +119,6 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
             onClose();
         },
         onError: (err: unknown) => {
-            console.error(err);
             const msg = getApiErrorMessage(err, '', 'barcode')
                 ? 'Ce code-barres existe déjà'
                 : 'Erreur lors de la création';
@@ -130,12 +144,19 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
     };
 
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fadeIn">
-            <div className="bg-surface rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-fadeIn" role="presentation">
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={`${formId}-title`}
+                tabIndex={-1}
+                className="bg-surface rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+            >
                 <div className="flex items-center justify-between p-4 border-b border-border">
-                    <h2 className="text-lg font-bold">Nouveau Produit</h2>
-                    <button onClick={onClose} className="p-1 hover:bg-tertiary rounded-full">
-                        <X size={20} />
+                    <h2 id={`${formId}-title`} className="text-lg font-bold">Nouveau produit</h2>
+                    <button type="button" onClick={onClose} className="p-1 hover:bg-tertiary rounded-full" aria-label="Fermer la fenêtre">
+                        <X size={20} aria-hidden="true" />
                     </button>
                 </div>
 
@@ -145,7 +166,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         <div className="md:col-span-2 flex justify-center mb-4">
                             <div className="relative w-32 h-32 bg-tertiary rounded-lg border-2 border-dashed border-muted flex items-center justify-center overflow-hidden group hover:border-accent transition-colors">
                                 {previewUrl ? (
-                                    <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
+                                    <img src={previewUrl} alt="Aperçu du produit" className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="text-center text-muted">
                                         <Upload size={24} className="mx-auto mb-1" />
@@ -153,18 +174,21 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                                     </div>
                                 )}
                                 <input
+                                    id={`${formId}-image`}
                                     type="file"
                                     accept="image/*"
                                     onChange={handleImageChange}
                                     className="absolute inset-0 opacity-0 cursor-pointer"
+                                    aria-label="Choisir une photo du produit"
                                 />
                             </div>
                         </div>
 
                         {/* Basic Info */}
                         <div className="form-group">
-                            <label className="label">Nom du produit *</label>
+                            <label className="label" htmlFor={`${formId}-name`}>Nom du produit *</label>
                             <input
+                                id={`${formId}-name`}
                                 type="text"
                                 className="input w-full"
                                 value={formData.name}
@@ -174,8 +198,9 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label">Code-barres *</label>
+                            <label className="label" htmlFor={`${formId}-barcode`}>Code-barres *</label>
                             <input
+                                id={`${formId}-barcode`}
                                 type="text"
                                 className="input w-full"
                                 value={formData.barcode}
@@ -184,15 +209,27 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                             />
                         </div>
 
+                        <div className="form-group md:col-span-2">
+                            <label className="label" htmlFor={`${formId}-description`}>Description</label>
+                            <textarea
+                                id={`${formId}-description`}
+                                className="input w-full"
+                                value={formData.description}
+                                onChange={e => setFormData({ ...formData, description: e.target.value })}
+                                rows={3}
+                            />
+                        </div>
+
                         {/* Category & Supplier */}
                         <div className="form-group">
-                            <label className="label">Catégorie</label>
+                            <label className="label" htmlFor={`${formId}-category`}>Catégorie</label>
                             <select
+                                id={`${formId}-category`}
                                 className="input w-full"
                                 value={formData.category}
                                 onChange={e => setFormData({ ...formData, category: e.target.value })}
                             >
-                                <option value="">Sélectionner...</option>
+                                <option value="">{categoriesLoading ? 'Chargement…' : categoriesError ? 'Catégories indisponibles' : 'Sélectionner…'}</option>
                                 {categories.map(c => (
                                     <option key={c.id} value={c.id}>{c.name}</option>
                                 ))}
@@ -200,13 +237,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label">Fournisseur</label>
+                            <label className="label" htmlFor={`${formId}-supplier`}>Fournisseur</label>
                             <select
+                                id={`${formId}-supplier`}
                                 className="input w-full"
                                 value={formData.supplier}
                                 onChange={e => setFormData({ ...formData, supplier: e.target.value })}
                             >
-                                <option value="">Sélectionner...</option>
+                                <option value="">{suppliersLoading ? 'Chargement…' : suppliersError ? 'Fournisseurs indisponibles' : 'Sélectionner…'}</option>
                                 {suppliers.map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
@@ -215,8 +253,9 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
 
                         {/* Pricing */}
                         <div className="form-group">
-                            <label className="label">Prix d'achat (DH)</label>
+                            <label className="label" htmlFor={`${formId}-purchase-price`}>Prix d'achat (DH)</label>
                             <input
+                                id={`${formId}-purchase-price`}
                                 type="text"
                                 inputMode="decimal"
                                 step="0.01"
@@ -227,8 +266,9 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label">Prix de vente (DH)</label>
+                            <label className="label" htmlFor={`${formId}-sale-price`}>Prix de vente (DH)</label>
                             <input
+                                id={`${formId}-sale-price`}
                                 type="text"
                                 inputMode="decimal"
                                 step="0.01"
@@ -250,9 +290,11 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
 
                         {/* Stock Info */}
                         <div className="form-group">
-                            <label className="label">Stock Initial</label>
+                            <label className="label" htmlFor={`${formId}-stock`}>Stock initial</label>
                             <input
+                                id={`${formId}-stock`}
                                 type="number"
+                                min="0"
                                 className="input w-full"
                                 value={formData.stock}
                                 onChange={e => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
@@ -260,9 +302,11 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label">Stock Min.</label>
+                            <label className="label" htmlFor={`${formId}-min-stock`}>Stock minimum</label>
                             <input
+                                id={`${formId}-min-stock`}
                                 type="number"
+                                min="0"
                                 className="input w-full"
                                 value={formData.min_stock}
                                 onChange={e => setFormData({ ...formData, min_stock: parseInt(e.target.value) || 0 })}

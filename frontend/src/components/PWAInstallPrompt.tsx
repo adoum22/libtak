@@ -14,13 +14,14 @@ export default function PWAInstallPrompt() {
     );
 
     useEffect(() => {
+        let showTimer: number | undefined;
         // Listen for beforeinstallprompt event
         const handler = (e: Event) => {
             e.preventDefault();
             setDeferredPrompt(e as BeforeInstallPromptEvent);
 
             // Show prompt after a short delay (don't interrupt user immediately)
-            setTimeout(() => setShowPrompt(true), 3000);
+            showTimer = window.setTimeout(() => setShowPrompt(true), 3000);
         };
 
         window.addEventListener('beforeinstallprompt', handler);
@@ -35,6 +36,7 @@ export default function PWAInstallPrompt() {
         window.addEventListener('appinstalled', installedHandler);
 
         return () => {
+            if (showTimer !== undefined) window.clearTimeout(showTimer);
             window.removeEventListener('beforeinstallprompt', handler);
             window.removeEventListener('appinstalled', installedHandler);
         };
@@ -66,13 +68,18 @@ export default function PWAInstallPrompt() {
     }
 
     return (
-        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 z-50 animate-slideUp">
+        <aside
+            className="pwa-install-prompt fixed left-4 right-4 md:left-auto md:right-4 md:w-96 z-50 animate-slideUp"
+            aria-labelledby="pwa-install-title"
+        >
             <div className="bg-secondary border border-accent/30 rounded-2xl shadow-2xl shadow-accent/10 p-5 backdrop-blur-lg">
                 <button
+                    type="button"
                     onClick={handleDismiss}
                     className="absolute top-3 right-3 p-1.5 text-muted hover:text-primary hover:bg-tertiary rounded-lg transition-colors"
+                    aria-label="Fermer la proposition d'installation"
                 >
-                    <X size={18} />
+                    <X size={18} aria-hidden="true" />
                 </button>
 
                 <div className="flex items-start gap-4">
@@ -81,15 +88,16 @@ export default function PWAInstallPrompt() {
                     </div>
 
                     <div className="flex-1 min-w-0">
-                        <h3 className="font-bold text-lg text-primary mb-1">
+                        <h3 id="pwa-install-title" className="font-bold text-lg text-primary mb-1">
                             Installer l'application
                         </h3>
                         <p className="text-sm text-muted mb-4">
-                            Installez Librairie POS sur votre bureau pour un accès rapide et hors ligne.
+                            Installez Librairie POS sur votre appareil pour y accéder plus rapidement.
                         </p>
 
                         <div className="flex gap-3">
                             <button
+                                type="button"
                                 onClick={handleInstall}
                                 className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold shadow-lg shadow-accent/20"
                             >
@@ -97,6 +105,7 @@ export default function PWAInstallPrompt() {
                                 Installer
                             </button>
                             <button
+                                type="button"
                                 onClick={handleDismiss}
                                 className="btn-ghost px-4 py-2.5 text-sm"
                             >
@@ -106,6 +115,6 @@ export default function PWAInstallPrompt() {
                     </div>
                 </div>
             </div>
-        </div>
+        </aside>
     );
 }

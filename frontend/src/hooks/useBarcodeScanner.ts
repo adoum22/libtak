@@ -1,34 +1,54 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
+
+const isEditableTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    return target.isContentEditable
+        || target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT';
+};
 
 export default function useBarcodeScanner(onScan: (barcode: string) => void) {
-    const [barcode, setBarcode] = useState('');
+    const callbackRef = useRef(onScan);
+    const bufferRef = useRef('');
+    const lastKeyAtRef = useRef(0);
+    const timeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
-        let timeout: ReturnType<typeof setTimeout>;
+        callbackRef.current = onScan;
+    }, [onScan]);
 
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // If the event is from an input field, ignore it (unless it's the scanner acting as keyboard)
-            // But usually scanner sends keys rapidly.
-            // We'll assume scanner ends with Enter.
+    useEffect(() => {
+        const clearBuffer = () => {
+            bufferRef.current = '';
+            if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+        };
 
-            if (e.key === 'Enter') {
-                if (barcode) {
-                    onScan(barcode);
-                    setBarcode('');
-                }
-            } else if (e.key.length === 1) {
-                setBarcode(prev => prev + e.key);
-
-                // Clear buffer if too slow (manual typing vs scanner)
-                clearTimeout(timeout);
-                timeout = setTimeout(() => setBarcode(''), 100);
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (isEditableTarget(event.target) || event.ctrlKey || event.altKey || event.metaKey) {
+                return;
             }
+            if (event.key === 'Enter') {
+                const barcode = bufferRef.current.trim();
+                clearBuffer();
+                if (barcode.length >= 3) void callbackRef.current(barcode);
+                return;
+            }
+            if (event.key.length !== 1) return;
+
+            const now = performance.now();
+            if (now - lastKeyAtRef.current > 120) bufferRef.current = '';
+            lastKeyAtRef.current = now;
+            bufferRef.current += event.key;
+            if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+            timeoutRef.current = window.setTimeout(clearBuffer, 180);
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
-            clearTimeout(timeout);
+            clearBuffer();
         };
-    }, [barcode, onScan]);
+    }, []);
 }

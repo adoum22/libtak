@@ -15,7 +15,7 @@ class Customer(models.Model):
 
     class Meta:
         ordering = ['name']
-        indexes = [models.Index(fields=['name'])]
+        indexes = [models.Index(fields=['name'], name='credit_cust_name_idx')]
 
     def __str__(self):
         return self.name
@@ -49,7 +49,11 @@ class CreditSale(models.Model):
 
     class Meta:
         ordering = ['-created_at']
-        indexes = [models.Index(fields=['status', '-created_at'])]
+        indexes = [
+            models.Index(
+                fields=['status', '-created_at'], name='credit_cs_status_idx',
+            ),
+        ]
 
     def __str__(self):
         return f"Crédit #{self.id} - {self.customer.name}"
@@ -73,7 +77,9 @@ class CreditPayment(models.Model):
 
     class Meta:
         ordering = ['-created_at']
-        indexes = [models.Index(fields=['-created_at'])]
+        indexes = [
+            models.Index(fields=['-created_at'], name='credit_pay_created_idx'),
+        ]
 
     def __str__(self):
         return f"Paiement #{self.id} - {self.amount}"

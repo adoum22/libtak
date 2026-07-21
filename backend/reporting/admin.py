@@ -1,11 +1,11 @@
 from django.contrib import admin
-from .models import ReportSettings, ReportLog
+from .models import ReportSettings, ReportLog, ScheduledJobClaim
 
 
 @admin.register(ReportSettings)
 class ReportSettingsAdmin(admin.ModelAdmin):
     list_display = ('email_recipients', 'daily_enabled', 'weekly_enabled', 'monthly_enabled', 'updated_at')
-    
+
     fieldsets = (
         ('Destinataires', {
             'fields': ('email_recipients',),
@@ -27,10 +27,10 @@ class ReportSettingsAdmin(admin.ModelAdmin):
             'fields': ('yearly_enabled', 'yearly_time')
         }),
     )
-    
+
     def has_add_permission(self, request):
         return not ReportSettings.objects.exists()
-    
+
     def has_delete_permission(self, request, obj=None):
         return False
 
@@ -45,9 +45,28 @@ class ReportLogAdmin(admin.ModelAdmin):
         'total_sales', 'total_revenue', 'total_profit', 'items_sold',
         'recipients', 'sent_at', 'success', 'error_message'
     )
-    
+
     def has_add_permission(self, request):
         return False
-    
+
     def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ScheduledJobClaim)
+class ScheduledJobClaimAdmin(admin.ModelAdmin):
+    list_display = (
+        'job_name', 'run_date', 'status', 'claimed_at',
+        'lease_expires_at', 'completed_at',
+    )
+    list_filter = ('status', 'job_name', 'run_date')
+    readonly_fields = [field.name for field in ScheduledJobClaim._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False

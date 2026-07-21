@@ -1,11 +1,24 @@
-from django.contrib.auth.models import AbstractUser
+import ipaddress
+
+from django.conf import settings as django_settings
+from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
+class UserManager(DjangoUserManager):
+    """Keep the application role authoritative for Django admin access."""
+
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('role', 'ADMIN')
+        if extra_fields.get('role') != 'ADMIN':
+            raise ValueError('A superuser must have the ADMIN role.')
+        return super().create_superuser(username, email, password, **extra_fields)
+
+
 class User(AbstractUser):
     """Utilisateur personnalisé avec rôles"""
-    
+
     class Role(models.TextChoices):
         ADMIN = 'ADMIN', _('Administrateur')
         CASHIER = 'CASHIER', _('Vendeur')
@@ -23,10 +36,12 @@ class User(AbstractUser):
         blank=True,
         null=True
     )
-    
+
     # Permissions individuelles
     can_view_stock = models.BooleanField(_('Can view stock'), default=False)
     can_manage_stock = models.BooleanField(_('Can manage stock'), default=False)
+
+    objects = UserManager()
 
     class Meta:
         verbose_name = _('User')
@@ -34,29 +49,83 @@ class User(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.get_role_display()})"
-    
+
+    def save(self, *args, **kwargs):
+        """Synchronize role and Django staff/superuser flags on every write.
+
+        ``role`` is the canonical authorization source used by the API.  An
+        ADMIN may enter Django admin (subject to model permissions), while a
+        CASHIER must never retain staff or superuser access after demotion.
+        """
+        if self.role == self.Role.ADMIN:
+            self.is_staff = True
+        else:
+            self.is_staff = False
+            self.is_superuser = False
+
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = set(update_fields) | {
+                'role', 'is_staff', 'is_superuser'
+            }
+        super().save(*args, **kwargs)
+
     @property
     def is_admin_role(self):
         """Vérifie si l'utilisateur est admin"""
         return self.role == self.Role.ADMIN
-    
+
     @property
     def is_cashier_role(self):
         """Vérifie si l'utilisateur est vendeur"""
         return self.role == self.Role.CASHIER
 
+    @property
+    def effective_can_manage_stock(self):
+        """Combine the per-user permission with the global cashier default."""
+        if self.is_admin_role:
+            return True
+        app_settings = AppSettings.objects.only(
+            'cashier_can_manage_stock'
+        ).filter(pk=1).first()
+        return bool(
+            self.can_manage_stock
+            or (app_settings and app_settings.cashier_can_manage_stock)
+        )
+
+    @property
+    def effective_can_view_stock(self):
+        """Stock management necessarily includes stock visibility."""
+        if self.is_admin_role:
+            return True
+        app_settings = AppSettings.objects.only(
+            'cashier_can_view_stock',
+            'cashier_can_manage_stock',
+        ).filter(pk=1).first()
+        return bool(
+            self.can_view_stock
+            or self.can_manage_stock
+            or (
+                app_settings
+                and (
+                    app_settings.cashier_can_view_stock
+                    or app_settings.cashier_can_manage_stock
+                )
+            )
+        )
+
 
 class AppSettings(models.Model):
     """Paramètres globaux de l'application"""
-    
+
     class Meta:
         verbose_name = _('App Settings')
         verbose_name_plural = _('App Settings')
-    
+
     # Informations de la librairie
     store_name = models.CharField(
-        _('Store Name'), 
-        max_length=200, 
+        _('Store Name'),
+        max_length=200,
         default='Librairie Attaquaddoum'
     )
     store_address = models.TextField(_('Store Address'), blank=True)
@@ -68,11 +137,11 @@ class AppSettings(models.Model):
         blank=True,
         null=True
     )
-    
+
     # Permissions Vendeurs
     cashier_can_view_stock = models.BooleanField(_('Cashier can view stock'), default=False)
     cashier_can_manage_stock = models.BooleanField(_('Cashier can manage stock'), default=False)
-    
+
     # TVA par défaut
     default_tva = models.DecimalField(
         _('Default VAT (%)'),
@@ -80,11 +149,11 @@ class AppSettings(models.Model):
         decimal_places=2,
         default=20.00
     )
-    
+
     # Devise
     currency = models.CharField(_('Currency'), max_length=10, default='MAD')
     currency_symbol = models.CharField(_('Currency Symbol'), max_length=5, default='DH')
-    
+
     # Impression tickets
     print_header = models.TextField(_('Ticket Header'), blank=True)
     print_footer = models.TextField(_('Ticket Footer'), blank=True)
@@ -100,18 +169,18 @@ class AppSettings(models.Model):
     invoice_footer = models.TextField(_('Invoice Footer'), blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     def save(self, *args, **kwargs):
         # S'assurer qu'il n'y a qu'une seule instance
         self.pk = 1
         super().save(*args, **kwargs)
-    
+
     @classmethod
     def get_settings(cls):
         """Récupère ou crée les paramètres"""
         settings, _ = cls.objects.get_or_create(pk=1)
         return settings
-    
+
     def __str__(self):
         return self.store_name
 
@@ -129,7 +198,7 @@ class AuditLog(models.Model):
         STOCK_IN = 'STOCK_IN', _('Stock In')
         STOCK_OUT = 'STOCK_OUT', _('Stock Out')
         EXPORT = 'EXPORT', _('Export')
-    
+
     user = models.ForeignKey(
         'User',
         on_delete=models.SET_NULL,
@@ -162,21 +231,32 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.get_action_display()} - {self.model_name}"
-    
+
     @classmethod
     def log(cls, user, action, model_name, object_id=None, object_repr='', changes=None, request=None):
         """Helper method to create audit log entries"""
         ip_address = None
         user_agent = ''
-        
+
         if request:
-            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-            if x_forwarded_for:
-                ip_address = x_forwarded_for.split(',')[0]
-            else:
-                ip_address = request.META.get('REMOTE_ADDR')
+            ip_address = request.META.get('REMOTE_ADDR')
+            # Forwarded addresses are attacker-controlled unless the app is
+            # explicitly deployed behind the configured number of trusted
+            # proxies.  The right-most untrusted hop is then the client.
+            trusted_proxy_count = getattr(
+                django_settings, 'AUDIT_TRUSTED_PROXY_COUNT', 0
+            )
+            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+            if trusted_proxy_count > 0 and x_forwarded_for:
+                hops = [value.strip() for value in x_forwarded_for.split(',') if value.strip()]
+                if len(hops) >= trusted_proxy_count:
+                    ip_address = hops[-trusted_proxy_count]
+            try:
+                ip_address = str(ipaddress.ip_address(ip_address)) if ip_address else None
+            except ValueError:
+                ip_address = None
             user_agent = request.META.get('HTTP_USER_AGENT', '')[:500]
-        
+
         return cls.objects.create(
             user=user,
             action=action,
@@ -191,11 +271,11 @@ class AuditLog(models.Model):
 
 class SyncLog(models.Model):
     """Journal de synchronisation LOCAL ↔ CLOUD"""
-    
+
     class SyncType(models.TextChoices):
         PUSH = 'PUSH', _('Local → Cloud')
         PULL = 'PULL', _('Cloud → Local')
-    
+
     sync_type = models.CharField(
         _('Sync Type'),
         max_length=10,
@@ -206,12 +286,12 @@ class SyncLog(models.Model):
     error_message = models.TextField(_('Error Message'), blank=True)
     details = models.JSONField(_('Details'), default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         verbose_name = _('Sync Log')
         verbose_name_plural = _('Sync Logs')
         ordering = ['-created_at']
-    
+
     def __str__(self):
         return f"{self.get_sync_type_display()} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 

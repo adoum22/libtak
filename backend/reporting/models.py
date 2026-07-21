@@ -4,18 +4,18 @@ from django.utils.translation import gettext_lazy as _
 
 class ReportSettings(models.Model):
     """Configuration des rapports automatiques"""
-    
+
     class Meta:
         verbose_name = _('Report Settings')
         verbose_name_plural = _('Report Settings')
-    
+
     # Destinataires
     email_recipients = models.TextField(
         _('Email Recipients'),
         help_text=_('Emails séparés par des virgules'),
         blank=True
     )
-    
+
     # SMTP credentials are now configured via environment variables
     # (EMAIL_HOST, EMAIL_PORT, EMAIL_HOST_USER, EMAIL_HOST_PASSWORD, EMAIL_USE_TLS).
     # Storing them in the database was a security risk (cleartext password).
@@ -23,7 +23,7 @@ class ReportSettings(models.Model):
     # Rapport Journalier
     daily_enabled = models.BooleanField(_('Daily Report Enabled'), default=True)
     daily_time = models.TimeField(_('Daily Report Time'), default='23:00')
-    
+
     # Rapport Hebdomadaire
     weekly_enabled = models.BooleanField(_('Weekly Report Enabled'), default=True)
     weekly_time = models.TimeField(_('Weekly Report Time'), default='23:30')
@@ -40,43 +40,54 @@ class ReportSettings(models.Model):
             (6, _('Sunday')),
         ]
     )
-    
+
     # Rapport Mensuel
     monthly_enabled = models.BooleanField(_('Monthly Report Enabled'), default=True)
     monthly_time = models.TimeField(_('Monthly Report Time'), default='23:45')
-    
+
     # Rapport Trimestriel
     quarterly_enabled = models.BooleanField(_('Quarterly Report Enabled'), default=True)
     quarterly_time = models.TimeField(_('Quarterly Report Time'), default='23:50')
-    
+
     # Rapport Annuel
     yearly_enabled = models.BooleanField(_('Yearly Report Enabled'), default=True)
     yearly_time = models.TimeField(_('Yearly Report Time'), default='23:55')
-    
+
+    # Idempotency markers used by the scheduler. A command may safely run every
+    # few minutes without sending the same period twice.
+    daily_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    weekly_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    monthly_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    quarterly_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    yearly_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    low_stock_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    backup_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+    backup_last_sent_on = models.DateField(null=True, blank=True, editable=False)
+
     updated_at = models.DateTimeField(auto_now=True)
-    
+
     def save(self, *args, **kwargs):
         self.pk = 1
         super().save(*args, **kwargs)
-    
+
     @classmethod
     def get_settings(cls):
         settings, _ = cls.objects.get_or_create(pk=1)
         return settings
-    
+
     def get_recipients_list(self):
         """Retourne la liste des emails"""
         if not self.email_recipients:
             return []
         return [email.strip() for email in self.email_recipients.split(',') if email.strip()]
-    
+
     def __str__(self):
         return "Report Settings"
 
 
 class ReportLog(models.Model):
     """Historique des rapports envoyés"""
-    
+
     class ReportType(models.TextChoices):
         DAILY = 'DAILY', _('Daily')
         WEEKLY = 'WEEKLY', _('Weekly')
@@ -84,7 +95,7 @@ class ReportLog(models.Model):
         QUARTERLY = 'QUARTERLY', _('Quarterly')
         YEARLY = 'YEARLY', _('Yearly')
         BACKUP = 'BACKUP', _('Backup')
-    
+
     report_type = models.CharField(
         _('Report Type'),
         max_length=20,
@@ -92,7 +103,7 @@ class ReportLog(models.Model):
     )
     period_start = models.DateField(_('Period Start'))
     period_end = models.DateField(_('Period End'))
-    
+
     # Données du rapport
     total_sales = models.IntegerField(_('Total Sales'), default=0)
     total_revenue = models.DecimalField(
@@ -108,17 +119,57 @@ class ReportLog(models.Model):
         default=0
     )
     items_sold = models.JSONField(_('Items Sold'), default=dict)
-    
+
     # Envoi
     recipients = models.TextField(_('Recipients'))
     sent_at = models.DateTimeField(auto_now_add=True)
     success = models.BooleanField(_('Success'), default=True)
     error_message = models.TextField(_('Error Message'), blank=True)
-    
+
     class Meta:
         verbose_name = _('Report Log')
         verbose_name_plural = _('Report Logs')
         ordering = ['-sent_at']
-    
+
     def __str__(self):
         return f"{self.get_report_type_display()} - {self.period_start} to {self.period_end}"
+
+
+class ScheduledJobClaim(models.Model):
+    """Short database lease preventing overlapping scheduler executions."""
+
+    class Status(models.TextChoices):
+        RUNNING = 'RUNNING', _('Running')
+        SUCCESS = 'SUCCESS', _('Success')
+        FAILED = 'FAILED', _('Failed')
+
+    job_name = models.CharField(max_length=40)
+    run_date = models.DateField()
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.RUNNING,
+    )
+    claim_token = models.UUIDField()
+    claimed_at = models.DateTimeField()
+    lease_expires_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    result_message = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['job_name', 'run_date'],
+                name='reporting_unique_scheduled_job_day',
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=['status', 'lease_expires_at'],
+                name='reporting_s_status_851330_idx',
+            ),
+        ]
+        ordering = ['-run_date', 'job_name']
+
+    def __str__(self):
+        return f'{self.job_name} {self.run_date}: {self.status}'

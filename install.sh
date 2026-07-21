@@ -66,10 +66,40 @@ pip install --upgrade pip
 pip install -r requirements.txt
 echo -e "${GREEN}✓ Dépendances installées${NC}"
 
+# Créer une configuration locale propre à cette installation sans écraser
+# un fichier existant.
+if [ ! -f ".env" ]; then
+    umask 077
+    LOCAL_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
+    LOCAL_JWT_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(50))")
+    cat > .env << EOF
+SECRET_KEY=$LOCAL_SECRET_KEY
+JWT_SIGNING_KEY=$LOCAL_JWT_KEY
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+IS_CLOUD_SERVER=False
+EOF
+    unset LOCAL_SECRET_KEY LOCAL_JWT_KEY
+    chmod 600 .env
+    echo -e "${GREEN}✓ Configuration locale sécurisée créée${NC}"
+else
+    echo -e "${GREEN}✓ Configuration locale existante préservée${NC}"
+fi
+
 # Migrer la base de données
 echo -e "${YELLOW}Configuration de la base de données...${NC}"
 python manage.py migrate
 echo -e "${GREEN}✓ Base de données configurée${NC}"
+
+# Créer le premier administrateur de manière interactive si nécessaire.
+if python manage.py shell -c "from core.models import User; raise SystemExit(0 if User.objects.filter(role='ADMIN', is_active=True).exclude(password='').exclude(password__startswith='!').exists() else 1)"; then
+    python create_users.py
+else
+    echo -e "${YELLOW}Création du premier administrateur (mot de passe non affiché)...${NC}"
+    python manage.py createsuperuser
+    python create_users.py
+fi
 
 # Synchroniser les produits depuis le cloud
 echo -e "${YELLOW}Téléchargement des produits depuis le cloud...${NC}"
