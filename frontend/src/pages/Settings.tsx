@@ -65,6 +65,11 @@ interface ReportDiagnostic {
         success: boolean | null;
         error_message: string | null;
     } | null;
+    last_log?: {
+        sent_at: string | null;
+        success: boolean | null;
+        error_message: string | null;
+    } | null;
     pythonanywhere_task?: string;
     pythonanywhere_env_file?: string;
     local_backup_sync_task?: string;
@@ -113,6 +118,15 @@ export default function Settings() {
     const frontendCommit = import.meta.env.VITE_COMMIT_SHA || import.meta.env.VITE_VERCEL_GIT_COMMIT_SHA || '-';
     const setStoreForm = (value: Partial<AppSettings>) => setStoreDraft(value);
     const setReportForm = (value: Partial<ReportSettings>) => setReportDraft(value);
+    const diagnosticLog = reportDiagnostic?.last_daily_log ?? reportDiagnostic?.last_log ?? null;
+    const diagnosticSettings = reportDiagnostic?.report_settings ?? (reportDiagnostic ? {
+        daily_enabled: Boolean(reportForm.daily_enabled),
+        recipients_count: (reportForm.email_recipients || '')
+            .split(',')
+            .filter((email) => email.trim().length > 0)
+            .length,
+        daily_time: reportForm.daily_time || '-',
+    } : undefined);
 
     const updateAppSettings = useMutation({
         mutationFn: (data: Partial<AppSettings>) => {
@@ -510,14 +524,14 @@ export default function Settings() {
                                     </div>
                                     <div className="p-3 bg-tertiary/40 rounded-lg">
                                         <p className="font-semibold mb-1">Rapport</p>
-                                        <p>Actif: {reportDiagnostic.report_settings?.daily_enabled ? 'Oui' : 'Non'}</p>
-                                        <p>Destinataires: {reportDiagnostic.report_settings?.recipients_count ?? '-'}</p>
-                                        <p>Heure: {reportDiagnostic.report_settings?.daily_time || '-'}</p>
-                                        <p>Dernier statut: {reportDiagnostic.last_daily_log?.success === true ? 'OK' : reportDiagnostic.last_daily_log ? 'Erreur' : '-'}</p>
+                                        <p>Actif: {diagnosticSettings?.daily_enabled ? 'Oui' : 'Non'}</p>
+                                        <p>Destinataires: {diagnosticSettings?.recipients_count ?? '-'}</p>
+                                        <p>Heure: {diagnosticSettings?.daily_time || '-'}</p>
+                                        <p>Dernier statut: {diagnosticLog?.success === true ? 'OK' : diagnosticLog ? 'Erreur' : '-'}</p>
                                     </div>
-                                    {reportDiagnostic.last_daily_log?.error_message && (
+                                    {diagnosticLog?.error_message && (
                                         <div className="md:col-span-2 p-3 bg-danger-light text-danger rounded-lg">
-                                            {reportDiagnostic.last_daily_log.error_message}
+                                            {diagnosticLog.error_message}
                                         </div>
                                     )}
                                     {reportDiagnostic.smtp_config?.config_error && (
@@ -527,7 +541,7 @@ export default function Settings() {
                                     )}
                                     {reportDiagnostic.pythonanywhere_task && (
                                         <div className="md:col-span-2 p-3 bg-tertiary/40 rounded-lg">
-                                            <p className="font-semibold mb-1">Commande PythonAnywhere 23h</p>
+                                            <p className="font-semibold mb-1">Commande PythonAnywhere quotidienne</p>
                                             <code className="text-xs">{reportDiagnostic.pythonanywhere_task}</code>
                                             {reportDiagnostic.pythonanywhere_env_file && (
                                                 <p className="text-xs text-muted mt-2">

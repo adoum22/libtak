@@ -778,19 +778,42 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
         from django.conf import settings as dj_settings
 
         try:
+            report_settings = ReportSettings.get_settings()
+            previous_log_id = (
+                ReportLog.objects.filter(report_type='DAILY')
+                .order_by('-id')
+                .values_list('id', flat=True)
+                .first()
+                or 0
+            )
             result = send_daily_report()
-            log = ReportLog.objects.filter(report_type='DAILY').order_by('-sent_at').first()
+            log = (
+                ReportLog.objects.filter(
+                    report_type='DAILY',
+                    id__gt=previous_log_id,
+                )
+                .order_by('-sent_at')
+                .first()
+            )
+            log_payload = {
+                'sent_at': log.sent_at.isoformat() if log else None,
+                'recipients': log.recipients if log else None,
+                'total_sales': log.total_sales if log else None,
+                'total_revenue': float(log.total_revenue) if log else None,
+                'success': bool(log.success) if log else False,
+                'error_message': log.error_message if log else str(result),
+            }
             return Response({
                 'message': result,
                 'success': bool(log and log.success),
-                'last_log': {
-                    'sent_at': log.sent_at.isoformat() if log else None,
-                    'recipients': log.recipients if log else None,
-                    'total_sales': log.total_sales if log else None,
-                    'total_revenue': float(log.total_revenue) if log else None,
-                    'success': bool(log.success) if log else None,
-                    'error_message': log.error_message if log else None,
-                } if log else None,
+                'report_settings': {
+                    'daily_enabled': report_settings.daily_enabled,
+                    'recipients_count': len(report_settings.get_recipients_list()),
+                    'daily_time': str(report_settings.daily_time),
+                },
+                'last_daily_log': log_payload,
+                # Backwards compatibility for older frontends.
+                'last_log': log_payload,
                 'smtp_config': {
                     'backend': getattr(dj_settings, 'EMAIL_BACKEND', None),
                     'host': getattr(dj_settings, 'EMAIL_HOST', None),
@@ -896,7 +919,8 @@ class ReportLogViewSet(viewsets.ReadOnlyModelViewSet):
                 'config_error': email_config_error(),
             },
             'pythonanywhere_task': (
-                'cd ~/libtak/backend && python manage.py send_scheduled_reports'
+                'cd ~/libtak/backend && '
+                'python manage.py send_scheduled_reports --daily-slot'
             ),
             'pythonanywhere_env_file': '~/.libtak_env',
             'local_backup_sync_task': (

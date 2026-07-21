@@ -2,7 +2,9 @@
 
 Run this command every 10 to 15 minutes. Database markers make execution
 idempotent, so restarts or overlapping scheduler invocations do not duplicate
-successful sends.
+successful sends. On hosts limited to one invocation per day, use
+``--daily-slot`` so configured dates are respected without requiring the
+scheduler to run at every configured report time.
 """
 from calendar import monthrange
 from datetime import time, timedelta
@@ -42,6 +44,14 @@ class Command(BaseCommand):
             '--dry-run',
             action='store_true',
             help='Show what is due without sending or updating markers.',
+        )
+        parser.add_argument(
+            '--daily-slot',
+            action='store_true',
+            help=(
+                'For once-daily schedulers: ignore configured clock times '
+                'while preserving enabled flags and report dates.'
+            ),
         )
 
     def _run(self, label, func, dry_run):
@@ -159,7 +169,11 @@ class Command(BaseCommand):
         today = local_now.date()
         now_time = local_now.time()
         force = opts['force_all']
+        daily_slot = opts['daily_slot']
         dry_run = opts['dry_run']
+
+        def time_is_due(configured_time):
+            return force or daily_slot or self._at_or_after(now_time, configured_time)
 
         self.stdout.write(
             f'send_scheduled_reports - {local_now.isoformat(timespec="minutes")}'
@@ -173,9 +187,8 @@ class Command(BaseCommand):
             (
                 'daily report', send_daily_report, 'DAILY',
                 'daily_last_sent_on',
-                lambda settings: settings.daily_enabled and (
-                    force or self._at_or_after(now_time, settings.daily_time)
-                ),
+                lambda settings: settings.daily_enabled
+                and time_is_due(settings.daily_time),
             ),
             (
                 'weekly report', send_weekly_report, 'WEEKLY',
@@ -183,7 +196,7 @@ class Command(BaseCommand):
                 lambda settings: settings.weekly_enabled and (
                     force or (
                         today.weekday() == settings.weekly_day
-                        and self._at_or_after(now_time, settings.weekly_time)
+                        and time_is_due(settings.weekly_time)
                     )
                 ),
             ),
@@ -192,7 +205,7 @@ class Command(BaseCommand):
                 'monthly_last_sent_on',
                 lambda settings: settings.monthly_enabled and (
                     force or (
-                        last_day and self._at_or_after(now_time, settings.monthly_time)
+                        last_day and time_is_due(settings.monthly_time)
                     )
                 ),
             ),
@@ -202,7 +215,7 @@ class Command(BaseCommand):
                 lambda settings: settings.quarterly_enabled and (
                     force or (
                         quarter_end
-                        and self._at_or_after(now_time, settings.quarterly_time)
+                        and time_is_due(settings.quarterly_time)
                     )
                 ),
             ),
@@ -211,7 +224,7 @@ class Command(BaseCommand):
                 'yearly_last_sent_on',
                 lambda settings: settings.yearly_enabled and (
                     force or (
-                        year_end and self._at_or_after(now_time, settings.yearly_time)
+                        year_end and time_is_due(settings.yearly_time)
                     )
                 ),
             ),
@@ -224,7 +237,7 @@ class Command(BaseCommand):
         self._attempt(
             'low stock alert', send_low_stock_alert, 'LOW_STOCK',
             'low_stock_last_sent_on', today,
-            lambda settings: force or self._at_or_after(now_time, time(9, 0)),
+            lambda settings: time_is_due(time(9, 0)),
             dry_run,
         )
 

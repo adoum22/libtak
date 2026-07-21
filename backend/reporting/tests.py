@@ -15,7 +15,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 from rest_framework import status
 from decimal import Decimal
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from django.utils import timezone
 
 from inventory.models import Product
@@ -111,6 +111,46 @@ class ReportEmailConfigTest(TestCase):
         self.assertEqual(report_settings.daily_last_sent_on, today)
         claim = ScheduledJobClaim.objects.get(job_name='DAILY', run_date=today)
         self.assertEqual(claim.status, ScheduledJobClaim.Status.SUCCESS)
+
+    def test_daily_slot_ignores_clock_times_but_preserves_report_dates(self):
+        report_settings = ReportSettings.get_settings()
+        report_settings.daily_enabled = True
+        report_settings.daily_time = time(23, 59)
+        report_settings.weekly_enabled = True
+        report_settings.weekly_day = 2  # Wednesday
+        report_settings.weekly_time = time(23, 59)
+        report_settings.monthly_enabled = True
+        report_settings.monthly_time = time(23, 59)
+        report_settings.quarterly_enabled = True
+        report_settings.quarterly_time = time(23, 59)
+        report_settings.yearly_enabled = True
+        report_settings.yearly_time = time(23, 59)
+        report_settings.save()
+
+        fixed_now = timezone.make_aware(datetime(2025, 12, 31, 8, 0))
+        out = StringIO()
+        with patch(
+            'reporting.management.commands.send_scheduled_reports.timezone.localtime',
+            return_value=fixed_now,
+        ):
+            call_command(
+                'send_scheduled_reports',
+                '--daily-slot',
+                '--dry-run',
+                '--skip-backup',
+                stdout=out,
+            )
+
+        output = out.getvalue()
+        for label in (
+            'daily report',
+            'weekly report',
+            'monthly report',
+            'quarterly report',
+            'yearly report',
+            'low stock alert',
+        ):
+            self.assertIn(f'[dry-run] due: {label}', output)
 
 
 class EncryptedBackupTest(TestCase):
