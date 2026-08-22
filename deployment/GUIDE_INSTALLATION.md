@@ -82,8 +82,9 @@ L’archive initiale se trouve sous `.libtak-data/backups/` avec un chiffrement
 AES-GCM. Conservez séparément une copie privée de `BACKUP_ENCRYPTION_KEY` : sa
 perte rend les archives irrécupérables.
 
-Pour une copie hors site, montez un disque, un partage réseau ou un volume
-répliqué distinct et ajoutez son chemin absolu dans `backend/.env` :
+Pour une seconde copie sur un système de fichiers, montez un disque, un partage
+réseau ou un volume répliqué distinct et ajoutez son chemin absolu dans
+`backend/.env` :
 
 ```dotenv
 BACKUP_OFFSITE_DIR=/mnt/libtak-offsite
@@ -92,12 +93,52 @@ BACKUP_OFFSITE_DIR=/mnt/libtak-offsite
 La copie est atomique et contrôlée par somme de contrôle. Si le montage est
 indisponible, l’échec est journalisé et l’archive locale reste intacte. Testez
 régulièrement la restauration d’une archive issue de ce second emplacement.
+Un volume situé sur le même PC, notamment un volume Docker nommé, n'est pas une
+sauvegarde réellement hors machine.
+
+Pour une destination S3 compatible telle que Backblaze B2, créez un bucket
+privé avec Object Lock/rétention côté fournisseur et une clé dédiée limitée au
+listing, à la lecture et à l'écriture, sans suppression ni contournement de la
+rétention. Ajoutez ensuite les valeurs dans `backend/.env` :
+
+```dotenv
+BACKUP_S3_BUCKET=nom-du-bucket-prive
+BACKUP_S3_PREFIX=libtak/backups
+BACKUP_S3_ENDPOINT_URL=https://endpoint-s3-fourni-par-le-prestataire
+BACKUP_S3_REGION=region-fournie-par-le-prestataire
+BACKUP_S3_ACCESS_KEY_ID=identifiant-de-cle-limitee
+BACKUP_S3_SECRET_ACCESS_KEY=secret-de-cle-limitee
+# BACKUP_S3_SESSION_TOKEN=uniquement-pour-des-identifiants-temporaires
+```
+
+L'endpoint doit être HTTPS, sans identifiants, nom de bucket ni chemin. Ne
+committez jamais ces valeurs. Conservez `BACKUP_ENCRYPTION_KEY` dans un autre
+coffre : elle est nécessaire même si les objets S3 restent accessibles. LibTak
+relit et vérifie intégralement chaque nouvel objet distant, retente les archives
+en attente lors des passages suivants, conserve toute copie locale non
+confirmée et ne supprime jamais d'objet distant. La politique de cycle de vie
+du bucket gère donc seule la rétention distante. La configuration détaillée est
+décrite dans [`DEPLOY.md`](../DEPLOY.md#sauvegarde-réellement-hors-machine-s3-compatible).
+
+Vous pouvez imposer une réserve dans les espaces d'archives et temporaire avant
+chaque nouvelle sauvegarde, par exemple 256 Mio :
+
+```dotenv
+BACKUP_MIN_FREE_BYTES=268435456
+```
+
+Avant la génération, LibTak tente d'abord de synchroniser les archives
+existantes et ne purge les archives expirées que si leur copie S3 est confirmée.
+Si la réserve reste insuffisante, la nouvelle sauvegarde est refusée sans
+supprimer les archives en attente. Les commandes de synchronisation indiquent
+le nombre d'archives `pending` et leur volume cumulé en octets.
 
 Vérification manuelle :
 
 ```bash
 cd ~/libtak/backend
 ./.venv/bin/python manage.py backup_database
+./.venv/bin/python manage.py sync_offsite_backups
 ./.venv/bin/python manage.py verify_backup /chemin/vers/archive.ltbk
 ```
 

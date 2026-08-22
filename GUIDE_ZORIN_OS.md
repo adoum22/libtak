@@ -62,6 +62,26 @@ Pour une seconde copie chiffrée, montez un disque ou partage distinct puis
 définissez son chemin absolu dans `BACKUP_OFFSITE_DIR`. Une panne de cette copie
 secondaire est journalisée sans supprimer l’archive locale.
 
+Un support rattaché au même PC n'est pas une vraie sauvegarde hors machine.
+Pour Backblaze B2 ou un autre stockage S3 compatible, configurez plutôt les
+variables `BACKUP_S3_*` dans `backend/.env` en suivant la section
+[`Sauvegarde réellement hors machine`](DEPLOY.md#sauvegarde-réellement-hors-machine-s3-compatible).
+Utilisez un bucket privé avec Object Lock/rétention et une clé limitée sans
+suppression. Les archives en attente restent locales et sont retentées ; LibTak
+ne supprime jamais les objets distants. Aucun identifiant S3 ne doit entrer
+dans Git.
+
+`BACKUP_MIN_FREE_BYTES=268435456` exige 256 Mio libres dans les espaces
+d'archives et temporaire avant une nouvelle archive.
+La pré-synchronisation S3 ne purge que les archives expirées confirmées à
+distance ; les commandes indiquent le nombre et le volume en octets restant
+`pending`.
+
+```bash
+cd ~/libtak/backend
+./.venv/bin/python manage.py sync_offsite_backups
+```
+
 ## 5. Dépannage
 
 ```bash

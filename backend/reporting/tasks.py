@@ -13,7 +13,17 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from sales.models import Sale, SaleItem
 from .models import ReportSettings, ReportLog
-from .backup_utils import encryption_key_from_env
+from .backup_utils import (
+    decrypt_archive,
+    encryption_key_from_env,
+    validate_zip_archive,
+)
+from .offsite_s3 import (
+    remove_s3_marker,
+    safe_s3_error,
+    secure_backup_directory,
+    sync_encrypted_backups_to_s3,
+)
 from core.models import AppSettings
 
 
@@ -929,8 +939,10 @@ def daily_database_backup():
     ``BACKUP_ENCRYPTION_KEY`` must be a URL-safe base64 encoded 32-byte key.
     The task fails closed when the key is missing or invalid. Archives use a
     streaming AES-256-GCM envelope and are retained for 30 days by default.
-    ``BACKUP_OFFSITE_DIR`` optionally receives an atomic copy of the encrypted
-    archive; failure of that secondary mount never removes the local archive.
+    ``BACKUP_OFFSITE_DIR`` optionally receives an atomic filesystem copy.
+    ``BACKUP_S3_BUCKET`` enables a verified S3-compatible copy with durable
+    retry of every retained local archive. A remote failure never removes a
+    pending local archive.
     """
     import hashlib
     import json
@@ -945,15 +957,14 @@ def daily_database_backup():
 
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     now = timezone.localtime()
-    backup_dir = Path(
-        os.environ.get('BACKUP_DIR')
-        or os.environ.get('LIBTAK_BACKUP_DIR')
-        or (Path(settings.BASE_DIR).parent / '.libtak-secure-backups')
-    ).expanduser().resolve()
+    backup_dir = secure_backup_directory()
     output_path = None
     temporary_output = None
     backup_finalized = False
-    offsite_error = ''
+    offsite_errors = []
+    offsite_success = False
+    s3_enabled = bool(os.environ.get('BACKUP_S3_BUCKET', '').strip())
+    s3_confirmed = frozenset()
 
     try:
         def file_sha256(path):
@@ -962,6 +973,46 @@ def daily_database_backup():
                 while chunk := stream.read(1024 * 1024):
                     digest.update(chunk)
             return digest.hexdigest()
+
+        def fsync_directory(path):
+            if os.name == 'nt':
+                return
+            flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+            descriptor = os.open(path, flags)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
+        retention_days = max(
+            1, min(3650, int(os.environ.get('BACKUP_RETENTION_DAYS', '30'))),
+        )
+        cutoff = now - timedelta(days=retention_days)
+
+        def expired_local_archives(excluded=None):
+            expired = set()
+            for candidate in backup_dir.glob('libtak_backup_*.ltbk'):
+                try:
+                    if (
+                        candidate.resolve().parent != backup_dir
+                        or candidate == excluded
+                    ):
+                        continue
+                    modified = datetime.fromtimestamp(
+                        candidate.stat().st_mtime, tz=now.tzinfo,
+                    )
+                except FileNotFoundError:
+                    continue
+                if modified < cutoff:
+                    expired.add(candidate)
+            return expired
+
+        def purge_expired_local(confirmed, excluded=None):
+            for candidate in expired_local_archives(excluded):
+                if s3_enabled and candidate not in confirmed:
+                    continue
+                candidate.unlink(missing_ok=True)
+                remove_s3_marker(candidate)
 
         def archive_file(archive, path, arcname):
             """Write and hash exactly the same byte stream.
@@ -995,6 +1046,58 @@ def daily_database_backup():
 
         backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(backup_dir, 0o700)
+
+        # Retry and prune already-confirmed remote copies before allocating a
+        # new archive. This lets the system recover automatically when a long
+        # S3 outage had filled the local backup volume.
+        if s3_enabled:
+            try:
+                preflight_expired = expired_local_archives()
+                preflight_result = sync_encrypted_backups_to_s3(
+                    backup_dir,
+                    force_body_verification=preflight_expired,
+                )
+                s3_confirmed = preflight_result.confirmed
+                purge_expired_local(s3_confirmed)
+                if preflight_result.errors:
+                    preflight_error = (
+                        's3 preflight: ' + ', '.join(preflight_result.errors)
+                    )
+                    offsite_errors.append(preflight_error)
+                    logger.warning(
+                        'Encrypted S3 backup preflight was incomplete; '
+                        'unconfirmed local archives retained: %s',
+                        preflight_error,
+                    )
+            except Exception as exc:
+                preflight_error = f's3 preflight: {safe_s3_error(exc)}'
+                offsite_errors.append(preflight_error)
+                logger.warning(
+                    'Encrypted S3 backup preflight failed; local archives '
+                    'retained: %s',
+                    preflight_error,
+                )
+
+        minimum_free_bytes = max(
+            0,
+            min(
+                1024**5,
+                int(os.environ.get('BACKUP_MIN_FREE_BYTES', str(256 * 1024**2))),
+            ),
+        )
+        storage_locations = {
+            backup_dir,
+            Path(tempfile.gettempdir()).expanduser().resolve(),
+        }
+        for storage_location in storage_locations:
+            available = shutil.disk_usage(storage_location).free
+            if available < minimum_free_bytes:
+                raise OSError(
+                    'Insufficient free space for a safe backup: '
+                    f'{available} bytes available, '
+                    f'{minimum_free_bytes} bytes reserved.'
+                )
+
         timestamp = now.strftime('%Y-%m-%d_%H-%M-%S_%f')
         unique_suffix = secrets.token_hex(8)
         output_path = backup_dir / (
@@ -1067,22 +1170,44 @@ def daily_database_backup():
                     target.write(encryptor.update(chunk))
                 target.write(encryptor.finalize())
                 target.write(encryptor.tag)
+                target.flush()
+                os.fsync(target.fileno())
             os.chmod(temporary_output, 0o600)
+            verified_archive = temp_dir / 'verified-backup.zip'
+            decrypt_archive(temporary_output, verified_archive)
+            validate_zip_archive(verified_archive)
             os.replace(temporary_output, output_path)
+            fsync_directory(backup_dir)
             backup_finalized = True
 
-        retention_days = max(
-            1, min(3650, int(os.environ.get('BACKUP_RETENTION_DAYS', '30'))),
-        )
-        cutoff = now - timedelta(days=retention_days)
-        for candidate in backup_dir.glob('libtak_backup_*.ltbk'):
-            if candidate.resolve().parent != backup_dir or candidate == output_path:
-                continue
-            modified = datetime.fromtimestamp(
-                candidate.stat().st_mtime, tz=now.tzinfo,
-            )
-            if modified < cutoff:
-                candidate.unlink()
+        if s3_enabled:
+            try:
+                verify_before_purge = expired_local_archives(output_path)
+                s3_result = sync_encrypted_backups_to_s3(
+                    backup_dir,
+                    force_body_verification=verify_before_purge,
+                )
+                s3_confirmed = s3_result.confirmed
+                if output_path in s3_confirmed:
+                    offsite_success = True
+                if s3_result.errors:
+                    s3_error = 's3: ' + ', '.join(s3_result.errors)
+                    offsite_errors.append(s3_error)
+                    logger.warning(
+                        'Encrypted S3 backup synchronization was incomplete; '
+                        'pending local archives retained: %s',
+                        s3_error,
+                    )
+            except Exception as exc:
+                s3_error = f's3: {safe_s3_error(exc)}'
+                offsite_errors.append(s3_error)
+                logger.warning(
+                    'Encrypted S3 backup synchronization failed; pending local '
+                    'archives retained: %s',
+                    s3_error,
+                )
+
+        purge_expired_local(s3_confirmed, output_path)
 
         offsite_dir_value = os.environ.get('BACKUP_OFFSITE_DIR', '').strip()
         if offsite_dir_value:
@@ -1107,24 +1232,34 @@ def daily_database_backup():
                 if file_sha256(offsite_temporary) != file_sha256(output_path):
                     raise OSError('Off-site backup checksum mismatch.')
                 os.replace(offsite_temporary, offsite_path)
+                fsync_directory(offsite_dir)
+                offsite_success = True
 
                 for candidate in offsite_dir.glob('libtak_backup_*.ltbk'):
-                    if candidate.resolve().parent != offsite_dir or candidate == offsite_path:
+                    try:
+                        if (
+                            candidate.resolve().parent != offsite_dir
+                            or candidate == offsite_path
+                        ):
+                            continue
+                        modified = datetime.fromtimestamp(
+                            candidate.stat().st_mtime, tz=now.tzinfo,
+                        )
+                    except FileNotFoundError:
                         continue
-                    modified = datetime.fromtimestamp(
-                        candidate.stat().st_mtime, tz=now.tzinfo,
-                    )
                     if modified < cutoff:
-                        candidate.unlink()
+                        candidate.unlink(missing_ok=True)
             except Exception as exc:
                 if offsite_temporary and offsite_temporary.exists():
                     offsite_temporary.unlink()
-                offsite_error = f'{type(exc).__name__}: {exc}'
+                directory_error = f'directory: {type(exc).__name__}: {exc}'
+                offsite_errors.append(directory_error)
                 logger.warning(
                     'Encrypted off-site backup copy failed; local archive retained: %s',
-                    offsite_error,
+                    directory_error,
                 )
 
+        offsite_error = '; '.join(offsite_errors)
         ReportLog.objects.create(
             report_type=ReportLog.ReportType.BACKUP,
             period_start=now.date(),
@@ -1134,9 +1269,9 @@ def daily_database_backup():
             total_profit=0,
             items_sold=[],
             recipients=(
-                'encrypted-local-storage'
-                if not offsite_dir_value or offsite_error
-                else 'encrypted-local-and-offsite-storage'
+                'encrypted-local-and-offsite-storage'
+                if offsite_success
+                else 'encrypted-local-storage'
             ),
             success=True,
             error_message=offsite_error,

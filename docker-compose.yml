@@ -2,9 +2,6 @@ x-app-environment: &app-environment
   DEBUG: "False"
   SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a long random value}
   JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY to a distinct random value}
-  BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY to a URL-safe base64 encoded 32-byte key}
-  BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
-  BACKUP_OFFSITE_DIR: ${BACKUP_OFFSITE_DIR:-/home/libtak/.libtak/offsite}
   ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
   SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
@@ -20,6 +17,20 @@ x-app-environment: &app-environment
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/2
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/3
   IS_CLOUD_SERVER: "False"
+
+x-worker-environment: &worker-environment
+  <<: *app-environment
+  BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY to a URL-safe base64 encoded 32-byte key}
+  BACKUP_MIN_FREE_BYTES: ${BACKUP_MIN_FREE_BYTES:-268435456}
+  BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+  BACKUP_OFFSITE_DIR: ${BACKUP_OFFSITE_DIR:-/home/libtak/.libtak/offsite}
+  BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+  BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-libtak/backups}
+  BACKUP_S3_ENDPOINT_URL: ${BACKUP_S3_ENDPOINT_URL:-}
+  BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+  BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+  BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+  BACKUP_S3_SESSION_TOKEN: ${BACKUP_S3_SESSION_TOKEN:-}
 
 x-app-service: &app-service
   build: ./backend
@@ -40,8 +51,6 @@ x-app-service: &app-service
     - app_data:/app/data
     - media_data:/app/media
     - static_data:/app/staticfiles
-    - backup_data:/home/libtak/.libtak/backups
-    - backup_offsite_data:/home/libtak/.libtak/offsite
   networks:
     - app
     - data
@@ -109,6 +118,13 @@ services:
     <<: *app-service
     entrypoint: []
     command: ["celery", "-A", "config", "worker", "-l", "info"]
+    environment: *worker-environment
+    volumes:
+      - app_data:/app/data
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+      - backup_data:/home/libtak/.libtak/backups
+      - backup_offsite_data:/home/libtak/.libtak/offsite
     depends_on:
       db:
         condition: service_healthy

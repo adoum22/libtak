@@ -208,6 +208,7 @@ class EncryptedBackupTest(TestCase):
             ), patch.dict(os.environ, {
                 'BACKUP_DIR': str(backup_dir),
                 'BACKUP_ENCRYPTION_KEY': key,
+                'BACKUP_S3_BUCKET': '',
             }), patch('reporting.tasks.ReportLog.objects.create'):
                 result = str(daily_database_backup())
 
@@ -272,6 +273,7 @@ class EncryptedBackupTest(TestCase):
                 'BACKUP_DIR': str(backup_dir),
                 'BACKUP_OFFSITE_DIR': '',
                 'BACKUP_ENCRYPTION_KEY': key,
+                'BACKUP_S3_BUCKET': '',
             }), patch(
                 'reporting.tasks.ReportLog.objects.create'
             ), patch('pathlib.Path.open', new=mutate_before_media_read):

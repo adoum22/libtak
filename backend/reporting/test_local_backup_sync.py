@@ -6,6 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from reporting.models import ReportLog
+from reporting.offsite_s3 import OffsiteS3SyncResult
 
 
 class LocalBackupSyncCommandTest(TestCase):
@@ -28,12 +29,21 @@ class LocalBackupSyncCommandTest(TestCase):
         ) as backup, patch(
             'reporting.management.commands.local_backup_sync.call_command',
         ) as scheduler, patch(
+            'reporting.management.commands.local_backup_sync.'
+            'sync_encrypted_backups_to_s3',
+            return_value=OffsiteS3SyncResult(
+                enabled=True,
+                archives=2,
+                verified=2,
+            ),
+        ) as offsite_sync, patch(
             'core.sync_service.sync_service.push_to_cloud',
             return_value={'status': 'success'},
         ):
             call_command('local_backup_sync')
 
         backup.assert_not_called()
+        offsite_sync.assert_called_once()
         scheduler.assert_called_once_with('send_scheduled_reports', '--skip-backup')
 
     def test_backup_failure_does_not_prevent_scheduler_or_offline_sync_result(self):

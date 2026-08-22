@@ -713,6 +713,7 @@ class ReportTransportSecurityTest(SimpleTestCase):
                 'LIBTAK_BACKUP_DIR': str(backup_dir),
                 'BACKUP_ENCRYPTION_KEY': encrypted_key,
                 'BACKUP_RETENTION_DAYS': '2',
+                'BACKUP_S3_BUCKET': '',
             }), patch('reporting.tasks.ReportLog.objects.create'):
                 result = str(daily_database_backup())
                 self.assertTrue(result.startswith('Backup created: '), result)

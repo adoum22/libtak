@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 STATIC_DEFAULTS = {
+    'BACKUP_MIN_FREE_BYTES': str(256 * 1024**2),
     'BACKUP_RETENTION_DAYS': '30',
     'DEBUG': 'False',
     'ALLOWED_HOSTS': 'localhost,127.0.0.1',

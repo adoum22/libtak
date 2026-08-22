@@ -13,6 +13,11 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from reporting.models import ReportLog
+from reporting.offsite_s3 import (
+    safe_s3_error,
+    secure_backup_directory,
+    sync_encrypted_backups_to_s3,
+)
 from reporting.tasks import daily_database_backup
 
 
@@ -28,6 +33,27 @@ class Command(BaseCommand):
         ).exists()
         if already_backed_up:
             self.stdout.write('backup: already completed today')
+            try:
+                s3_result = sync_encrypted_backups_to_s3(
+                    secure_backup_directory()
+                )
+                if s3_result.enabled:
+                    message = (
+                        f'offsite-s3: {s3_result.verified}/'
+                        f'{s3_result.archives} verified, '
+                        f'{len(s3_result.pending)} pending '
+                        f'({s3_result.pending_bytes} bytes)'
+                    )
+                    writer = (
+                        self.style.WARNING if s3_result.errors
+                        else self.style.SUCCESS
+                    )
+                    self.stdout.write(writer(message))
+            except Exception as exc:
+                self.stdout.write(self.style.WARNING(
+                    'offsite-s3: retry deferred '
+                    f'({safe_s3_error(exc)})'
+                ))
         else:
             backup_result = str(daily_database_backup())
             writer = (

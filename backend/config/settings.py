@@ -33,7 +33,7 @@ _MANAGEMENT_COMMANDS = {
     'shell', 'createsuperuser', 'collectstatic', 'check',
     'send_scheduled_reports', 'init_users', 'dbshell', 'dumpdata',
     'loaddata', 'changepassword', 'backup_database', 'restore_backup',
-    'verify_backup', 'local_backup_sync', 'spectacular',
+    'verify_backup', 'local_backup_sync', 'sync_offsite_backups', 'spectacular',
     'reconcile_fifo',
 }
 RUNNING_MANAGEMENT_COMMAND = any(arg in _MANAGEMENT_COMMANDS for arg in sys.argv)

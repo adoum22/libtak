@@ -39,6 +39,7 @@ class OffsiteEncryptedBackupTest(TestCase):
             'BACKUP_OFFSITE_DIR': str(offsite_dir),
             'BACKUP_ENCRYPTION_KEY': key,
             'BACKUP_RETENTION_DAYS': '30',
+            'BACKUP_S3_BUCKET': '',
         }
         with override_settings(
             DATABASES=database_settings,
@@ -100,6 +101,7 @@ class BackupSourceValidationTest(TestCase):
             'BACKUP_DIR': str(root / 'backups'),
             'BACKUP_OFFSITE_DIR': '',
             'BACKUP_ENCRYPTION_KEY': key,
+            'BACKUP_S3_BUCKET': '',
         }), patch(
             'reporting.tasks.ReportLog.objects.create'
         ) as report_log:
@@ -158,6 +160,7 @@ class ConcurrentEncryptedBackupTest(TestCase):
                 'BACKUP_DIR': str(backup_dir),
                 'BACKUP_OFFSITE_DIR': '',
                 'BACKUP_ENCRYPTION_KEY': key,
+                'BACKUP_S3_BUCKET': '',
             }), patch(
                 'reporting.tasks.timezone.localtime', return_value=fixed_now,
             ), patch('reporting.tasks.ReportLog.objects.create'):

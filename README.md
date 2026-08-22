@@ -88,7 +88,7 @@ systemd.
 # BOOTSTRAP_ADMIN_USERNAME and BOOTSTRAP_ADMIN_PASSWORD values.
 
 # Build and start all services
-docker-compose up --build
+docker compose up --build
 
 # After the first healthy start, remove the BOOTSTRAP_ADMIN_* values from
 # .env. Existing administrator accounts are preserved on later restarts.
@@ -97,19 +97,93 @@ docker-compose up --build
 # Run/build the frontend separately; docker-compose.yml contains backend services.
 ```
 
+Le Compose fourni applique une séparation des secrets :
+`BACKUP_ENCRYPTION_KEY` et les identifiants `BACKUP_S3_*` sont transmis
+uniquement à `celery_worker`, qui possède aussi les volumes d'archives. Le
+backend HTTP et `celery_beat` peuvent planifier le travail sans pouvoir lire la
+clé de déchiffrement ni les identifiants hors site. En Docker, lancez donc
+toujours les commandes de sauvegarde depuis ce service, avec un chemin visible
+dans son volume. Cette séparation réduit l'exposition entre conteneurs ;
+réservez néanmoins l'accès au daemon Docker aux seuls administrateurs, car il
+permet d'inspecter l'environnement du worker :
+
+Remplacez `libtak_backup_A_REMPLACER.ltbk` par le nom réel de l'archive.
+
+```bash
+docker compose exec celery_worker python manage.py backup_database
+docker compose exec celery_worker python manage.py sync_offsite_backups
+docker compose exec celery_worker python manage.py verify_backup \
+  /home/libtak/.libtak/backups/libtak_backup_A_REMPLACER.ltbk
+```
+
+La restauration doit utiliser un conteneur worker isolé, jamais `exec` dans le
+worker Celery actif. Arrêtez les trois services applicatifs, lancez la commande
+ponctuelle sans redémarrer les dépendances, puis ne relancez les services
+qu'après le message de succès :
+
+```bash
+docker compose stop backend celery_beat celery_worker
+docker compose run --rm --no-deps celery_worker python manage.py restore_backup \
+  /home/libtak/.libtak/backups/libtak_backup_A_REMPLACER.ltbk --confirm RESTORE
+docker compose up -d backend celery_worker celery_beat
+```
+
+Une commande de sauvegarde lancée avec `docker compose exec backend` échouera
+volontairement faute de secrets de sauvegarde.
+
 `BACKUP_ENCRYPTION_KEY` doit être une clé base64 URL-safe encodant exactement
 32 octets. Conservez-en une copie privée hors du serveur et hors du dépôt :
 sa perte rend les sauvegardes `.ltbk` irrécupérables. La rotation ne doit être
 faite qu'après avoir restauré ou ré-encrypté les archives encore nécessaires.
 Le nettoyage est piloté par `BACKUP_RETENTION_DAYS` (30 jours par défaut).
-Vérifiez régulièrement une archive avec `python manage.py verify_backup` et
-testez une restauration sur une base isolée.
+Le Compose exige par défaut `BACKUP_MIN_FREE_BYTES=268435456`, soit 256 Mio
+libres dans les espaces d'archives et temporaire avant de générer une nouvelle
+archive. Vérifiez régulièrement une archive avec la commande `verify_backup`
+adaptée au mode d'installation et testez une restauration sur une base isolée.
 
 `BACKUP_OFFSITE_DIR` active une copie atomique de l'archive chiffrée vers un
 second dossier monté. Docker fournit le volume distinct
-`backup_offsite_data`; pour une vraie protection hors site, remplacez ce volume
-par un montage NFS/S3-FUSE ou un volume géré et répliqué indépendamment. Une
-panne de ce montage est journalisée mais ne supprime jamais l'archive locale.
+`backup_offsite_data`, mais ce volume reste sur le même hôte Docker : il ne
+protège donc pas contre la perte de la machine. Pour une vraie copie hors site,
+utilisez le transport S3 compatible intégré (par exemple Backblaze B2) ou
+montez `BACKUP_OFFSITE_DIR` depuis une infrastructure physiquement séparée.
+Une panne de la destination est journalisée sans supprimer l'archive locale.
+
+Le transport S3 est activé uniquement lorsque `BACKUP_S3_BUCKET` est défini :
+
+```dotenv
+BACKUP_S3_BUCKET=nom-du-bucket-prive
+BACKUP_S3_PREFIX=libtak/backups
+BACKUP_S3_ENDPOINT_URL=https://endpoint-s3-fourni-par-le-prestataire
+BACKUP_S3_REGION=region-fournie-par-le-prestataire
+BACKUP_S3_ACCESS_KEY_ID=identifiant-de-cle-limitee
+BACKUP_S3_SECRET_ACCESS_KEY=secret-de-cle-limitee
+# BACKUP_S3_SESSION_TOKEN=uniquement-pour-des-identifiants-temporaires
+```
+
+Configurez un bucket privé avec Object Lock/rétention côté fournisseur et une
+clé dédiée limitée à la liste, la lecture et l'écriture, sans suppression ni
+contournement de la rétention. Aucun secret ne doit être ajouté à Git. Les
+archives non confirmées à distance restent locales et sont reprises aux
+passages suivants ; l'application ne supprime jamais d'objet distant.
+
+Avant de réserver l'espace d'une nouvelle archive, le worker tente d'abord la
+synchronisation S3 des archives existantes. Il ne purge alors que les archives
+expirées dont la copie distante vient d'être confirmée ; une archive en attente
+reste locale. Si la réserve minimale n'est toujours pas disponible, la nouvelle
+sauvegarde échoue proprement sans sacrifier les copies non confirmées. Les
+commandes de synchronisation affichent le nombre d'archives `pending` et leur
+volume total en octets pour faciliter le diagnostic de capacité.
+
+Sur une installation native, hors Docker :
+
+```bash
+python manage.py sync_offsite_backups
+python manage.py verify_backup /chemin/vers/une-archive.ltbk
+```
+
+La procédure complète pour Backblaze B2, AWS S3 et les tests de restauration
+se trouve dans [`DEPLOY.md`](DEPLOY.md#sauvegarde-réellement-hors-machine-s3-compatible).
 
 ## 🔄 Real-time Features
 

@@ -23,6 +23,7 @@ staticfiles/
 .libtak-secure-backups/
 backend/backups/
 *.ltbk
+.*.ltbk.s3-ok.json
 
 # Node.js
 node_modules/
