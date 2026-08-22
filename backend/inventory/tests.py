@@ -1053,9 +1053,58 @@ class InventoryAPITest(APITestCase):
         )
 
     def test_product_stats(self):
-        """Test endpoint stats produits"""
+        """La valorisation globale réconcilie FIFO, fallback et détail API."""
+        fallback = Product.objects.create(
+            name='Stock historique sans lot',
+            barcode='ZAKAT-FALLBACK-1',
+            purchase_price=Decimal('6.00'),
+            sale_price_ht=Decimal('10.00'),
+            stock=10,
+        )
+        partial = Product.objects.create(
+            name='Stock partiellement couvert',
+            barcode='ZAKAT-PARTIAL-1',
+            purchase_price=Decimal('6.00'),
+            sale_price_ht=Decimal('10.00'),
+            stock=5,
+        )
+        ProductCostLayer.create_layer(
+            partial, 2, unit_cost=Decimal('4.00'), note='lot 1',
+        )
+        ProductCostLayer.create_layer(
+            partial, 2, unit_cost=Decimal('5.00'), note='lot 2',
+        )
+        excess = Product.objects.create(
+            name='Lots supérieurs au stock',
+            barcode='ZAKAT-EXCESS-1',
+            purchase_price=Decimal('6.00'),
+            sale_price_ht=Decimal('10.00'),
+            stock=3,
+        )
+        ProductCostLayer.create_layer(
+            excess, 2, unit_cost=Decimal('4.00'), note='lot ancien',
+        )
+        ProductCostLayer.create_layer(
+            excess, 3, unit_cost=Decimal('5.00'), note='lot récent',
+        )
+
+        # 10*6 = 60 ; 2*4 + 2*5 + 1*6 = 24 ; 2*4 + 1*5 = 13.
+        self.assertEqual(fallback.stock_value, Decimal('60.00'))
+        self.assertEqual(partial.stock_value, Decimal('24.00'))
+        self.assertEqual(excess.stock_value, Decimal('13.00'))
+
         response = self.client.get('/api/inventory/products/stats/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(Decimal(str(response.data['stock_value'])), Decimal('97.00'))
+
+        detail_response = self.client.get('/api/inventory/products/?ordering=id')
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        rows = detail_response.data.get('results', detail_response.data)
+        detail_total = sum(
+            (Decimal(str(row['stock_value'])) for row in rows),
+            Decimal('0.00'),
+        )
+        self.assertEqual(detail_total, Decimal('97.00'))
 
     def test_import_products_from_csv_without_pandas(self):
         upload = SimpleUploadedFile(

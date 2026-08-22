@@ -106,7 +106,7 @@ export default function Suppliers() {
             closeModal();
         },
         onError: (error: unknown) => {
-            toast.error('Erreur lors de la creation : ' + getApiErrorMessage(error));
+            toast.error(t('SupplierCreateError', { message: getApiErrorMessage(error) }));
         }
     });
 
@@ -120,7 +120,7 @@ export default function Suppliers() {
             closeModal();
         },
         onError: (error: unknown) => {
-            toast.error('Erreur lors de la modification : ' + getApiErrorMessage(error));
+            toast.error(t('SupplierUpdateError', { message: getApiErrorMessage(error) }));
         }
     });
 
@@ -128,10 +128,10 @@ export default function Suppliers() {
         mutationFn: (id: number) => client.delete(`/inventory/suppliers/${id}/`),
         onSuccess: () => {
             setSupplierToDeactivate(null);
-            toast.success('Fournisseur désactivé.');
+            toast.success(t('SupplierDisabled'));
             queryClient.invalidateQueries({ queryKey: ['suppliers'] });
         },
-        onError: () => toast.error('Le fournisseur ne peut pas être désactivé.'),
+        onError: () => toast.error(t('SupplierDisableFailed')),
     });
 
     const openCreateModal = () => {
@@ -215,7 +215,7 @@ export default function Suppliers() {
         <div className="space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-2xl font-bold">Fournisseurs</h1>
+                    <h1 className="text-2xl font-bold">{t('Suppliers')}</h1>
                     <p className="text-muted text-sm mt-1">{t('Suppliers')}</p>
                 </div>
                 <button type="button" onClick={openCreateModal} className="btn-primary flex items-center gap-2">
@@ -241,9 +241,59 @@ export default function Suppliers() {
 
             {/* Suppliers Table */}
             <div className="card overflow-hidden">
-                <div className="overflow-x-auto">
+                <div className="suppliers-mobile-list" aria-live="polite">
+                    {isLoading ? (
+                        <div className="p-6 text-center text-muted" role="status">{t('Loading')}</div>
+                    ) : isError ? (
+                        <div className="network-error-state m-3" role="alert">
+                            <p>{t('SuppliersLoadFailed')}</p>
+                            <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>{t('Retry')}</button>
+                        </div>
+                    ) : suppliers.length === 0 ? (
+                        <div className="p-6 text-center text-muted">{t('NoSuppliers')}</div>
+                    ) : suppliers.map((supplier) => (
+                        <article key={supplier.id} className="mobile-data-card">
+                            <div className="flex items-start gap-3">
+                                <button
+                                    type="button"
+                                    onClick={() => supplier.image_url ? setViewingImageSupplier(supplier) : handleListUploadClick(supplier.id)}
+                                    className="w-12 h-12 bg-accent-light/20 rounded-xl flex items-center justify-center text-accent overflow-hidden shrink-0 border border-border"
+                                    aria-label={t(supplier.image_url ? 'ViewSupplierLogo' : 'AddSupplierLogo', { name: supplier.name })}
+                                >
+                                    {supplier.image_url
+                                        ? <img src={supplier.image_url} className="w-full h-full object-cover" alt="" />
+                                        : <Truck size={23} aria-hidden="true" />}
+                                </button>
+                                <div className="min-w-0 flex-1">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <h2 className="font-bold text-primary break-words">{supplier.name}</h2>
+                                        <span className={`badge shrink-0 ${supplier.active ? 'badge-success' : 'badge-warning'}`}>
+                                            {supplier.active ? t('Active') : t('Inactive')}
+                                        </span>
+                                    </div>
+                                    {supplier.contact_name && <p className="text-sm text-muted mt-1">{supplier.contact_name}</p>}
+                                </div>
+                            </div>
+                            <div className="grid gap-2 text-sm">
+                                {supplier.email && <a className="mobile-data-line" href={`mailto:${supplier.email}`}><Mail size={15} /> <span>{supplier.email}</span></a>}
+                                {supplier.phone && <a className="mobile-data-line" href={`tel:${supplier.phone}`}><Phone size={15} /> <span>{supplier.phone}</span></a>}
+                                {supplier.address && <p className="mobile-data-line"><MapPin size={15} /> <span>{supplier.address}</span></p>}
+                                <p className="mobile-data-line"><Package size={15} /> <span>{supplier.products_count} {t('Products')}</span></p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                                <button type="button" className="btn-secondary" onClick={() => openEditModal(supplier)}>
+                                    <Edit size={17} /> {t('Edit')}
+                                </button>
+                                <button type="button" className="btn-outline text-danger" onClick={() => setSupplierToDeactivate(supplier)}>
+                                    <Trash2 size={17} /> {t('Delete')}
+                                </button>
+                            </div>
+                        </article>
+                    ))}
+                </div>
+                <div className="suppliers-desktop-table overflow-x-auto">
                     <table>
-                        <caption className="sr-only">Liste des fournisseurs</caption>
+                        <caption className="sr-only">{t('SuppliersCaption')}</caption>
                         <thead>
                             <tr>
                                 <th scope="col">{t('Supplier')}</th>
@@ -257,9 +307,9 @@ export default function Suppliers() {
                         </thead>
                         <tbody>
                             {isLoading ? (
-                                <tr><td colSpan={7} className="text-center py-12 text-muted" role="status">Chargement…</td></tr>
+                                <tr><td colSpan={7} className="text-center py-12 text-muted" role="status">{t('Loading')}</td></tr>
                             ) : isError ? (
-                                <tr><td colSpan={7} className="text-center py-8"><div className="network-error-state" role="alert"><p>Les fournisseurs n’ont pas pu être chargés.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button></div></td></tr>
+                                <tr><td colSpan={7} className="text-center py-8"><div className="network-error-state" role="alert"><p>{t('SuppliersLoadFailed')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>{t('Retry')}</button></div></td></tr>
                             ) : suppliers.map((supplier) => (
                                 <tr key={supplier.id} className="group hover:bg-muted/10">
                                     <td>
@@ -275,8 +325,8 @@ export default function Suppliers() {
                                                     }
                                                 }}
                                                 className="w-12 h-12 bg-accent-light/20 rounded-lg flex items-center justify-center text-accent overflow-hidden shrink-0 border border-border hover:ring-2 hover:ring-accent transition-all relative group/img"
-                                                title={supplier.image_url ? "Voir le logo" : "Ajouter un logo"}
-                                                aria-label={supplier.image_url ? `Voir le logo de ${supplier.name}` : `Ajouter un logo à ${supplier.name}`}
+                                                title={supplier.image_url ? t('ViewLogo') : t('AddLogo')}
+                                                aria-label={t(supplier.image_url ? 'ViewSupplierLogo' : 'AddSupplierLogo', { name: supplier.name })}
                                             >
                                                 {supplier.image_url ? (
                                                     <>
@@ -345,7 +395,7 @@ export default function Suppliers() {
                                     </td>
                                     <td className="text-center">
                                         <span className={`badge ${supplier.active ? 'badge-success' : 'badge-warning'}`}>
-                                            {supplier.active ? 'Actif' : 'Inactif'}
+                                            {supplier.active ? t('Active') : t('Inactive')}
                                         </span>
                                     </td>
                                     <td>
@@ -354,8 +404,8 @@ export default function Suppliers() {
                                                 type="button"
                                                 onClick={() => openEditModal(supplier)}
                                                 className="btn-ghost p-2 text-accent hover:bg-accent-light"
-                                                title="Modifier le fournisseur"
-                                                aria-label={`Modifier ${supplier.name}`}
+                                                title={t('EditSupplier')}
+                                                aria-label={t('EditSupplierNamed', { name: supplier.name })}
                                             >
                                                 <Edit size={18} />
                                             </button>
@@ -363,8 +413,8 @@ export default function Suppliers() {
                                                 type="button"
                                                 onClick={() => setSupplierToDeactivate(supplier)}
                                                 className="btn-ghost p-2 text-danger hover:bg-danger-light"
-                                                title="Désactiver"
-                                                aria-label={`Désactiver ${supplier.name}`}
+                                                title={t('Disable')}
+                                                aria-label={t('DisableSupplierNamed', { name: supplier.name })}
                                             >
                                                 <Trash2 size={18} />
                                             </button>
@@ -377,10 +427,10 @@ export default function Suppliers() {
                                     <td colSpan={7} className="text-center py-12">
                                         <div className="flex flex-col items-center justify-center text-muted">
                                             <Truck size={48} className="mb-4 opacity-20" />
-                                            <p className="text-lg font-medium">Aucun fournisseur trouvé</p>
-                                            <p className="text-sm">{search ? 'Essayez une autre recherche.' : 'Commencez par ajouter votre premier fournisseur.'}</p>
+                                            <p className="text-lg font-medium">{t('NoSuppliers')}</p>
+                                            <p className="text-sm">{search ? t('TryAnotherSearch') : t('StartWithFirstSupplier')}</p>
                                             {!search && <button type="button" onClick={openCreateModal} className="btn-outline mt-4 btn-sm">
-                                                Ajouter maintenant
+                                                {t('AddNow')}
                                             </button>}
                                         </div>
                                     </td>
@@ -402,13 +452,13 @@ export default function Suppliers() {
                         <div className="p-6 border-b flex items-center justify-between bg-secondary z-10">
                             <div>
                                 <h2 id="supplier-modal-title" className="text-xl font-bold text-primary">
-                                    {editingSupplier ? 'Modifier le fournisseur' : 'Nouveau fournisseur'}
+                                    {editingSupplier ? t('EditSupplier') : t('NewSupplier')}
                                 </h2>
                                 <p className="text-sm text-muted">
-                                    {editingSupplier ? 'Mettre à jour les informations du partenaire' : 'Ajouter un nouveau partenaire commercial'}
+                                    {editingSupplier ? t('UpdatePartnerInfo') : t('AddBusinessPartner')}
                                 </p>
                             </div>
-                            <button type="button" onClick={closeModal} className="btn-ghost p-2 -mr-2 text-muted hover:text-danger transition-colors" aria-label="Fermer la fenêtre">
+                            <button type="button" onClick={closeModal} className="btn-ghost p-2 -mr-2 text-muted hover:text-danger transition-colors" aria-label={t('CloseWindow')}>
                                 <X size={24} />
                             </button>
                         </div>
@@ -425,11 +475,11 @@ export default function Suppliers() {
                                     >
                                         {imagePreview ? (
                                             <>
-                                                <img src={imagePreview} className="w-full h-full object-cover" alt="Aperçu du logo" />
+                                                <img src={imagePreview} className="w-full h-full object-cover" alt={t('LogoPreview')} />
                                                 <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                                                     <span className="text-white font-medium flex items-center gap-2">
                                                         <Edit size={20} />
-                                                        Modifier
+                                                        {t('Edit')}
                                                     </span>
                                                 </div>
                                             </>
@@ -438,8 +488,8 @@ export default function Suppliers() {
                                                 <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-3 shadow-sm">
                                                     <ImageIcon size={32} />
                                                 </div>
-                                                <p className="font-medium">Logo / Photo</p>
-                                                <p className="text-xs mt-1">Cliquez pour uploader</p>
+                                                <p className="font-medium">{t('LogoOrPhoto')}</p>
+                                                <p className="text-xs mt-1">{t('ClickToUpload')}</p>
                                             </div>
                                         )}
                                     </button>
@@ -449,24 +499,24 @@ export default function Suppliers() {
                                             accept="image/*"
                                             className="hidden"
                                             onChange={handleImageChange}
-                                            aria-label="Choisir un logo fournisseur"
+                                            aria-label={t('ChooseSupplierLogo')}
                                         />
                                     <p className="text-xs text-muted text-center mt-2">
-                                        JPG, PNG ou WEBP max 5Mo
+                                        {t('ImageFormatHint')}
                                     </p>
                                 </div>
 
                                 {/* Form Fields */}
                                 <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6 content-start">
                                     <div className="col-span-1 md:col-span-2">
-                                        <label htmlFor="supplier-name" className="block text-sm font-bold mb-2">Nom de l'entreprise *</label>
+                                        <label htmlFor="supplier-name" className="block text-sm font-bold mb-2">{t('CompanyName')} *</label>
                                         <div className="relative">
                                             <Truck className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
                                                 id="supplier-name"
                                                 type="text"
                                                 className="input-lg pl-12 font-bold"
-                                                placeholder="Ex: Papeterie Générale SARL"
+                                                placeholder={t('CompanyNameExample')}
                                                 value={formData.name}
                                                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                                 required
@@ -475,12 +525,12 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label htmlFor="supplier-contact" className="block text-sm font-medium mb-2">Interlocuteur</label>
+                                        <label htmlFor="supplier-contact" className="block text-sm font-medium mb-2">{t('ContactPerson')}</label>
                                         <div className="relative">
                                             <input
                                                 id="supplier-contact"
                                                 type="text"
-                                                placeholder="Nom du contact"
+                                                placeholder={t('ContactName')}
                                                 value={formData.contact_name}
                                                 onChange={(e) => setFormData({ ...formData, contact_name: e.target.value })}
                                             />
@@ -488,20 +538,20 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label htmlFor="supplier-status" className="block text-sm font-medium mb-2">Statut</label>
+                                        <label htmlFor="supplier-status" className="block text-sm font-medium mb-2">{t('Status')}</label>
                                         <select
                                             id="supplier-status"
                                             value={formData.active ? 'true' : 'false'}
                                             onChange={(e) => setFormData({ ...formData, active: e.target.value === 'true' })}
                                             className="w-full p-2.5 bg-secondary border border-border rounded-lg"
                                         >
-                                            <option value="true">Actif</option>
-                                            <option value="false">Inactif</option>
+                                            <option value="true">{t('Active')}</option>
+                                            <option value="false">{t('Inactive')}</option>
                                         </select>
                                     </div>
 
                                     <div>
-                                        <label htmlFor="supplier-email" className="block text-sm font-medium mb-2">Email</label>
+                                        <label htmlFor="supplier-email" className="block text-sm font-medium mb-2">{t('Email')}</label>
                                         <div className="relative">
                                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
@@ -516,7 +566,7 @@ export default function Suppliers() {
                                     </div>
 
                                     <div>
-                                        <label htmlFor="supplier-phone" className="block text-sm font-medium mb-2">Téléphone</label>
+                                        <label htmlFor="supplier-phone" className="block text-sm font-medium mb-2">{t('Phone')}</label>
                                         <div className="relative">
                                             <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                             <input
@@ -531,14 +581,14 @@ export default function Suppliers() {
                                     </div>
 
                                     <div className="col-span-1 md:col-span-2">
-                                        <label htmlFor="supplier-address" className="block text-sm font-medium mb-2">Adresse</label>
+                                        <label htmlFor="supplier-address" className="block text-sm font-medium mb-2">{t('Address')}</label>
                                         <div className="relative">
                                             <MapPin className="absolute left-3 top-3 text-muted" size={18} />
                                             <textarea
                                                 id="supplier-address"
                                                 rows={2}
                                                 className="pl-12 resize-none"
-                                                placeholder="Adresse complète..."
+                                                placeholder={t('FullAddressPlaceholder')}
                                                 value={formData.address}
                                                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                                             />
@@ -546,12 +596,12 @@ export default function Suppliers() {
                                     </div>
 
                                     <div className="col-span-1 md:col-span-2">
-                                        <label htmlFor="supplier-notes" className="block text-sm font-medium mb-2">Notes internes</label>
+                                        <label htmlFor="supplier-notes" className="block text-sm font-medium mb-2">{t('InternalNotes')}</label>
                                         <textarea
                                             id="supplier-notes"
                                             rows={3}
                                             className="resize-none"
-                                            placeholder="Conditions de livraison, délais, etc..."
+                                            placeholder={t('SupplierNotesPlaceholder')}
                                             value={formData.notes}
                                             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                                         />
@@ -561,11 +611,11 @@ export default function Suppliers() {
 
                             <div className="flex justify-end gap-3 pt-6 border-t">
                                 <button type="button" onClick={closeModal} className="btn-secondary px-6">
-                                    Annuler
+                                    {t('Cancel')}
                                 </button>
                                 <button type="submit" className="btn-primary flex items-center gap-2 px-8" disabled={createMutation.isPending || updateMutation.isPending}>
                                     <Save size={20} />
-                                    <span>{editingSupplier ? 'Enregistrer' : 'Créer le fournisseur'}</span>
+                                    <span>{editingSupplier ? t('Save') : t('CreateSupplier')}</span>
                                 </button>
                             </div>
                         </form>
@@ -588,7 +638,7 @@ export default function Suppliers() {
                                 type="button"
                                 onClick={() => setViewingImageSupplier(null)}
                                 className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white p-2 rounded-full backdrop-blur-md transition-colors"
-                                aria-label="Fermer l’aperçu"
+                                aria-label={t('ClosePreview')}
                             >
                                 <X size={20} />
                             </button>
@@ -596,7 +646,7 @@ export default function Suppliers() {
                         <div className="p-6 flex items-center justify-between bg-secondary border-t border-border">
                             <div>
                                 <h3 id="supplier-image-title" className="font-bold text-lg text-primary">{viewingImageSupplier.name}</h3>
-                                <p className="text-sm text-muted">Aperçu du logo actuel</p>
+                                <p className="text-sm text-muted">{t('CurrentLogoPreview')}</p>
                             </div>
                             <button
                                 type="button"
@@ -607,7 +657,7 @@ export default function Suppliers() {
                                 className="btn-primary flex items-center gap-2"
                             >
                                 <Edit size={18} />
-                                <span>Changer le logo</span>
+                                <span>{t('ChangeLogo')}</span>
                             </button>
                         </div>
                     </div>
@@ -625,11 +675,11 @@ export default function Suppliers() {
 
             <ConfirmDialog
                 open={Boolean(supplierToDeactivate)}
-                title="Désactiver ce fournisseur ?"
+                title={t('DisableSupplierTitle')}
                 description={supplierToDeactivate
-                    ? `${supplierToDeactivate.name} restera dans l’historique, mais ne sera plus proposé pour les nouvelles opérations.`
+                    ? t('DisableSupplierDescription', { name: supplierToDeactivate.name })
                     : ''}
-                confirmLabel="Désactiver"
+                confirmLabel={t('Disable')}
                 busy={deleteMutation.isPending}
                 onCancel={() => setSupplierToDeactivate(null)}
                 onConfirm={() => {

@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { isChunkLoadError, reloadOnceForNewVersion } from '../utils/reloadOnChunkError';
 import { clearAuthSession } from '../api/client';
+import i18n from '../i18n';
 
 interface Props {
     children?: ReactNode;
@@ -37,12 +38,12 @@ class ErrorBoundary extends Component<Props, State> {
             return (
                 <main className="min-h-screen flex items-center justify-center bg-primary p-4">
                     <div className="bg-secondary p-8 rounded-lg shadow-xl max-w-2xl w-full" role="alert" aria-labelledby="fatal-error-title">
-                        <h1 id="fatal-error-title" className="text-2xl font-bold text-danger mb-4">Une erreur est survenue</h1>
-                        <p className="mb-4 text-secondary">L'application a rencontré un problème inattendu. Vous pouvez recharger la page ou réinitialiser votre session.</p>
+                        <h1 id="fatal-error-title" className="text-2xl font-bold text-danger mb-4">{i18n.t('FatalErrorTitle')}</h1>
+                        <p className="mb-4 text-secondary">{i18n.t('FatalErrorMessage')}</p>
 
                         {import.meta.env.DEV && (
                             <details className="bg-tertiary p-4 rounded overflow-auto max-h-60 mb-6 border">
-                                <summary className="font-semibold cursor-pointer">Détails techniques</summary>
+                                <summary className="font-semibold cursor-pointer">{i18n.t('TechnicalDetails')}</summary>
                                 <p className="font-mono text-sm text-danger font-bold mt-2">
                                     {this.state.error?.toString()}
                                 </p>
@@ -58,7 +59,7 @@ class ErrorBoundary extends Component<Props, State> {
                             onClick={() => window.location.reload()}
                             className="btn-primary"
                         >
-                            Recharger l'application
+                            {i18n.t('ReloadApplication')}
                         </button>
                         <button
                             type="button"
@@ -68,7 +69,7 @@ class ErrorBoundary extends Component<Props, State> {
                             }}
                             className="btn-secondary"
                         >
-                            Réinitialiser la session
+                            {i18n.t('ResetSession')}
                         </button>
                         </div>
                     </div>

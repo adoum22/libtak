@@ -21,13 +21,17 @@ echo "============================================"
 echo -e "${NC}"
 
 # Activer l'environnement virtuel si présent
-if [ -d "venv" ]; then
+if [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+elif [ -f "venv/bin/activate" ]; then
     source venv/bin/activate
 fi
 
-# Exécuter le script de synchronisation
-python3 sync_to_cloud.py
+# Sauvegarde quotidienne + rapports dus + synchronisation best-effort.
+python3 manage.py local_backup_sync
+EXIT_CODE=$?
 
 echo ""
 echo -e "${GREEN}Synchronisation terminée.${NC}"
 echo ""
+exit $EXIT_CODE

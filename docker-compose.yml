@@ -2,6 +2,9 @@ x-app-environment: &app-environment
   DEBUG: "False"
   SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY to a long random value}
   JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY to a distinct random value}
+  BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?Set BACKUP_ENCRYPTION_KEY to a URL-safe base64 encoded 32-byte key}
+  BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+  BACKUP_OFFSITE_DIR: ${BACKUP_OFFSITE_DIR:-/home/libtak/.libtak/offsite}
   ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
   SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-False}
@@ -30,12 +33,15 @@ x-app-service: &app-service
   cap_drop:
     - ALL
   tmpfs:
-    - /tmp:size=128m,noexec,nosuid
+    # Backup/verify/restore stage decrypted data here. tmpfs keeps it ephemeral;
+    # installations with more than ~1 GiB of DB + media must raise this value.
+    - /tmp:size=${LIBTAK_TMPFS_SIZE:-2g},noexec,nosuid,nodev
   volumes:
     - app_data:/app/data
     - media_data:/app/media
     - static_data:/app/staticfiles
     - backup_data:/home/libtak/.libtak/backups
+    - backup_offsite_data:/home/libtak/.libtak/offsite
   networks:
     - app
     - data
@@ -131,6 +137,7 @@ networks:
 volumes:
   app_data:
   backup_data:
+  backup_offsite_data:
   media_data:
   postgres_data:
   redis_data:

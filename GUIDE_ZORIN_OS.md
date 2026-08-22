@@ -1,139 +1,74 @@
-# 📋 Guide d'Installation LibTak - Zorin OS 17.3
+# Installation locale LibTak — Zorin OS 17
 
-## 🎯 Pour le PC de la Librairie
+Ce mode conserve l’application dans votre dossier personnel et la démarre dans
+un terminal. Pour un démarrage automatique au boot, utilisez plutôt
+[`deployment/GUIDE_INSTALLATION.md`](deployment/GUIDE_INSTALLATION.md).
 
-Ce guide vous permet d'installer LibTak sur le PC de la librairie en quelques commandes simples.
+## 1. Préparer le dossier
 
----
-
-## 📥 ÉTAPE 1 : Copier l'application
-
-Sur votre PC de développement (Windows), copiez le dossier complet de l'application sur une clé USB.
-
-**Dossier à copier :** `D:\Application Librairie\App`
-
-Sur le PC Zorin OS, copiez ce dossier dans votre répertoire home :
-```
-/home/[votre-nom]/libtak
-```
-
----
-
-## 🚀 ÉTAPE 2 : Installation (une seule fois)
-
-Ouvrez un **Terminal** (clic droit sur le bureau → "Ouvrir un terminal ici" ou cherchez "Terminal" dans le menu).
-
-Exécutez ces commandes **une par une** :
+Copiez le projet complet vers un dossier appartenant à votre compte, par
+exemple `~/libtak`. Installez au préalable Node.js officiel 20.19+ ou 22.12+.
 
 ```bash
-# Aller dans le dossier de l'application
 cd ~/libtak
-
-# Rendre le script d'installation exécutable
-chmod +x install.sh
-
-# Lancer l'installation
+node --version
+npm --version
+chmod 700 install.sh
 ./install.sh
 ```
 
-⏳ Attendez que l'installation se termine (2-5 minutes).
+Le script peut installer les paquets système via sudo. S’ils sont déjà
+présents, utilisez `./install.sh --skip-system-packages`.
 
----
+L’installation :
 
-## 👤 ÉTAPE 3 : Créer le compte vendeur
+- crée un virtualenv Python et installe les dépendances ;
+- crée un fichier privé `backend/.env` sans écraser les valeurs existantes ;
+- demande le premier administrateur une seule fois ;
+- exécute `npm ci` et construit le frontend ;
+- crée puis vérifie une sauvegarde chiffrée initiale.
 
-Toujours dans le terminal :
-
-```bash
-cd ~/libtak/backend
-source venv/bin/activate
-python3 manage.py createsuperuser
-```
-
-Créez le compte :
-- **Nom d'utilisateur :** `vendeur`
-- **Email :** (appuyez sur Entrée pour passer)
-- **Mot de passe :** votre choix
-
----
-
-## ⏰ ÉTAPE 4 : Configurer la synchronisation automatique (30 min)
-
-```bash
-cd ~/libtak
-chmod +x setup_auto_sync.sh
-./setup_auto_sync.sh
-```
-
-✅ Maintenant la synchronisation se fera automatiquement toutes les 30 minutes.
-
----
-
-## 🖥️ ÉTAPE 5 : Démarrer l'application chaque jour
-
-### Option A : Via le Terminal
+## 2. Démarrer l’application
 
 ```bash
 cd ~/libtak
 ./start_server.sh
 ```
 
-Gardez ce terminal ouvert toute la journée.
+Gardez ce terminal ouvert. Le script démarre :
 
-### Option B : Créer un raccourci sur le bureau
+- l’API Daphne/ASGI sur `http://127.0.0.1:8000/api/` ;
+- le frontend construit sur **http://127.0.0.1:5173** ;
+- le contrôle des rapports et de la sauvegarde planifiée toutes les 10 minutes ;
+- la synchronisation cloud toutes les 30 minutes lorsqu’elle est configurée.
 
-1. Clic droit sur le bureau → **Créer un lanceur**
-2. Nom : `LibTak`
-3. Commande : `/home/[votre-nom]/libtak/start_server.sh`
-4. Cochez "Exécuter dans un terminal"
-5. Sauvegardez
+Utilisez toujours **http://127.0.0.1:5173** pour le POS.
 
----
+## 3. Synchronisation cloud optionnelle
 
-## 🌐 ÉTAPE 6 : Utiliser l'application
+Ajoutez `CLOUD_API_URL` HTTPS et `SYNC_TOKEN` dans le fichier privé
+`backend/.env`, puis redémarrez `start_server.sh`. Aucun secret ne doit être
+placé dans ce guide ou dans Git.
 
-1. Ouvrez **Firefox** ou **Chrome**
-2. Allez sur : **http://localhost:8000**
-3. Connectez-vous avec le compte vendeur
+## 4. Sauvegardes et journaux
 
----
+- archives : `~/libtak/.libtak-data/backups/` ;
+- rapports : `~/libtak/.libtak-data/logs/reports.log` ;
+- synchronisation : `~/libtak/.libtak-data/logs/sync.log`.
 
-## 📝 Résumé des commandes quotidiennes
+Conservez `BACKUP_ENCRYPTION_KEY` dans un coffre séparé. Vérifiez régulièrement
+une archive avec `python manage.py verify_backup` depuis le virtualenv.
+Pour une seconde copie chiffrée, montez un disque ou partage distinct puis
+définissez son chemin absolu dans `BACKUP_OFFSITE_DIR`. Une panne de cette copie
+secondaire est journalisée sans supprimer l’archive locale.
 
-| Action | Commande |
-|--------|----------|
-| Démarrer l'application | `cd ~/libtak && ./start_server.sh` |
-| Sync manuelle | `cd ~/libtak && ./sync_to_cloud.sh` |
-| Voir les logs de sync | `cat ~/libtak/sync.log` |
+## 5. Dépannage
 
----
-
-## 🛠️ Dépannage
-
-### Le serveur ne démarre pas
 ```bash
 cd ~/libtak/backend
-source venv/bin/activate
-python3 manage.py check
+./.venv/bin/python manage.py check
 ```
 
-### Erreur "Permission denied"
-```bash
-chmod +x ~/libtak/*.sh
-```
-
-### Réinstaller complètement
-```bash
-cd ~/libtak/backend
-rm -rf venv db.sqlite3
-cd ..
-./install.sh
-```
-
----
-
-## 📞 Support
-
-En cas de problème, contactez l'administrateur.
-
-Le serveur cloud est accessible sur : https://libtak.vercel.app
+Si votre installation réutilise `backend/venv`, remplacez `.venv` par `venv`.
+Ne supprimez jamais `db.sqlite3`, `.env` ou les archives pour « réinstaller » :
+relancez `./install.sh`, qui préserve les données existantes.

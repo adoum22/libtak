@@ -1,7 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import client from '../api/client';
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import { useToast } from '../components/ToastContext';
+import PremiumChartTooltip from '../components/PremiumChartTooltip';
+import useCurrency from '../hooks/useCurrency';
 import {
     FileText,
     Calendar,
@@ -48,6 +51,8 @@ interface ReportData {
 }
 
 export default function Reports() {
+    const { t, i18n } = useTranslation();
+    const currency = useCurrency();
     const toast = useToast();
     const [reportType, setReportType] = useState<'daily' | 'weekly' | 'monthly'>('daily');
     const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -107,33 +112,55 @@ export default function Reports() {
             link.remove();
             window.URL.revokeObjectURL(url);
         } catch {
-            toast.error('Le rapport n’a pas pu être téléchargé. Réessayez.');
+            toast.error(t('ReportDownloadFailed'));
         }
     };
 
     const handleDownloadPDF = () => handleDownload();
     const handleDownloadExcel = () => handleDownload('xlsx');
 
+    const handleReportTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const tablist = event.currentTarget.closest<HTMLElement>('[role="tablist"]');
+        const tabs = tablist
+            ? Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+            : [];
+        if (!tabs.length) return;
+
+        event.preventDefault();
+        const currentIndex = Math.max(0, tabs.indexOf(event.currentTarget));
+        let nextIndex = currentIndex;
+        if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = tabs.length - 1;
+        else {
+            const visualDelta = event.key === 'ArrowRight' ? 1 : -1;
+            const delta = document.documentElement.dir === 'rtl' ? -visualDelta : visualDelta;
+            nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+        }
+        tabs[nextIndex]?.focus();
+        tabs[nextIndex]?.click();
+    };
+
     return (
         <div className="space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold">Rapports de Ventes</h1>
+                <h1 className="text-2xl font-bold">{t('SalesReports')}</h1>
                 {report && (
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
                             onClick={handleDownloadPDF}
                             className="btn-outline flex items-center gap-2 text-primary border-primary hover:bg-primary hover:text-white"
-                            title="PDF si disponible, sinon Excel automatiquement"
+                            title={t('DownloadPdfFallback')}
                         >
                             <Download size={20} />
-                            <span>Télécharger PDF</span>
+                            <span>{t('DownloadPDF')}</span>
                         </button>
                         <button
                             type="button"
                             onClick={handleDownloadExcel}
                             className="btn-outline flex items-center gap-2 text-success border-success hover:bg-success hover:text-white"
-                            title="Forcer l'export Excel"
+                            title={t('ForceExcelExport')}
                         >
                             <Download size={20} />
                             <span>Excel</span>
@@ -145,11 +172,15 @@ export default function Reports() {
             {/* Report Type Selector */}
             <div className="card p-4">
                 <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex bg-tertiary rounded-lg p-1" role="tablist" aria-label="Type de rapport">
+                    <div className="flex bg-tertiary rounded-lg p-1" role="tablist" aria-label={t('ReportType')}>
                         <button
                             type="button"
                             role="tab"
+                            id="reports-tab-daily"
                             aria-selected={reportType === 'daily'}
+                            aria-controls="reports-panel"
+                            tabIndex={reportType === 'daily' ? 0 : -1}
+                            onKeyDown={handleReportTabKeyDown}
                             onClick={() => {
                                 setReportType('daily');
                                 setSelectedDate(new Date().toISOString().split('T')[0]);
@@ -157,12 +188,16 @@ export default function Reports() {
                             className={`px-4 py-2 rounded-md transition ${reportType === 'daily' ? 'bg-accent text-white' : 'hover:bg-hover'
                                 }`}
                         >
-                            Journalier
+                            {t('Daily')}
                         </button>
                         <button
                             type="button"
                             role="tab"
+                            id="reports-tab-weekly"
                             aria-selected={reportType === 'weekly'}
+                            aria-controls="reports-panel"
+                            tabIndex={reportType === 'weekly' ? 0 : -1}
+                            onKeyDown={handleReportTabKeyDown}
                             onClick={() => {
                                 setReportType('weekly');
                                 setWeekOffset(0);
@@ -170,12 +205,16 @@ export default function Reports() {
                             className={`px-4 py-2 rounded-md transition ${reportType === 'weekly' ? 'bg-accent text-white' : 'hover:bg-hover'
                                 }`}
                         >
-                            Hebdomadaire
+                            {t('Weekly')}
                         </button>
                         <button
                             type="button"
                             role="tab"
+                            id="reports-tab-monthly"
                             aria-selected={reportType === 'monthly'}
+                            aria-controls="reports-panel"
+                            tabIndex={reportType === 'monthly' ? 0 : -1}
+                            onKeyDown={handleReportTabKeyDown}
                             onClick={() => {
                                 setReportType('monthly');
                                 setSelectedMonth({
@@ -186,7 +225,7 @@ export default function Reports() {
                             className={`px-4 py-2 rounded-md transition ${reportType === 'monthly' ? 'bg-accent text-white' : 'hover:bg-hover'
                                 }`}
                         >
-                            Mensuel
+                            {t('Monthly')}
                         </button>
                     </div>
 
@@ -201,13 +240,13 @@ export default function Reports() {
                                         setSelectedDate(date.toISOString().split('T')[0]);
                                     }}
                                     className="btn-secondary btn-icon"
-                                    title="Jour précédent"
-                                    aria-label="Jour précédent"
+                                    title={t('PreviousDay')}
+                                    aria-label={t('PreviousDay')}
                                 >
                                     <ChevronLeft size={20} />
                                 </button>
                                 <input
-                                    aria-label="Date du rapport"
+                                    aria-label={t('ReportDate')}
                                     type="date"
                                     value={selectedDate}
                                     onChange={(e) => setSelectedDate(e.target.value)}
@@ -226,8 +265,8 @@ export default function Reports() {
                                         }
                                     }}
                                     className="btn-secondary btn-icon"
-                                    title="Jour suivant"
-                                    aria-label="Jour suivant"
+                                    title={t('NextDay')}
+                                    aria-label={t('NextDay')}
                                     disabled={selectedDate >= new Date().toISOString().split('T')[0]}
                                 >
                                     <ChevronRight size={20} />
@@ -241,19 +280,19 @@ export default function Reports() {
                                     type="button"
                                     onClick={() => setWeekOffset(w => w + 1)}
                                     className="btn-secondary btn-icon"
-                                    aria-label="Semaine précédente"
+                                    aria-label={t('PreviousWeek')}
                                 >
                                     <ChevronLeft size={20} />
                                 </button>
                                 <span className="px-4">
-                                    {weekOffset === 0 ? 'Cette semaine' : `Il y a ${weekOffset} semaine(s)`}
+                                    {weekOffset === 0 ? t('ThisWeek') : t('WeeksAgo', { count: weekOffset })}
                                 </span>
                                 <button
                                     type="button"
                                     onClick={() => setWeekOffset(w => Math.max(0, w - 1))}
                                     className="btn-secondary btn-icon"
                                     disabled={weekOffset === 0}
-                                    aria-label="Semaine suivante"
+                                    aria-label={t('NextWeek')}
                                 >
                                     <ChevronRight size={20} />
                                 </button>
@@ -263,19 +302,19 @@ export default function Reports() {
                         {reportType === 'monthly' && (
                             <div className="flex items-center gap-2">
                                 <select
-                                    aria-label="Mois du rapport"
+                                    aria-label={t('ReportMonth')}
                                     value={selectedMonth.month}
                                     onChange={(e) => setSelectedMonth({ ...selectedMonth, month: parseInt(e.target.value) })}
                                     className="w-auto"
                                 >
                                     {Array.from({ length: 12 }, (_, i) => (
                                         <option key={i + 1} value={i + 1}>
-                                            {new Date(2000, i, 1).toLocaleString('fr-FR', { month: 'long' })}
+                                            {new Date(2000, i, 1).toLocaleString(i18n.language, { month: 'long' })}
                                         </option>
                                     ))}
                                 </select>
                                 <select
-                                    aria-label="Année du rapport"
+                                    aria-label={t('ReportYear')}
                                     value={selectedMonth.year}
                                     onChange={(e) => setSelectedMonth({ ...selectedMonth, year: parseInt(e.target.value) })}
                                     className="w-auto"
@@ -291,12 +330,18 @@ export default function Reports() {
                 </div>
             </div>
 
+            <div
+                id="reports-panel"
+                role="tabpanel"
+                aria-labelledby={`reports-tab-${reportType}`}
+                tabIndex={0}
+            >
             {isLoading ? (
-                <div className="text-center py-12 text-muted" role="status">Chargement…</div>
+                <div className="text-center py-12 text-muted" role="status">{t('Loading')}</div>
             ) : isError ? (
                 <div className="network-error-state" role="alert">
-                    <p className="font-semibold">Le rapport n’a pas pu être chargé.</p>
-                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                    <p className="font-semibold">{t('ReportLoadFailed')}</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>{t('Retry')}</button>
                 </div>
             ) : report ? (
                 <>
@@ -307,7 +352,7 @@ export default function Reports() {
                                 <FileText size={24} className="text-accent" />
                             </div>
                             <div>
-                                <p className="stat-label">Nombre de ventes</p>
+                                <p className="stat-label">{t('NumberOfSales')}</p>
                                 <p className="stat-value">{report.total_sales}</p>
                             </div>
                         </div>
@@ -317,8 +362,8 @@ export default function Reports() {
                                 <DollarSign size={24} className="text-success" />
                             </div>
                             <div>
-                                <p className="stat-label">Chiffre d'affaires</p>
-                                <p className="stat-value">{report.total_revenue?.toLocaleString('fr-FR')} DH</p>
+                                <p className="stat-label">{t('Turnover')}</p>
+                                <p className="stat-value">{currency.format(report.total_revenue)}</p>
                             </div>
                         </div>
 
@@ -327,8 +372,8 @@ export default function Reports() {
                                 <TrendingUp size={24} className="text-warning" />
                             </div>
                             <div>
-                                <p className="stat-label">Bénéfice net</p>
-                                <p className="stat-value text-success">{report.total_profit?.toLocaleString('fr-FR')} DH</p>
+                                <p className="stat-label">{t('NetProfit')}</p>
+                                <p className="stat-value text-success">{currency.format(report.total_profit)}</p>
                             </div>
                         </div>
 
@@ -339,10 +384,10 @@ export default function Reports() {
                                     <TrendingUp size={24} className="text-red-500 rotate-180" />
                                 </div>
                                 <div>
-                                    <p className="stat-label">Retours ({report.returns_count})</p>
-                                    <p className="stat-value text-red-500">-{report.total_returns?.toLocaleString('fr-FR')} DH</p>
+                                    <p className="stat-label">{t('ReturnsCount', { count: report.returns_count })}</p>
+                                    <p className="stat-value text-red-500">{currency.format(-Number(report.total_returns || 0))}</p>
                                     {report.gross_revenue && (
-                                        <p className="text-xs text-muted mt-1">CA brut: {report.gross_revenue.toLocaleString('fr-FR')} DH</p>
+                                        <p className="text-xs text-muted mt-1">{t('GrossRevenue', { amount: currency.format(report.gross_revenue) })}</p>
                                     )}
                                 </div>
                             </div>
@@ -352,8 +397,8 @@ export default function Reports() {
                     {/* Charts Section */}
                     {report.chart_data && report.chart_data.length > 0 && (
                         <div className="card p-6">
-                            <h2 className="text-lg font-semibold mb-6">Évolution du Chiffre d'Affaires</h2>
-                            <div className="h-[300px] w-full" role="img" aria-label="Évolution du chiffre d’affaires sur la période sélectionnée">
+                            <h2 className="text-lg font-semibold mb-6">{t('RevenueEvolution')}</h2>
+                            <div className="h-[300px] w-full" role="img" aria-label={t('RevenueEvolutionLabel')}>
                                 <ResponsiveContainer
                                     width="100%"
                                     height="100%"
@@ -371,22 +416,19 @@ export default function Reports() {
                                             dataKey="label"
                                             axisLine={false}
                                             tickLine={false}
-                                            tick={{ fill: '#6b7280', fontSize: 12 }}
+                                            tick={{ fill: 'var(--color-text-muted)', fontSize: 12 }}
                                         />
                                         <YAxis
                                             axisLine={false}
                                             tickLine={false}
-                                            tick={{ fill: '#6b7280', fontSize: 12 }}
-                                            tickFormatter={(value) => `${value} DH`}
+                                            tick={{ fill: 'var(--color-text-muted)', fontSize: 12 }}
+                                            tickFormatter={(value) => `${value} ${currency.symbol}`}
                                         />
-                                        <Tooltip
-                                            formatter={(value) => [`${value} DH`, 'Chiffre d\'Affaires']}
-                                            labelStyle={{ color: '#111827', fontWeight: 'bold' }}
-                                            contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                        />
+                                        <Tooltip content={<PremiumChartTooltip valueSuffix={` ${currency.symbol}`} />} />
                                         <Area
                                             type="monotone"
                                             dataKey="revenue"
+                                            name={t('Turnover')}
                                             stroke="#1e40af"
                                             fillOpacity={1}
                                             fill="url(#colorRevenue)"
@@ -403,7 +445,7 @@ export default function Reports() {
                         <div className="card-header">
                             <h2 className="font-semibold text-lg flex items-center gap-2">
                                 <Package size={20} />
-                                Articles vendus
+                                {t('ItemsSold')}
                             </h2>
                         </div>
                         <div className="reports-mobile-items">
@@ -413,40 +455,40 @@ export default function Reports() {
                                         <div className="mobile-detail-card-header">
                                             <div>
                                                 <h3>{item.name}</h3>
-                                                <p>{item.barcode || 'Sans code-barres'}</p>
+                                                <p>{item.barcode || t('NoBarcode')}</p>
                                             </div>
                                             <span className="badge badge-accent">x{item.quantity}</span>
                                         </div>
                                         <div className="mobile-money-grid">
                                             <div>
-                                                <span>Prix</span>
-                                                <strong>{item.unit_price?.toFixed(2) || '-'} DH</strong>
+                                                <span>{t('Price')}</span>
+                                                <strong>{item.unit_price == null ? '-' : currency.format(item.unit_price)}</strong>
                                             </div>
                                             <div>
-                                                <span>Total</span>
-                                                <strong>{item.revenue?.toFixed(2)} DH</strong>
+                                                <span>{t('Total')}</span>
+                                                <strong>{currency.format(item.revenue)}</strong>
                                             </div>
                                             <div>
-                                                <span>Marge</span>
-                                                <strong className="text-success">{item.profit?.toFixed(2)} DH</strong>
+                                                <span>{t('Margin')}</span>
+                                                <strong className="text-success">{currency.format(item.profit)}</strong>
                                             </div>
                                         </div>
                                     </div>
                                 ))
                             ) : (
-                                <div className="mobile-empty-card">Aucune vente pour cette période</div>
+                                <div className="mobile-empty-card">{t('NoSalesForPeriod')}</div>
                             )}
                         </div>
                         <div className="overflow-x-auto">
                             <table>
-                                <caption className="sr-only">Articles vendus pendant la période sélectionnée</caption>
+                                <caption className="sr-only">{t('ItemsSoldCaption')}</caption>
                                 <thead>
                                     <tr>
-                                        <th scope="col">Produit</th>
-                                        <th scope="col" className="text-right">Prix moyen vendu</th>
-                                        <th scope="col" className="text-center">Qté</th>
-                                        <th scope="col" className="text-right">Total</th>
-                                        <th scope="col" className="text-right">Marge</th>
+                                        <th scope="col">{t('Product')}</th>
+                                        <th scope="col" className="text-right">{t('AverageSalePrice')}</th>
+                                        <th scope="col" className="text-center">{t('AbbreviatedQuantity')}</th>
+                                        <th scope="col" className="text-right">{t('Total')}</th>
+                                        <th scope="col" className="text-right">{t('Margin')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -454,20 +496,20 @@ export default function Reports() {
                                         report.items_sold.map((item, i) => (
                                             <tr key={item.barcode ?? item.name ?? i}>
                                                 <td className="font-medium">{item.name}</td>
-                                                <td className="text-right">{item.unit_price?.toFixed(2) || '-'} DH</td>
+                                                <td className="text-right">{item.unit_price == null ? '-' : currency.format(item.unit_price)}</td>
                                                 <td className="text-center">
                                                     <span className="badge badge-accent">{item.quantity}</span>
                                                 </td>
-                                                <td className="text-right">{item.revenue?.toFixed(2)} DH</td>
+                                                <td className="text-right">{currency.format(item.revenue)}</td>
                                                 <td className="text-right text-success font-medium">
-                                                    {item.profit?.toFixed(2)} DH
+                                                    {currency.format(item.profit)}
                                                 </td>
                                             </tr>
                                         ))
                                     ) : (
                                         <tr>
                                             <td colSpan={5} className="text-center py-8 text-muted">
-                                                Aucune vente pour cette période
+                                                {t('NoSalesForPeriod')}
                                             </td>
                                         </tr>
                                     )}
@@ -479,9 +521,10 @@ export default function Reports() {
             ) : (
                 <div className="text-center py-12 text-muted">
                     <Calendar size={48} className="mx-auto mb-4 opacity-30" />
-                    <p>Sélectionnez une période pour afficher le rapport</p>
+                    <p>{t('SelectPeriodForReport')}</p>
                 </div>
             )}
+            </div>
         </div>
     );
 }

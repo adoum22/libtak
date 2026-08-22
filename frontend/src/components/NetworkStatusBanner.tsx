@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { WifiOff } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export default function NetworkStatusBanner() {
+  const { t } = useTranslation();
   const [online, setOnline] = useState(() => navigator.onLine);
 
   useEffect(() => {
@@ -24,7 +26,7 @@ export default function NetworkStatusBanner() {
       aria-live="assertive"
     >
       <WifiOff size={18} aria-hidden="true" />
-      Connexion interrompue : consultation possible, mais les opérations ne seront pas envoyées.
+      {t('OfflineNotice')}
     </div>
   );
 }

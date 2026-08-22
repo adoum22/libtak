@@ -4,6 +4,8 @@ import client, { getApiErrorMessage } from '../api/client';
 import { X, Upload, Save } from 'lucide-react';
 import { useToast } from './ToastContext';
 import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
+import { useTranslation } from 'react-i18next';
+import useCurrency from '../hooks/useCurrency';
 
 interface ProductCreateModalProps {
     onClose: () => void;
@@ -43,6 +45,8 @@ interface Supplier {
 }
 
 export default function ProductCreateModal({ onClose, onSuccess, initialBarcode = '', initialName = '' }: ProductCreateModalProps) {
+    const { t } = useTranslation();
+    const currency = useCurrency();
     const toast = useToast();
     const dialogRef = useRef<HTMLDivElement>(null);
     const formId = useId();
@@ -114,14 +118,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
             });
         },
         onSuccess: (res) => {
-            toast.success('Produit créé avec succès');
+            toast.success(t('ProductCreated'));
             onSuccess(res.data);
             onClose();
         },
         onError: (err: unknown) => {
             const msg = getApiErrorMessage(err, '', 'barcode')
-                ? 'Ce code-barres existe déjà'
-                : 'Erreur lors de la création';
+                ? t('DuplicateBarcode')
+                : t('CreationFailed');
             toast.error(msg);
         }
     });
@@ -129,7 +133,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!formData.name || !formData.barcode) {
-            toast.error('Nom et Code-barres sont obligatoires');
+            toast.error(t('NameBarcodeRequired'));
             return;
         }
         createProduct.mutate(formData);
@@ -149,13 +153,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                 ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
+                data-modal-native-escape="true"
                 aria-labelledby={`${formId}-title`}
                 tabIndex={-1}
                 className="bg-surface rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
             >
                 <div className="flex items-center justify-between p-4 border-b border-border">
-                    <h2 id={`${formId}-title`} className="text-lg font-bold">Nouveau produit</h2>
-                    <button type="button" onClick={onClose} className="p-1 hover:bg-tertiary rounded-full" aria-label="Fermer la fenêtre">
+                    <h2 id={`${formId}-title`} className="text-lg font-bold">{t('NewProduct')}</h2>
+                    <button type="button" onClick={onClose} className="p-1 hover:bg-tertiary rounded-full" aria-label={t('CloseWindow')}>
                         <X size={20} aria-hidden="true" />
                     </button>
                 </div>
@@ -166,11 +171,11 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         <div className="md:col-span-2 flex justify-center mb-4">
                             <div className="relative w-32 h-32 bg-tertiary rounded-lg border-2 border-dashed border-muted flex items-center justify-center overflow-hidden group hover:border-accent transition-colors">
                                 {previewUrl ? (
-                                    <img src={previewUrl} alt="Aperçu du produit" className="w-full h-full object-cover" />
+                                    <img src={previewUrl} alt={t('ProductPreview')} className="w-full h-full object-cover" />
                                 ) : (
                                     <div className="text-center text-muted">
                                         <Upload size={24} className="mx-auto mb-1" />
-                                        <span className="text-xs">Photo</span>
+                                        <span className="text-xs">{t('Photo')}</span>
                                     </div>
                                 )}
                                 <input
@@ -179,14 +184,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                                     accept="image/*"
                                     onChange={handleImageChange}
                                     className="absolute inset-0 opacity-0 cursor-pointer"
-                                    aria-label="Choisir une photo du produit"
+                                    aria-label={t('ChooseProductPhoto')}
                                 />
                             </div>
                         </div>
 
                         {/* Basic Info */}
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-name`}>Nom du produit *</label>
+                            <label className="label" htmlFor={`${formId}-name`}>{t('ProductName')} *</label>
                             <input
                                 id={`${formId}-name`}
                                 type="text"
@@ -198,7 +203,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-barcode`}>Code-barres *</label>
+                            <label className="label" htmlFor={`${formId}-barcode`}>{t('Barcode')} *</label>
                             <input
                                 id={`${formId}-barcode`}
                                 type="text"
@@ -210,7 +215,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group md:col-span-2">
-                            <label className="label" htmlFor={`${formId}-description`}>Description</label>
+                            <label className="label" htmlFor={`${formId}-description`}>{t('Description')}</label>
                             <textarea
                                 id={`${formId}-description`}
                                 className="input w-full"
@@ -222,14 +227,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
 
                         {/* Category & Supplier */}
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-category`}>Catégorie</label>
+                            <label className="label" htmlFor={`${formId}-category`}>{t('Category')}</label>
                             <select
                                 id={`${formId}-category`}
                                 className="input w-full"
                                 value={formData.category}
                                 onChange={e => setFormData({ ...formData, category: e.target.value })}
                             >
-                                <option value="">{categoriesLoading ? 'Chargement…' : categoriesError ? 'Catégories indisponibles' : 'Sélectionner…'}</option>
+                                <option value="">{categoriesLoading ? t('Loading') : categoriesError ? t('CategoriesUnavailable') : t('SelectOption')}</option>
                                 {categories.map(c => (
                                     <option key={c.id} value={c.id}>{c.name}</option>
                                 ))}
@@ -237,14 +242,14 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-supplier`}>Fournisseur</label>
+                            <label className="label" htmlFor={`${formId}-supplier`}>{t('Supplier')}</label>
                             <select
                                 id={`${formId}-supplier`}
                                 className="input w-full"
                                 value={formData.supplier}
                                 onChange={e => setFormData({ ...formData, supplier: e.target.value })}
                             >
-                                <option value="">{suppliersLoading ? 'Chargement…' : suppliersError ? 'Fournisseurs indisponibles' : 'Sélectionner…'}</option>
+                                <option value="">{suppliersLoading ? t('Loading') : suppliersError ? t('SuppliersUnavailable') : t('SelectOption')}</option>
                                 {suppliers.map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
@@ -253,7 +258,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
 
                         {/* Pricing */}
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-purchase-price`}>Prix d'achat (DH)</label>
+                            <label className="label" htmlFor={`${formId}-purchase-price`}>{t('PurchasePriceCurrency', { symbol: currency.symbol })}</label>
                             <input
                                 id={`${formId}-purchase-price`}
                                 type="text"
@@ -266,7 +271,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-sale-price`}>Prix de vente (DH)</label>
+                            <label className="label" htmlFor={`${formId}-sale-price`}>{t('SalePriceCurrency', { symbol: currency.symbol })}</label>
                             <input
                                 id={`${formId}-sale-price`}
                                 type="text"
@@ -281,16 +286,16 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         {/* Margin Display */}
                         <div className="md:col-span-2 bg-tertiary/50 p-3 rounded-lg flex justify-between items-center text-sm">
                             <div>
-                                <span className="text-muted">Marge:</span> <span className="font-bold">{margin.toFixed(2)} DH</span>
+                                <span className="text-muted">{t('Margin')}:</span> <span className="font-bold">{currency.format(margin)}</span>
                             </div>
                             <div>
-                                <span className="text-muted">Taux:</span> <span className={`font-bold ${parseFloat(marginPercent) < 20 ? 'text-warning' : 'text-success'}`}>{marginPercent}%</span>
+                                <span className="text-muted">{t('Rate')}:</span> <span className={`font-bold ${parseFloat(marginPercent) < 20 ? 'text-warning' : 'text-success'}`}>{marginPercent}%</span>
                             </div>
                         </div>
 
                         {/* Stock Info */}
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-stock`}>Stock initial</label>
+                            <label className="label" htmlFor={`${formId}-stock`}>{t('InitialStock')}</label>
                             <input
                                 id={`${formId}-stock`}
                                 type="number"
@@ -302,7 +307,7 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                         </div>
 
                         <div className="form-group">
-                            <label className="label" htmlFor={`${formId}-min-stock`}>Stock minimum</label>
+                            <label className="label" htmlFor={`${formId}-min-stock`}>{t('MinStock')}</label>
                             <input
                                 id={`${formId}-min-stock`}
                                 type="number"
@@ -315,10 +320,10 @@ export default function ProductCreateModal({ onClose, onSuccess, initialBarcode 
                     </div>
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-border mt-4">
-                        <button type="button" onClick={onClose} className="btn-secondary">Annuler</button>
+                        <button type="button" onClick={onClose} className="btn-secondary">{t('Cancel')}</button>
                         <button type="submit" disabled={createProduct.isPending} className="btn-primary flex items-center gap-2">
                             <Save size={18} />
-                            {createProduct.isPending ? 'Création...' : 'Créer Produit'}
+                            {createProduct.isPending ? t('Creating') : t('CreateProductAction')}
                         </button>
                     </div>
                 </form>

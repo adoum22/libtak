@@ -2,8 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Navigate } from 'react-router-dom';
 import client, { hasAuthSession } from '../api/client';
 import { canAccessStock, type CurrentUserPermissions } from '../utils/stockPermissions';
+import { useTranslation } from 'react-i18next';
 
 export default function StockRoute({ children }: { children: React.ReactNode }) {
+    const { t } = useTranslation();
     const authenticated = hasAuthSession();
     const { data, isLoading, isError, refetch, isFetching } = useQuery<CurrentUserPermissions>({
         queryKey: ['currentUser'],
@@ -15,15 +17,15 @@ export default function StockRoute({ children }: { children: React.ReactNode }) 
 
     if (!authenticated) return <Navigate to="/login" replace />;
     if (isLoading) {
-        return <div className="p-8 text-center text-muted" role="status">Vérification des droits…</div>;
+        return <div className="p-8 text-center text-muted" role="status">{t('CheckingPermissions')}</div>;
     }
     if (isError) {
         return (
             <div className="empty-state" role="alert">
-                <h2>Impossible de vérifier vos droits</h2>
-                <p>Contrôlez la connexion puis réessayez.</p>
+                <h2>{t('PermissionCheckFailed')}</h2>
+                <p>{t('CheckConnectionRetry')}</p>
                 <button type="button" className="btn-primary" onClick={() => void refetch()} disabled={isFetching}>
-                    {isFetching ? 'Nouvelle tentative…' : 'Réessayer'}
+                    {isFetching ? t('TryingAgain') : t('Retry')}
                 </button>
             </div>
         );

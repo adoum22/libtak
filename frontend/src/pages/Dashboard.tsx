@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import client from '../api/client';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
     TrendingUp,
     ShoppingBag,
@@ -12,6 +13,9 @@ import {
     Package,
     Activity,
     Trophy,
+    BellRing,
+    CheckCircle2,
+    ChevronRight,
 } from 'lucide-react';
 import {
     AreaChart,
@@ -25,6 +29,8 @@ import {
     ResponsiveContainer,
 } from 'recharts';
 import PremiumChartTooltip from '../components/PremiumChartTooltip';
+import { getSuggestedRestock } from '../utils/inventoryRestock';
+import useCurrency from '../hooks/useCurrency';
 
 interface DailyData {
     total_sales: number;
@@ -72,7 +78,9 @@ const axisTick = { fontSize: 11, fill: 'var(--color-text-muted)' };
 const gridStroke = 'var(--color-border-light)';
 
 export default function Dashboard() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
+    const currency = useCurrency();
+    const navigate = useNavigate();
     const [range, setRange] = useState<ChartRange>(7);
 
     const { data: stats, isLoading, isError, refetch, dataUpdatedAt } = useQuery<StatsData>({
@@ -84,9 +92,9 @@ export default function Dashboard() {
     });
 
     const rangeOptions: { value: ChartRange; label: string }[] = [
-        { value: 7, label: '7 jours' },
-        { value: 30, label: '30 jours' },
-        { value: 90, label: '3 mois' },
+        { value: 7, label: t('SevenDays') },
+        { value: 30, label: t('ThirtyDays') },
+        { value: 90, label: t('ThreeMonths') },
     ];
 
     const scrollToLowStock = () => {
@@ -117,27 +125,90 @@ export default function Dashboard() {
 
     if (isError) {
         return (
-            <div className="space-y-6">
+            <div className="space-y-6" role="status" aria-busy="true">
                 <h1 className="text-2xl font-bold">{t('Dashboard')}</h1>
                 <div className="network-error-state" role="alert">
-                    <p className="font-semibold">Les données du tableau de bord sont indisponibles.</p>
-                    <p className="text-sm mt-2">Aucun montant ni état de stock n’est affiché tant que la connexion n’est pas rétablie.</p>
-                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                    <p className="font-semibold">{t('DashboardUnavailable')}</p>
+                    <p className="text-sm mt-2">{t('DashboardUnavailableHint')}</p>
+                    <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>{t('Retry')}</button>
                 </div>
             </div>
         );
     }
 
     const revenueChange = stats?.today?.revenue_change || 0;
+    const outOfStockCount = stats?.out_of_stock_count ?? 0;
+    const lowStockCount = stats?.low_stock_only_count ?? 0;
+    const hasOperationalAlert = outOfStockCount > 0 || lowStockCount > 0 || (stats?.today?.sales_count ?? 0) === 0 || revenueChange < 0;
 
     return (
         <div className="space-y-6 animate-fadeIn">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold">{t('Dashboard')}</h1>
                 <span className="text-sm text-muted">
-                    Dernière mise à jour : {new Date(dataUpdatedAt).toLocaleTimeString('fr-FR')}
+                    {t('LastUpdated', { time: new Date(dataUpdatedAt).toLocaleTimeString(i18n.language) })}
                 </span>
             </div>
+
+            <section className="card" aria-labelledby="operational-alerts-title">
+                <div className="card-header flex items-center justify-between gap-3 flex-wrap">
+                    <h2 id="operational-alerts-title" className="chart-title">
+                        <span className="chart-title-icon"><BellRing size={18} /></span>
+                        {t('OperationalAlerts')}
+                    </h2>
+                    {!hasOperationalAlert && (
+                        <span className="badge badge-success flex items-center gap-1">
+                            <CheckCircle2 size={14} /> {t('OperationsHealthy')}
+                        </span>
+                    )}
+                </div>
+                <div className="card-body grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {outOfStockCount > 0 && (
+                        <button
+                            type="button"
+                            className="rounded-xl border border-danger/30 bg-danger-light p-4 text-left flex items-center justify-between gap-3 hover:brightness-95"
+                            onClick={() => navigate('/inventory?stock=out')}
+                        >
+                            <span>
+                                <strong className="block text-danger">{t('OutOfStockAlertTitle', { count: outOfStockCount })}</strong>
+                                <span className="text-sm text-muted">{t('OutOfStockAlertHint')}</span>
+                            </span>
+                            <ChevronRight size={20} className="text-danger shrink-0" />
+                        </button>
+                    )}
+                    {lowStockCount > 0 && (
+                        <button
+                            type="button"
+                            className="rounded-xl border border-warning/30 bg-warning-light p-4 text-left flex items-center justify-between gap-3 hover:brightness-95"
+                            onClick={() => navigate('/inventory?stock=low')}
+                        >
+                            <span>
+                                <strong className="block text-warning">{t('LowStockAlertTitle', { count: lowStockCount })}</strong>
+                                <span className="text-sm text-muted">{t('LowStockAlertHint')}</span>
+                            </span>
+                            <ChevronRight size={20} className="text-warning shrink-0" />
+                        </button>
+                    )}
+                    {(stats?.today?.sales_count ?? 0) === 0 && (
+                        <div className="rounded-xl border border-border bg-tertiary p-4">
+                            <strong className="block">{t('NoSalesTodayAlert')}</strong>
+                            <span className="text-sm text-muted">{t('NoSalesTodayHint')}</span>
+                        </div>
+                    )}
+                    {revenueChange < 0 && (
+                        <div className="rounded-xl border border-warning/30 bg-warning-light p-4">
+                            <strong className="block text-warning">{t('RevenueDownAlert', { percent: Math.abs(revenueChange).toFixed(1) })}</strong>
+                            <span className="text-sm text-muted">{t('RevenueDownHint')}</span>
+                        </div>
+                    )}
+                    {!hasOperationalAlert && (
+                        <div className="lg:col-span-2 rounded-xl border border-success/30 bg-success-light p-4 flex items-center gap-3 text-success">
+                            <CheckCircle2 size={22} />
+                            <span>{t('NoOperationalAlerts')}</span>
+                        </div>
+                    )}
+                </div>
+            </section>
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -147,7 +218,7 @@ export default function Dashboard() {
                         <ShoppingBag size={24} className="text-accent" />
                     </div>
                     <div>
-                        <p className="stat-label">Ventes aujourd'hui</p>
+                        <p className="stat-label">{t('SalesToday')}</p>
                         <p className="stat-value">{stats?.today?.sales_count || 0}</p>
                     </div>
                 </div>
@@ -158,14 +229,14 @@ export default function Dashboard() {
                         <DollarSign size={24} className="text-success" />
                     </div>
                     <div>
-                        <p className="stat-label">CA aujourd'hui</p>
+                        <p className="stat-label">{t('RevenueToday')}</p>
                         <p className="stat-value">
-                            {(stats?.today?.revenue || 0).toLocaleString('fr-FR')} DH
+                            {currency.format(stats?.today?.revenue || 0)}
                         </p>
                         {revenueChange !== 0 && (
                             <div className={`flex items-center gap-1 text-sm ${revenueChange > 0 ? 'text-success' : 'text-danger'}`}>
                                 {revenueChange > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                                <span>{Math.abs(revenueChange).toFixed(1)}% vs hier</span>
+                                <span>{Math.abs(revenueChange).toFixed(1)}% {t('ComparedWithYesterday')}</span>
                             </div>
                         )}
                     </div>
@@ -177,12 +248,12 @@ export default function Dashboard() {
                         <TrendingUp size={24} className="text-warning" />
                     </div>
                     <div>
-                        <p className="stat-label">CA ce mois</p>
+                        <p className="stat-label">{t('RevenueThisMonth')}</p>
                         <p className="stat-value">
-                            {(stats?.month?.revenue || 0).toLocaleString('fr-FR')} DH
+                            {currency.format(stats?.month?.revenue || 0)}
                         </p>
                         <p className="text-sm text-muted">
-                            {stats?.month?.sales_count || 0} ventes
+                            {t('SalesCount', { count: stats?.month?.sales_count || 0 })}
                         </p>
                     </div>
                 </div>
@@ -197,20 +268,20 @@ export default function Dashboard() {
                         <AlertTriangle size={24} className="text-danger" />
                     </div>
                     <div>
-                        <p className="stat-label">À réapprovisionner</p>
+                        <p className="stat-label">{t('ToReplenish')}</p>
                         <p className="stat-value">
                             {stats?.to_replenish_count ?? stats?.low_stock_count ?? stats?.low_stock?.length ?? 0}
                         </p>
                         <p className="text-sm text-muted">
                             {(stats?.out_of_stock_count ?? 0) > 0 ? (
                                 <>
-                                    dont <span className="text-danger font-semibold">{stats?.out_of_stock_count} en rupture</span>
+                                    <span className="text-danger font-semibold">{t('IncludingOutOfStock', { count: stats?.out_of_stock_count })}</span>
                                     {(stats?.low_stock_only_count ?? 0) > 0 && (
-                                        <> + <span className="text-warning font-semibold">{stats?.low_stock_only_count} bas</span></>
+                                        <span className="text-warning font-semibold">{t('IncludingLowStock', { count: stats?.low_stock_only_count })}</span>
                                     )}
                                 </>
                             ) : (
-                                'produits à réapprovisionner'
+                                t('ProductsToReplenish')
                             )}
                         </p>
                     </div>
@@ -224,13 +295,15 @@ export default function Dashboard() {
                     <div className="card-header flex items-center justify-between gap-3 flex-wrap">
                         <h2 className="chart-title">
                             <span className="chart-title-icon"><TrendingUp size={18} /></span>
-                            CA — {rangeOptions.find(r => r.value === range)?.label}
+                            {t('RevenuePeriod', { period: rangeOptions.find(r => r.value === range)?.label })}
                         </h2>
-                        <div className="inline-flex bg-tertiary rounded-lg p-1 text-sm">
+                        <div className="inline-flex bg-tertiary rounded-lg p-1 text-sm" role="group" aria-label={t('Period')}>
                             {rangeOptions.map(opt => (
                                 <button
                                     key={opt.value}
+                                    type="button"
                                     onClick={() => setRange(opt.value)}
+                                    aria-pressed={range === opt.value}
                                     className={`px-3 py-1.5 rounded-md transition font-medium ${
                                         range === opt.value
                                             ? 'bg-accent text-white shadow-sm'
@@ -245,7 +318,7 @@ export default function Dashboard() {
                     <div className="card-body">
                         {stats?.revenue_7d?.some(d => d.revenue > 0) ? (
                             <ResponsiveContainer width="100%" height={260}>
-                                <AreaChart data={stats.revenue_7d}>
+                                <AreaChart role="img" data={stats.revenue_7d} aria-label={t('RevenuePeriod', { period: rangeOptions.find(r => r.value === range)?.label })}>
                                     <defs>
                                         <linearGradient id="caGradient" x1="0" y1="0" x2="0" y2="1">
                                             <stop offset="0%" stopColor="#0f766e" stopOpacity={0.36} />
@@ -256,7 +329,7 @@ export default function Dashboard() {
                                     <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
                                     <YAxis tick={axisTick} tickLine={false} axisLine={false} width={42} />
                                     <Tooltip
-                                        content={<PremiumChartTooltip valueSuffix=" DH" />}
+                                        content={<PremiumChartTooltip valueSuffix={` ${currency.symbol}`} />}
                                         cursor={{ stroke: 'var(--color-accent)', strokeOpacity: 0.18 }}
                                     />
                                     <Area
@@ -272,7 +345,7 @@ export default function Dashboard() {
                             </ResponsiveContainer>
                         ) : (
                             <div className="text-center py-12 text-muted">
-                                Pas de ventes sur les 7 derniers jours.
+                                {t('NoSalesLastSevenDays')}
                             </div>
                         )}
                     </div>
@@ -283,26 +356,26 @@ export default function Dashboard() {
                     <div className="card-header">
                         <h2 className="chart-title">
                             <span className="chart-title-icon"><Activity size={18} /></span>
-                            Activité par heure
+                            {t('HourlyActivity')}
                         </h2>
                     </div>
                     <div className="card-body">
                         {stats?.hourly_today?.some(h => h.revenue > 0) ? (
                             <ResponsiveContainer width="100%" height={260}>
-                                <BarChart data={stats.hourly_today}>
+                                <BarChart role="img" data={stats.hourly_today} aria-label={t('HourlyActivity')}>
                                     <CartesianGrid stroke={gridStroke} vertical={false} />
                                     <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} />
                                     <YAxis tick={axisTick} tickLine={false} axisLine={false} width={42} />
                                     <Tooltip
-                                        content={<PremiumChartTooltip valueSuffix=" DH" />}
+                                        content={<PremiumChartTooltip valueSuffix={` ${currency.symbol}`} />}
                                         cursor={{ fill: 'var(--color-accent-light)' }}
                                     />
-                                    <Bar dataKey="revenue" name="CA" fill="#10b981" radius={[10, 10, 4, 4]} maxBarSize={38} />
+                                    <Bar dataKey="revenue" name="CA" fill="#047857" radius={[10, 10, 4, 4]} maxBarSize={38} />
                                 </BarChart>
                             </ResponsiveContainer>
                         ) : (
                             <div className="text-center py-12 text-muted">
-                                Pas encore de ventes aujourd'hui.
+                                {t('NoSalesToday')}
                             </div>
                         )}
                     </div>
@@ -315,12 +388,14 @@ export default function Dashboard() {
                     <div className="card-header">
                         <h2 className="chart-title">
                             <span className="chart-title-icon"><Trophy size={18} /></span>
-                            Top produits — quantité
+                            {t('TopProductsByQuantity')}
                         </h2>
                     </div>
                     <div className="card-body">
                         <ResponsiveContainer width="100%" height={Math.max(180, stats.top_products.length * 42)}>
                             <BarChart
+                                role="img"
+                                aria-label={t('TopProductsByQuantity')}
                                 data={stats.top_products.map(p => ({
                                     name: (p.product__name || '').slice(0, 28),
                                     qty: Number(p.total_qty) || 0,
@@ -332,7 +407,7 @@ export default function Dashboard() {
                                 <XAxis type="number" tick={axisTick} tickLine={false} axisLine={false} />
                                 <YAxis dataKey="name" type="category" tick={axisTick} tickLine={false} axisLine={false} width={150} />
                                 <Tooltip content={<PremiumChartTooltip />} cursor={{ fill: 'var(--color-accent-light)' }} />
-                                <Bar dataKey="qty" name="Quantité" fill="#0f766e" radius={[0, 10, 10, 0]} maxBarSize={28} />
+                                <Bar dataKey="qty" name={t('Quantity')} fill="#0f766e" radius={[0, 10, 10, 0]} maxBarSize={28} />
                             </BarChart>
                         </ResponsiveContainer>
                     </div>
@@ -346,7 +421,7 @@ export default function Dashboard() {
                     <div className="card-header flex items-center justify-between">
                         <h2 className="chart-title">
                             <span className="chart-title-icon"><Trophy size={18} /></span>
-                            Top produits du mois
+                            {t('TopProductsThisMonth')}
                         </h2>
                     </div>
                     <div className="card-body p-0">
@@ -357,29 +432,29 @@ export default function Dashboard() {
                                         <div className="mobile-detail-card-header">
                                             <div>
                                                 <h3>{p.product__name}</h3>
-                                                <p>Produit #{i + 1} du mois</p>
+                                                <p>{t('MonthlyProductRank', { rank: i + 1 })}</p>
                                             </div>
                                             <span className="badge badge-accent">x{p.total_qty}</span>
                                         </div>
                                         <div className="mobile-money-grid">
                                             <div>
-                                                <span>CA</span>
-                                                <strong>{p.total_revenue?.toLocaleString('fr-FR')} DH</strong>
+                                                <span>{t('RevenueShort')}</span>
+                                                <strong>{currency.format(p.total_revenue)}</strong>
                                             </div>
                                         </div>
                                     </div>
                                 ))
                             ) : (
-                                <div className="mobile-empty-card">Aucune vente ce mois</div>
+                                <div className="mobile-empty-card">{t('NoSalesThisMonth')}</div>
                             )}
                         </div>
                         <table>
-                            <caption className="sr-only">Produits les plus vendus du mois</caption>
+                            <caption className="sr-only">{t('TopSellingProductsCaption')}</caption>
                             <thead>
                                 <tr>
-                                    <th scope="col">Produit</th>
-                                    <th scope="col" className="text-right">Qté</th>
-                                    <th scope="col" className="text-right">CA</th>
+                                    <th scope="col">{t('Product')}</th>
+                                    <th scope="col" className="text-right">{t('AbbreviatedQuantity')}</th>
+                                    <th scope="col" className="text-right">{t('RevenueShort')}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -396,14 +471,14 @@ export default function Dashboard() {
                                                 <span className="badge badge-accent">{p.total_qty}</span>
                                             </td>
                                             <td className="text-right font-medium">
-                                                {p.total_revenue?.toLocaleString('fr-FR')} DH
+                                                {currency.format(p.total_revenue)}
                                             </td>
                                         </tr>
                                     ))
                                 ) : (
                                     <tr>
                                         <td colSpan={3} className="text-center text-muted py-8">
-                                            Aucune vente ce mois
+                                            {t('NoSalesThisMonth')}
                                         </td>
                                     </tr>
                                 )}
@@ -417,8 +492,13 @@ export default function Dashboard() {
                     <div className="card-header flex items-center justify-between">
                         <h2 className="chart-title">
                             <span className="chart-title-icon"><AlertTriangle size={18} /></span>
-                            Alertes stock bas
+                            {t('LowStockAlerts')}
                         </h2>
+                        {(stats?.low_stock?.length ?? 0) > 0 && (
+                            <button type="button" className="btn-ghost btn-sm" onClick={() => navigate('/inventory?stock=low')}>
+                                {t('ViewInventory')} <ChevronRight size={16} />
+                            </button>
+                        )}
                     </div>
                     <div className="card-body p-0">
                         {stats?.low_stock?.length ? (
@@ -432,13 +512,18 @@ export default function Dashboard() {
                                             <div>
                                                 <p className="font-medium">{product.name}</p>
                                                 <p className="text-sm text-muted">
-                                                    Min: {product.min_stock} unités
+                                                    {t('MinimumUnits', { count: product.min_stock })}
+                                                </p>
+                                                <p className="text-xs text-accent font-semibold mt-1">
+                                                    {t('SuggestedRestock', {
+                                                        count: getSuggestedRestock(product.stock, product.min_stock),
+                                                    })}
                                                 </p>
                                             </div>
                                         </div>
                                         <div className="text-right">
                                             <span className={`badge ${product.stock === 0 ? 'badge-danger' : 'badge-warning'}`}>
-                                                {product.stock} en stock
+                                                {t('UnitsInStock', { count: product.stock })}
                                             </span>
                                         </div>
                                     </div>
@@ -447,7 +532,7 @@ export default function Dashboard() {
                         ) : (
                             <div className="text-center py-12 text-muted">
                                 <Package size={48} className="mx-auto mb-4 opacity-30" />
-                                <p>Tous les stocks sont OK ✓</p>
+                                <p>{t('AllStockHealthy')}</p>
                             </div>
                         )}
                     </div>

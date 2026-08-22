@@ -6,10 +6,12 @@ import { BookOpen, Eye, EyeOff, LogIn } from 'lucide-react';
 import client, {
     clearAuthSession,
     getApiErrorMessage,
+    getApiErrorStatus,
     setAuthSession,
     setStoredUserRole,
 } from '../api/client';
 import { cacheCurrentUser, clearSessionQueryCache } from '../utils/sessionQueryCache';
+import { clearPrivateSessionStorage } from '../utils/privateSessionStorage';
 
 export default function Login() {
     const { t } = useTranslation();
@@ -30,15 +32,18 @@ export default function Login() {
         try {
             const response = await client.post('/auth/login/', { username, password });
             if (!response.data?.access || !response.data?.refresh) {
-                throw new Error('Réponse de connexion invalide.');
+                throw new Error(t('InvalidLoginResponse'));
             }
+            // A successful explicit login starts a clean business session, even
+            // if another account was previously active in the same browser tab.
+            clearPrivateSessionStorage();
             setAuthSession(response.data.access, response.data.refresh);
             // A previous user may still be cached for one minute. Never let
             // an admin profile leak into a newly opened cashier session.
             await clearSessionQueryCache(queryClient);
 
             // Récupérer les infos utilisateur
-            let role = 'CASHIER';
+            let role = response.data.role === 'ADMIN' ? 'ADMIN' : 'CASHIER';
             try {
                 const meResponse = await client.get('/auth/me/');
                 role = meResponse.data.role;
@@ -56,7 +61,9 @@ export default function Login() {
         } catch (err: unknown) {
             clearAuthSession();
             queryClient.clear();
-            const errorMessage = getApiErrorMessage(err, 'Identifiants incorrects');
+            const errorMessage = getApiErrorStatus(err) === 429
+                ? t('LoginRateLimited')
+                : getApiErrorMessage(err, t('InvalidCredentials'));
             setError(errorMessage);
         } finally {
             setLoading(false);
@@ -82,7 +89,7 @@ export default function Login() {
                         <BookOpen size={32} className="text-accent" />
                     </div>
                     <h1 className="text-2xl font-bold mb-1">Librairie Attaquaddoum</h1>
-                    <p className="text-muted">Connectez-vous à votre compte</p>
+                    <p className="text-muted">{t('LoginSubtitle')}</p>
                 </div>
 
                 {/* Form */}
@@ -100,7 +107,7 @@ export default function Login() {
                     <form onSubmit={handleSubmit} className="space-y-5">
                         <div>
                             <label htmlFor="login-username" className="block text-sm font-medium mb-2">
-                                Nom d'utilisateur
+                                {t('Username')}
                             </label>
                             <input
                                 type="text"
@@ -119,7 +126,7 @@ export default function Login() {
 
                         <div>
                             <label htmlFor="login-password" className="block text-sm font-medium mb-2">
-                                Mot de passe
+                                {t('Password')}
                             </label>
                             <div className="relative">
                                 <input
@@ -139,7 +146,7 @@ export default function Login() {
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-primary transition-colors"
-                                    aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                                    aria-label={showPassword ? t('HidePassword') : t('ShowPassword')}
                                     aria-pressed={showPassword}
                                 >
                                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
@@ -154,7 +161,7 @@ export default function Login() {
                             aria-busy={loading}
                         >
                             {loading ? (
-                                <span className="animate-pulse">Connexion...</span>
+                                <span className="animate-pulse">{t('LoginPending')}</span>
                             ) : (
                                 <>
                                     <LogIn size={20} />

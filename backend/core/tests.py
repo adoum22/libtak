@@ -20,9 +20,10 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.conf import settings
 from django.utils import timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
+from django.core.mail.backends.smtp import EmailBackend
 from rest_framework.test import APITestCase
 from rest_framework import status
 from rest_framework.settings import api_settings
@@ -34,8 +35,8 @@ from .sync_service import SyncService, make_sync_id
 from .serializers import ChangePasswordSerializer, UserCreateSerializer
 from .views import excel_safe
 from create_users import bootstrap_admin, initialize_app_settings
-from send_reports import backup_database, send_email
 from reporting.backup_utils import decrypt_archive, validate_zip_archive
+from reporting.tasks import daily_database_backup
 from inventory.models import Product, StockMovement
 from sales.models import Return, ReturnItem, Sale, SaleItem
 
@@ -114,6 +115,7 @@ class AuthenticationAPITest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('access', response.data)
         self.assertIn('refresh', response.data)
+        self.assertEqual(response.data['role'], User.Role.ADMIN)
 
     def test_login_invalid_credentials(self):
         """Test connexion avec mauvais mot de passe"""
@@ -300,6 +302,51 @@ class UserAPITest(APITestCase):
         })
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(User.objects.count(), 2)
+
+    def test_multiple_individual_accounts_per_role_are_allowed(self):
+        first_cashier = self.client.post('/api/auth/users/', {
+            'username': 'cashier-one',
+            'email': 'cashier-one@test.com',
+            'password': 'Cashier-one-passphrase-2026!',
+            'password_confirm': 'Cashier-one-passphrase-2026!',
+            'first_name': 'Cashier',
+            'last_name': 'One',
+            'role': 'CASHIER',
+        })
+        self.assertEqual(first_cashier.status_code, status.HTTP_201_CREATED)
+
+        second_cashier = self.client.post('/api/auth/users/', {
+            'username': 'cashier-two',
+            'email': 'cashier-two@test.com',
+            'password': 'Cashier-two-passphrase-2026!',
+            'password_confirm': 'Cashier-two-passphrase-2026!',
+            'first_name': 'Cashier',
+            'last_name': 'Two',
+            'role': 'CASHIER',
+        })
+        self.assertEqual(second_cashier.status_code, status.HTTP_201_CREATED)
+
+        second_admin = self.client.post('/api/auth/users/', {
+            'username': 'admin-two',
+            'email': 'admin-two@test.com',
+            'password': 'Admin-two-passphrase-2026!',
+            'password_confirm': 'Admin-two-passphrase-2026!',
+            'first_name': 'Admin',
+            'last_name': 'Two',
+            'role': 'ADMIN',
+        })
+        self.assertEqual(second_admin.status_code, status.HTTP_201_CREATED)
+
+        reassigned_cashier = self.client.patch(
+            f"/api/auth/users/{second_cashier.data['id']}/",
+            {'role': 'ADMIN'},
+            format='json',
+        )
+        self.assertEqual(reassigned_cashier.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            User.objects.filter(role=User.Role.ADMIN).count(),
+            3,
+        )
 
     def test_admin_cannot_demote_or_delete_own_account(self):
         demote = self.client.patch(
@@ -626,27 +673,19 @@ class ReportTransportSecurityTest(SimpleTestCase):
         EMAIL_TIMEOUT=15,
     )
     def test_starttls_uses_a_verifying_ssl_context(self):
-        report_settings = MagicMock()
-        report_settings.get_recipients_list.return_value = ['owner@example.com']
-        server = MagicMock()
-
-        environment = {
-            'EMAIL_HOST': 'smtp.example.com',
-            'EMAIL_PORT': '587',
-            'EMAIL_HOST_USER': 'mailer@example.com',
-            'EMAIL_HOST_PASSWORD': 'not-a-real-secret',
-            'DEFAULT_FROM_EMAIL': 'mailer@example.com',
-        }
-        with patch.dict(os.environ, environment), patch(
-            'send_reports.smtplib.SMTP'
-        ) as smtp:
-            smtp.return_value.__enter__.return_value = server
-            self.assertTrue(send_email(report_settings, 'subject', '<p>body</p>'))
-
-        context = server.starttls.call_args.kwargs['context']
+        backend = EmailBackend(
+            host=settings.EMAIL_HOST,
+            port=settings.EMAIL_PORT,
+            username=settings.EMAIL_HOST_USER,
+            password=settings.EMAIL_HOST_PASSWORD,
+            use_tls=settings.EMAIL_USE_TLS,
+            use_ssl=settings.EMAIL_USE_SSL,
+        )
+        self.assertTrue(backend.use_tls)
+        self.assertFalse(backend.use_ssl)
+        context = backend.ssl_context
         self.assertTrue(context.check_hostname)
         self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
-        smtp.assert_called_once_with('smtp.example.com', 587, timeout=15)
 
     def test_sqlite_backup_is_local_and_consistent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -654,6 +693,8 @@ class ReportTransportSecurityTest(SimpleTestCase):
             source_path = directory_path / 'source.sqlite3'
             backup_dir = directory_path / 'private-backups'
             with closing(sqlite3.connect(source_path)) as connection:
+                connection.execute('CREATE TABLE django_migrations (id INTEGER)')
+                connection.execute('CREATE TABLE core_user (id INTEGER)')
                 connection.execute('CREATE TABLE sample (value TEXT)')
                 connection.execute('INSERT INTO sample VALUES (?)', ('preserved',))
                 connection.commit()
@@ -673,11 +714,12 @@ class ReportTransportSecurityTest(SimpleTestCase):
                 'BACKUP_ENCRYPTION_KEY': encrypted_key,
                 'BACKUP_RETENTION_DAYS': '2',
             }), patch('reporting.tasks.ReportLog.objects.create'):
-                backup_path = backup_database()
+                result = str(daily_database_backup())
+                self.assertTrue(result.startswith('Backup created: '), result)
+                backup_path = Path(result.split(': ', 1)[1])
 
-            self.assertIsNotNone(backup_path)
-            self.assertTrue(Path(backup_path).is_file())
-            self.assertEqual(Path(backup_path).suffix, '.ltbk')
+            self.assertTrue(backup_path.is_file())
+            self.assertEqual(backup_path.suffix, '.ltbk')
             decrypted = directory_path / 'decrypted.zip'
             with patch.dict(
                 os.environ,

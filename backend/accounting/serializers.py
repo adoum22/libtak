@@ -164,6 +164,7 @@ class CashRegisterSummarySerializer(serializers.Serializer):
     balance = serializers.FloatField()
     opening_amount = serializers.FloatField()
     cash_sales_total = serializers.FloatField()
+    credit_payments_total = serializers.FloatField()
     returns_total = serializers.FloatField()
     expenses_total = serializers.FloatField()
     supplier_payments_total = serializers.FloatField()

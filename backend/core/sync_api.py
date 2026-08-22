@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
@@ -492,6 +493,28 @@ def _validate_return(data: Any, origin_id: str) -> dict[str, Any]:
     refund_method = refund_method or Sale.PaymentMethod.CASH
     if refund_method not in Sale.PaymentMethod.values:
         raise SyncRecordError('refund_method is invalid.')
+    refund_amount = _decimal_value(data, 'refund_amount')
+    cash_refund_amount = (
+        _decimal_value(data, 'cash_refund_amount')
+        if 'cash_refund_amount' in data
+        else None
+    )
+    if cash_refund_amount is not None:
+        if cash_refund_amount > refund_amount:
+            raise SyncRecordError(
+                'cash_refund_amount cannot exceed refund_amount.'
+            )
+        if cash_refund_amount > 0 and refund_method != Sale.PaymentMethod.CASH:
+            raise SyncRecordError(
+                'cash_refund_amount requires the CASH refund method.'
+            )
+        if (
+            cash_refund_amount > 0
+            and return_status != Return.ReturnStatus.COMPLETED
+        ):
+            raise SyncRecordError(
+                'Only a completed return can contain a cash refund.'
+            )
 
     raw_items = _field(data, 'items')
     if not isinstance(raw_items, list) or not raw_items:
@@ -521,7 +544,8 @@ def _validate_return(data: Any, origin_id: str) -> dict[str, Any]:
         'sale_local_id': sale_local_id,
         'sale_sync_id': expected_sale_sync_id,
         'reason': _string_value(data, 'reason'),
-        'refund_amount': _decimal_value(data, 'refund_amount'),
+        'refund_amount': refund_amount,
+        'cash_refund_amount': cash_refund_amount,
         'refund_method': refund_method,
         'idempotency_payload_hash': (
             _string_value(
@@ -611,6 +635,17 @@ def _import_return(data: Any, origin_id: str) -> tuple[str, dict[str, Any]]:
     ).first()
     if not sale:
         raise SyncRecordError('The linked sale has not been synchronized.', 'missing_sale')
+    if validated['cash_refund_amount'] is None:
+        # Compatibilité avec les snapshots v1 produits avant que dette annulée
+        # et espèces réellement rendues soient distinguées.
+        validated['cash_refund_amount'] = (
+            validated['refund_amount']
+            if (
+                validated['status'] == Return.ReturnStatus.COMPLETED
+                and validated['refund_method'] == Sale.PaymentMethod.CASH
+            )
+            else Decimal('0.00')
+        )
     existing = Return.objects.select_for_update().filter(
         local_sync_id=validated['sync_id']
     ).first()
@@ -662,6 +697,7 @@ def _import_return(data: Any, origin_id: str) -> tuple[str, dict[str, Any]]:
             existing.status == incoming_status
             and existing.reason == validated['reason']
             and existing.refund_amount == validated['refund_amount']
+            and existing.cash_refund_amount == validated['cash_refund_amount']
             and existing.refund_method == validated['refund_method']
             and (
                 existing.idempotency_payload_hash
@@ -688,6 +724,7 @@ def _import_return(data: Any, origin_id: str) -> tuple[str, dict[str, Any]]:
             status=incoming_status,
             reason=validated['reason'],
             refund_amount=validated['refund_amount'],
+            cash_refund_amount=validated['cash_refund_amount'],
             refund_method=validated['refund_method'],
             idempotency_payload_hash=validated['idempotency_payload_hash'],
             processed_by=processed_by,
@@ -713,6 +750,7 @@ def _import_return(data: Any, origin_id: str) -> tuple[str, dict[str, Any]]:
         status=validated['status'],
         reason=validated['reason'],
         refund_amount=validated['refund_amount'],
+        cash_refund_amount=validated['cash_refund_amount'],
         refund_method=validated['refund_method'],
         idempotency_payload_hash=validated['idempotency_payload_hash'],
         processed_by=processed_by,
@@ -979,6 +1017,8 @@ def receive_credits_snapshot(request):
 
         payment_rows: list[dict[str, Any]] = []
         seen_payments: set[str] = set()
+        seen_payment_operations: set[str] = set()
+        seen_reversal_operations: set[str] = set()
         for raw in data.get('credit_payments', []):
             if not isinstance(raw, dict):
                 raise SyncRecordError('A credit payment record must be an object.')
@@ -995,6 +1035,96 @@ def receive_credits_snapshot(request):
             amount = _decimal_value(raw, 'amount')
             if amount <= 0:
                 raise SyncRecordError('Payment amount must be greater than zero.')
+            if (
+                amount > Decimal('99999999.99')
+                or amount != amount.quantize(Decimal('0.01'))
+            ):
+                raise SyncRecordError(
+                    'Payment amount must fit 8 integer and 2 decimal digits.'
+                )
+            operation_id = _string_value(
+                raw, 'operation_id', required=False, max_length=64,
+            )
+            operation_payload_hash = _string_value(
+                raw,
+                'operation_payload_hash',
+                required=False,
+                allow_blank=True,
+                max_length=64,
+            ) or ''
+            payment_status = _string_value(
+                raw, 'status', required=False, max_length=10,
+            ) or CreditPayment.PaymentStatus.ACTIVE
+            reversed_at = _datetime_value(raw, 'reversed_at', required=False)
+            reversal_reason = _string_value(
+                raw,
+                'reversal_reason',
+                required=False,
+                allow_blank=True,
+                max_length=200,
+            ) or ''
+            reversal_operation_id = _string_value(
+                raw,
+                'reversal_operation_id',
+                required=False,
+                max_length=64,
+            )
+            reversal_payload_hash = _string_value(
+                raw,
+                'reversal_payload_hash',
+                required=False,
+                allow_blank=True,
+                max_length=64,
+            ) or ''
+            operation_pattern = r'[A-Za-z0-9._:-]{8,64}'
+            hash_pattern = r'[0-9a-f]{64}'
+            if operation_id:
+                if not re.fullmatch(operation_pattern, operation_id):
+                    raise SyncRecordError('Payment operation_id is invalid.')
+                if not re.fullmatch(hash_pattern, operation_payload_hash):
+                    raise SyncRecordError(
+                        'Payment operation_payload_hash is invalid.'
+                    )
+                if operation_id in seen_payment_operations:
+                    raise SyncRecordError(
+                        'Payment operation_id values must be unique.',
+                        'duplicate_identity',
+                    )
+                seen_payment_operations.add(operation_id)
+            elif operation_payload_hash:
+                raise SyncRecordError(
+                    'Payment operation_payload_hash requires operation_id.'
+                )
+            if payment_status not in CreditPayment.PaymentStatus.values:
+                raise SyncRecordError('Payment status is invalid.')
+            if payment_status == CreditPayment.PaymentStatus.ACTIVE:
+                if any((
+                    reversed_at,
+                    reversal_reason,
+                    reversal_operation_id,
+                    reversal_payload_hash,
+                    raw.get('reversed_by_username'),
+                )):
+                    raise SyncRecordError(
+                        'An active payment cannot contain reversal metadata.'
+                    )
+            elif (
+                reversed_at is None
+                or not reversal_reason
+                or not reversal_operation_id
+                or not re.fullmatch(operation_pattern, reversal_operation_id)
+                or not re.fullmatch(hash_pattern, reversal_payload_hash)
+            ):
+                raise SyncRecordError(
+                    'A reversed payment requires complete reversal metadata.'
+                )
+            if reversal_operation_id:
+                if reversal_operation_id in seen_reversal_operations:
+                    raise SyncRecordError(
+                        'Payment reversal_operation_id values must be unique.',
+                        'duplicate_identity',
+                    )
+                seen_reversal_operations.add(reversal_operation_id)
             payment_rows.append({
                 'local_id': local_id,
                 'credit_sale_local_id': credit_sale_local_id,
@@ -1002,9 +1132,19 @@ def receive_credits_snapshot(request):
                 'note': _string_value(
                     raw, 'note', required=False, allow_blank=True, max_length=200,
                 ) or '',
+                'operation_id': operation_id,
+                'operation_payload_hash': operation_payload_hash,
+                'status': payment_status,
                 'created_by_username': _string_value(
                     raw, 'created_by_username', required=False, max_length=150,
                 ),
+                'reversed_by_username': _string_value(
+                    raw, 'reversed_by_username', required=False, max_length=150,
+                ),
+                'reversed_at': reversed_at,
+                'reversal_reason': reversal_reason,
+                'reversal_operation_id': reversal_operation_id,
+                'reversal_payload_hash': reversal_payload_hash,
                 'created_at': _datetime_value(raw, 'created_at'),
             })
 
@@ -1047,6 +1187,10 @@ def receive_credits_snapshot(request):
                 row['created_by_username'] for row in payment_rows
                 if row['created_by_username']
             }
+            usernames.update({
+                row['reversed_by_username'] for row in payment_rows
+                if row['reversed_by_username']
+            })
             users_by_name = {
                 user.username: user
                 for user in User.objects.filter(username__in=usernames)
@@ -1061,10 +1205,39 @@ def receive_credits_snapshot(request):
                     amount=row['amount'],
                     note=row['note'],
                     created_by=users_by_name.get(row['created_by_username']),
+                    operation_id=row['operation_id'],
+                    operation_payload_hash=row['operation_payload_hash'],
+                    status=row['status'],
+                    reversed_by=users_by_name.get(row['reversed_by_username']),
+                    reversed_at=row['reversed_at'],
+                    reversal_reason=row['reversal_reason'],
+                    reversal_operation_id=row['reversal_operation_id'],
+                    reversal_payload_hash=row['reversal_payload_hash'],
                 )
                 CreditPayment.objects.filter(pk=payment.pk).update(
                     created_at=row['created_at'],
                 )
+
+            for credit_sale in CreditSale.objects.select_related('sale'):
+                expected_paid = credit_sale.paid_amount
+                expected_status = credit_sale.status
+                totals = credit_sale.ledger_totals()
+                if totals['adjusted_total'] <= 0:
+                    derived_status = CreditSale.Status.PAID
+                elif totals['net_paid'] <= 0:
+                    derived_status = CreditSale.Status.UNPAID
+                elif totals['net_paid'] >= totals['adjusted_total']:
+                    derived_status = CreditSale.Status.PAID
+                else:
+                    derived_status = CreditSale.Status.PARTIAL
+                if (
+                    totals['net_paid'] != expected_paid
+                    or expected_status != derived_status
+                ):
+                    raise SyncRecordError(
+                        'Credit snapshot totals do not match payments and returns.'
+                    )
+                credit_sale.synchronize_from_ledger()
 
         return Response({
             'protocol': SYNC_PROTOCOL,

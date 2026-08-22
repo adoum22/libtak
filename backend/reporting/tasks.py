@@ -1,8 +1,11 @@
+import logging
+
 from celery import shared_task
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.html import escape
+from django.db import connections, transaction
 from django.db.models import Sum, F, Count
 from django.conf import settings
 from datetime import datetime, time, timedelta
@@ -15,6 +18,50 @@ from core.models import AppSettings
 
 
 CENT = Decimal('0.01')
+logger = logging.getLogger(__name__)
+
+
+def _dump_database_fixture(database_path):
+    """Export one transactionally consistent server-database snapshot."""
+    from django.core.management import call_command
+
+    database_connection = connections['default']
+    with transaction.atomic(using='default'):
+        if database_connection.vendor == 'postgresql':
+            # Django's dumpdata iterates model querysets without opening a
+            # transaction. PostgreSQL READ COMMITTED could therefore mix
+            # states from different instants; establish one read-only snapshot
+            # before its first query.
+            with database_connection.cursor() as cursor:
+                cursor.execute(
+                    'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'
+                )
+        with database_path.open('w', encoding='utf-8') as stream:
+            call_command(
+                'dumpdata',
+                '--natural-foreign',
+                '--natural-primary',
+                '--exclude', 'contenttypes',
+                '--exclude', 'auth.permission',
+                '--exclude', 'sessions',
+                '--exclude', 'token_blacklist',
+                database='default',
+                stdout=stream,
+            )
+
+
+@shared_task
+def run_scheduled_reports():
+    """Run the database-driven scheduler from Celery Beat.
+
+    Beat must not call individual report tasks on hard-coded calendar dates;
+    the management command applies the administrator's configured day/time,
+    last-day-of-month rules, durable claims and retry semantics.
+    """
+    from django.core.management import call_command
+
+    call_command('send_scheduled_reports')
+    return 'Scheduled reports checked'
 
 
 def _allocate_cents(total, weights):
@@ -225,6 +272,8 @@ def get_report_data(start_date, end_date):
         completed_returns_for_period,
         financials_for_period,
         operating_expenses_for_period,
+        recognized_return_effect,
+        recognized_refund_expression,
     )
     from django.db.models.functions import TruncDay, TruncHour
     from credit.models import CreditPayment
@@ -238,7 +287,7 @@ def get_report_data(start_date, end_date):
     )
     completed_returns = completed_returns_for_period(
         start_date, end_date,
-    ).prefetch_related('items__sale_item__product')
+    ).select_related('sale').prefetch_related('items__sale_item__product')
     financials = financials_for_period(start_date, end_date)
     operating_expenses = operating_expenses_for_period(start_date, end_date)
     credit_revenue = _credit_payments_total(start_dt, end_dt)
@@ -275,6 +324,20 @@ def get_report_data(start_date, end_date):
         }
 
     for return_order in completed_returns:
+        if return_order.sale.payment_method == Sale.PaymentMethod.CREDIT:
+            refund_amount, returned_cost = recognized_return_effect(return_order)
+            if refund_amount or returned_cost:
+                key = (None, 'Règlements crédit')
+                row = product_rows.setdefault(key, {
+                    'name': 'Règlements crédit',
+                    'barcode': '',
+                    'quantity': 0,
+                    'revenue': Decimal('0'),
+                    'cost': Decimal('0'),
+                })
+                row['revenue'] -= refund_amount
+                row['cost'] -= returned_cost
+            continue
         return_items = sorted(return_order.items.all(), key=lambda item: item.pk)
         line_values = [
             item.sale_item.unit_price_ht * item.quantity
@@ -363,13 +426,15 @@ def get_report_data(start_date, end_date):
         hourly_credit = CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
+            status=CreditPayment.PaymentStatus.ACTIVE,
         ).annotate(bucket=TruncHour('created_at', tzinfo=tz)).values(
             'bucket',
         ).annotate(revenue=Sum('amount'), count=Count('id'))
         hourly_returns = completed_returns.annotate(
             bucket=TruncHour('completed_at', tzinfo=tz),
         ).values('bucket').annotate(
-            refunds=Sum('refund_amount'), returns_count=Count('id'),
+            refunds=Sum(recognized_refund_expression()),
+            returns_count=Count('id'),
         )
         sales_by_hour = {
             row['bucket'].hour: row for row in hourly_sales if row['bucket']
@@ -401,13 +466,15 @@ def get_report_data(start_date, end_date):
         daily_credit = CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
+            status=CreditPayment.PaymentStatus.ACTIVE,
         ).annotate(bucket=TruncDay('created_at', tzinfo=tz)).values(
             'bucket',
         ).annotate(revenue=Sum('amount'), count=Count('id'))
         daily_returns = completed_returns.annotate(
             bucket=TruncDay('completed_at', tzinfo=tz),
         ).values('bucket').annotate(
-            refunds=Sum('refund_amount'), returns_count=Count('id'),
+            refunds=Sum(recognized_refund_expression()),
+            returns_count=Count('id'),
         )
         sales_by_day = {
             row['bucket'].date(): row for row in daily_sales if row['bucket']
@@ -467,7 +534,10 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
         'YEARLY': f'Rapport Annuel - {start_date.year}'
     }
 
-    store_name = AppSettings.get_settings().store_name or 'Librairie'
+    app_settings = AppSettings.get_settings()
+    store_name = app_settings.store_name or 'Librairie'
+    currency_symbol = str(app_settings.currency_symbol or 'DH').strip() or 'DH'
+    safe_currency_symbol = escape(currency_symbol)
     subject = f"[{store_name}] {subject_map.get(report_type, 'Rapport')}"
 
     # Construction du message HTML
@@ -501,12 +571,12 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
 
             <div class="stat">
                 <div>Chiffre d'affaires</div>
-                <div class="stat-value">{data['total_revenue']:.2f} DH</div>
+                <div class="stat-value">{data['total_revenue']:.2f} {safe_currency_symbol}</div>
             </div>
 
             <div class="stat">
                 <div>Bénéfice</div>
-                <div class="stat-value profit">{data['total_profit']:.2f} DH</div>
+                <div class="stat-value profit">{data['total_profit']:.2f} {safe_currency_symbol}</div>
             </div>
 
             <h3>📦 Articles vendus</h3>
@@ -527,10 +597,10 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
         html_message += f"""
                     <tr>
                         <td>{escape(item['name'])}</td>
-                        <td style="text-align: right;">{item['unit_price']:.2f} DH</td>
+                        <td style="text-align: right;">{item['unit_price']:.2f} {safe_currency_symbol}</td>
                         <td style="text-align: center;">{item['quantity']}</td>
-                        <td style="text-align: right;">{item['revenue']:.2f} DH</td>
-                        <td style="text-align: right;" class="profit">{item['profit']:.2f} DH</td>
+                        <td style="text-align: right;">{item['revenue']:.2f} {safe_currency_symbol}</td>
+                        <td style="text-align: right;" class="profit">{item['profit']:.2f} {safe_currency_symbol}</td>
                     </tr>
         """
 
@@ -551,7 +621,11 @@ def send_report_email(report_type, start_date, end_date, data, recipients):
     try:
         send_mail(
             subject=subject,
-            message=f"Rapport {report_type} - CA: {data['total_revenue']:.2f} DH, Bénéfice: {data['total_profit']:.2f} DH",
+            message=(
+                f"Rapport {report_type} - CA: {data['total_revenue']:.2f} "
+                f"{currency_symbol}, Bénéfice: {data['total_profit']:.2f} "
+                f"{currency_symbol}"
+            ),
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=recipients,
             html_message=html_message,
@@ -855,11 +929,14 @@ def daily_database_backup():
     ``BACKUP_ENCRYPTION_KEY`` must be a URL-safe base64 encoded 32-byte key.
     The task fails closed when the key is missing or invalid. Archives use a
     streaming AES-256-GCM envelope and are retained for 30 days by default.
+    ``BACKUP_OFFSITE_DIR`` optionally receives an atomic copy of the encrypted
+    archive; failure of that secondary mount never removes the local archive.
     """
     import hashlib
     import json
     import os
     import secrets
+    import shutil
     import sqlite3
     import tempfile
     import zipfile
@@ -867,8 +944,6 @@ def daily_database_backup():
     from pathlib import Path, PurePosixPath
 
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from django.core.management import call_command
-
     now = timezone.localtime()
     backup_dir = Path(
         os.environ.get('BACKUP_DIR')
@@ -877,6 +952,8 @@ def daily_database_backup():
     ).expanduser().resolve()
     output_path = None
     temporary_output = None
+    backup_finalized = False
+    offsite_error = ''
 
     try:
         def file_sha256(path):
@@ -886,13 +963,46 @@ def daily_database_backup():
                     digest.update(chunk)
             return digest.hexdigest()
 
+        def archive_file(archive, path, arcname):
+            """Write and hash exactly the same byte stream.
+
+            Hashing the source in a second pass can produce a manifest that
+            does not match the ZIP when an upload changes during the backup.
+            """
+            digest = hashlib.sha256()
+            with archive.open(arcname, 'w', force_zip64=True) as target:
+                with path.open('rb') as source:
+                    while chunk := source.read(1024 * 1024):
+                        target.write(chunk)
+                        digest.update(chunk)
+            return digest.hexdigest()
+
+        def validate_sqlite_snapshot(connection):
+            integrity = connection.execute('PRAGMA integrity_check').fetchone()
+            if not integrity or integrity[0] != 'ok':
+                raise ValueError('Configured SQLite database failed integrity_check.')
+            required_tables = {'django_migrations', 'core_user'}
+            present_tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not required_tables.issubset(present_tables):
+                raise ValueError('Configured SQLite file is not a LibTak database.')
+
         encryption_key = encryption_key_from_env()
 
         backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(backup_dir, 0o700)
         timestamp = now.strftime('%Y-%m-%d_%H-%M-%S_%f')
-        output_path = backup_dir / f'libtak_backup_{timestamp}.ltbk'
-        temporary_output = backup_dir / f'.{output_path.name}.tmp'
+        unique_suffix = secrets.token_hex(8)
+        output_path = backup_dir / (
+            f'libtak_backup_{timestamp}_{unique_suffix}.ltbk'
+        )
+        temporary_output = backup_dir / (
+            f'.{output_path.name}.{secrets.token_hex(8)}.tmp'
+        )
 
         with tempfile.TemporaryDirectory(prefix='libtak-backup-') as temp_name:
             temp_dir = Path(temp_name)
@@ -902,42 +1012,39 @@ def daily_database_backup():
 
             if vendor.endswith('sqlite3'):
                 source_path = Path(settings.DATABASES['default']['NAME']).resolve()
-                with closing(sqlite3.connect(source_path)) as source, closing(
+                if not source_path.is_file():
+                    raise FileNotFoundError(
+                        'Configured SQLite database file does not exist.'
+                    )
+                source_uri = source_path.as_uri() + '?mode=ro'
+                with closing(sqlite3.connect(source_uri, uri=True)) as source, closing(
                     sqlite3.connect(database_path)
                 ) as target:
                     source.backup(target)
+                    validate_sqlite_snapshot(target)
             else:
                 database_name = 'database.json'
                 database_path = temp_dir / database_name
-                with database_path.open('w', encoding='utf-8') as stream:
-                    call_command(
-                        'dumpdata',
-                        '--natural-foreign',
-                        '--natural-primary',
-                        '--exclude', 'contenttypes',
-                        '--exclude', 'auth.permission',
-                        '--exclude', 'sessions',
-                        '--exclude', 'token_blacklist',
-                        stdout=stream,
-                    )
+                _dump_database_fixture(database_path)
 
             archive_path = temp_dir / 'backup.zip'
-            checksums = {
-                database_name: file_sha256(database_path),
-            }
+            checksums = {}
             media_root = Path(settings.MEDIA_ROOT).resolve()
             with zipfile.ZipFile(
                 archive_path, 'w', compression=zipfile.ZIP_DEFLATED,
             ) as archive:
-                archive.write(database_path, database_name)
+                checksums[database_name] = archive_file(
+                    archive, database_path, database_name,
+                )
                 if media_root.exists():
                     for media_file in media_root.rglob('*'):
                         if not media_file.is_file() or media_file.is_symlink():
                             continue
                         relative = media_file.relative_to(media_root)
                         arcname = str(PurePosixPath('media', *relative.parts))
-                        archive.write(media_file, arcname)
-                        checksums[arcname] = file_sha256(media_file)
+                        checksums[arcname] = archive_file(
+                            archive, media_file, arcname,
+                        )
                 manifest = {
                     'format': 1,
                     'created_at': now.isoformat(),
@@ -953,7 +1060,7 @@ def daily_database_backup():
             encryptor = Cipher(
                 algorithms.AES(encryption_key), modes.GCM(nonce),
             ).encryptor()
-            with archive_path.open('rb') as source, temporary_output.open('wb') as target:
+            with archive_path.open('rb') as source, temporary_output.open('xb') as target:
                 target.write(b'LTBK1')
                 target.write(nonce)
                 while chunk := source.read(1024 * 1024):
@@ -962,6 +1069,7 @@ def daily_database_backup():
                 target.write(encryptor.tag)
             os.chmod(temporary_output, 0o600)
             os.replace(temporary_output, output_path)
+            backup_finalized = True
 
         retention_days = max(
             1, min(3650, int(os.environ.get('BACKUP_RETENTION_DAYS', '30'))),
@@ -976,6 +1084,47 @@ def daily_database_backup():
             if modified < cutoff:
                 candidate.unlink()
 
+        offsite_dir_value = os.environ.get('BACKUP_OFFSITE_DIR', '').strip()
+        if offsite_dir_value:
+            offsite_temporary = None
+            try:
+                offsite_dir = Path(offsite_dir_value).expanduser().resolve()
+                if offsite_dir == backup_dir:
+                    raise ValueError(
+                        'BACKUP_OFFSITE_DIR must differ from the local backup directory.'
+                    )
+                offsite_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(offsite_dir, 0o700)
+                offsite_path = offsite_dir / output_path.name
+                offsite_temporary = offsite_dir / (
+                    f'.{output_path.name}.{secrets.token_hex(8)}.tmp'
+                )
+                with output_path.open('rb') as source, offsite_temporary.open('xb') as target:
+                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.chmod(offsite_temporary, 0o600)
+                if file_sha256(offsite_temporary) != file_sha256(output_path):
+                    raise OSError('Off-site backup checksum mismatch.')
+                os.replace(offsite_temporary, offsite_path)
+
+                for candidate in offsite_dir.glob('libtak_backup_*.ltbk'):
+                    if candidate.resolve().parent != offsite_dir or candidate == offsite_path:
+                        continue
+                    modified = datetime.fromtimestamp(
+                        candidate.stat().st_mtime, tz=now.tzinfo,
+                    )
+                    if modified < cutoff:
+                        candidate.unlink()
+            except Exception as exc:
+                if offsite_temporary and offsite_temporary.exists():
+                    offsite_temporary.unlink()
+                offsite_error = f'{type(exc).__name__}: {exc}'
+                logger.warning(
+                    'Encrypted off-site backup copy failed; local archive retained: %s',
+                    offsite_error,
+                )
+
         ReportLog.objects.create(
             report_type=ReportLog.ReportType.BACKUP,
             period_start=now.date(),
@@ -984,14 +1133,19 @@ def daily_database_backup():
             total_revenue=0,
             total_profit=0,
             items_sold=[],
-            recipients='encrypted-local-storage',
+            recipients=(
+                'encrypted-local-storage'
+                if not offsite_dir_value or offsite_error
+                else 'encrypted-local-and-offsite-storage'
+            ),
             success=True,
+            error_message=offsite_error,
         )
         return f'Backup created: {output_path}'
     except Exception as exc:
         if temporary_output and temporary_output.exists():
             temporary_output.unlink()
-        if output_path and output_path.exists():
+        if output_path and output_path.exists() and not backup_finalized:
             output_path.unlink()
         ReportLog.objects.create(
             report_type=ReportLog.ReportType.BACKUP,

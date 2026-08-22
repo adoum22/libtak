@@ -1,4 +1,5 @@
 import base64
+import builtins
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
@@ -84,11 +86,35 @@ class ReportEmailConfigTest(TestCase):
         ReportSettings.get_settings().save()
         out = StringIO()
 
-        call_command(
-            'send_scheduled_reports', '--skip-backup', '--force-all', stdout=out,
-        )
+        with self.assertRaises(CommandError):
+            call_command(
+                'send_scheduled_reports', '--skip-backup', '--force-all', stdout=out,
+            )
 
         self.assertIn('X daily report: No recipients configured', out.getvalue())
+
+    def test_scheduled_backup_failure_returns_nonzero_and_remains_retryable(self):
+        today = timezone.localdate()
+        report_settings = ReportSettings.get_settings()
+        report_settings.daily_enabled = False
+        report_settings.weekly_enabled = False
+        report_settings.monthly_enabled = False
+        report_settings.quarterly_enabled = False
+        report_settings.yearly_enabled = False
+        report_settings.low_stock_last_sent_on = today
+        report_settings.save()
+
+        with patch(
+            'reporting.management.commands.send_scheduled_reports.daily_database_backup',
+            return_value='Backup failed: simulated storage failure',
+        ):
+            with self.assertRaises(CommandError):
+                call_command('send_scheduled_reports')
+
+        claim = ScheduledJobClaim.objects.get(job_name='BACKUP', run_date=today)
+        self.assertEqual(claim.status, ScheduledJobClaim.Status.FAILED)
+        report_settings.refresh_from_db()
+        self.assertIsNone(report_settings.backup_last_sent_on)
 
     def test_scheduler_claim_prevents_duplicate_successful_send(self):
         today = timezone.localdate()
@@ -163,6 +189,8 @@ class EncryptedBackupTest(TestCase):
             (media_dir / 'proof.txt').write_text('media preserved', encoding='utf-8')
             source_db = root / 'source.sqlite3'
             with closing(sqlite3.connect(source_db)) as connection:
+                connection.execute('CREATE TABLE django_migrations (id INTEGER)')
+                connection.execute('CREATE TABLE core_user (id INTEGER)')
                 connection.execute('CREATE TABLE proof (value TEXT)')
                 connection.execute("INSERT INTO proof VALUES ('database preserved')")
                 connection.commit()
@@ -203,6 +231,59 @@ class EncryptedBackupTest(TestCase):
             with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}):
                 with self.assertRaises(BackupValidationError):
                     decrypt_archive(tampered, root / 'tampered.zip')
+
+    def test_media_manifest_hashes_the_bytes_written_to_the_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup_dir = root / 'backups'
+            media_dir = root / 'media'
+            media_dir.mkdir()
+            media_file = media_dir / 'changing.bin'
+            media_file.write_bytes(b'before-backup')
+            source_db = root / 'source.sqlite3'
+            with closing(sqlite3.connect(source_db)) as connection:
+                connection.execute('CREATE TABLE django_migrations (id INTEGER)')
+                connection.execute('CREATE TABLE core_user (id INTEGER)')
+                connection.commit()
+
+            key = base64.urlsafe_b64encode(b'c' * 32).decode('ascii')
+            database_settings = {
+                'default': {
+                    'ENGINE': 'django.db.backends.sqlite3',
+                    'NAME': source_db,
+                },
+            }
+            original_path_open = Path.open
+            mutation_seen = False
+
+            def mutate_before_media_read(path, *args, **kwargs):
+                nonlocal mutation_seen
+                mode = args[0] if args else kwargs.get('mode', 'r')
+                if path == media_file and 'r' in mode and not mutation_seen:
+                    with builtins.open(media_file, 'wb') as stream:
+                        stream.write(b'changed-during-backup')
+                    mutation_seen = True
+                return original_path_open(path, *args, **kwargs)
+
+            with override_settings(
+                DATABASES=database_settings,
+                MEDIA_ROOT=media_dir,
+            ), patch.dict(os.environ, {
+                'BACKUP_DIR': str(backup_dir),
+                'BACKUP_OFFSITE_DIR': '',
+                'BACKUP_ENCRYPTION_KEY': key,
+            }), patch(
+                'reporting.tasks.ReportLog.objects.create'
+            ), patch('pathlib.Path.open', new=mutate_before_media_read):
+                result = str(daily_database_backup())
+
+            self.assertTrue(mutation_seen)
+            self.assertTrue(result.startswith('Backup created: '), result)
+            encrypted = Path(result.split(': ', 1)[1])
+            decrypted = root / 'consistent.zip'
+            with patch.dict(os.environ, {'BACKUP_ENCRYPTION_KEY': key}):
+                decrypt_archive(encrypted, decrypted)
+            validate_zip_archive(decrypted)
 
     def test_archive_requires_checksums_for_every_member(self):
         with tempfile.TemporaryDirectory() as directory:

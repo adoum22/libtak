@@ -21,45 +21,36 @@ A professional Point of Sale (POS) system for bookstores and stationery shops wi
 
 ## 📋 Prerequisites
 
-- Python 3.11+
+- Python 3.10+
 - Node.js 20.19+ ou 22.12+
 - PostgreSQL (optional, SQLite used for development)
 - Redis (for Channels and Celery)
 
-## 🚀 Quick Start
+## 🚀 Installation locale Linux
 
-### Backend Setup
+Installez Node.js officiel 20.19+ ou 22.12+, puis lancez l’installateur depuis
+le dossier du projet avec votre compte normal :
 
 ```bash
-cd backend
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Generate per-installation signing keys for this shell (store them in a
-# private backend/.env file for subsequent starts).
-export SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
-export JWT_SIGNING_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(50))')"
-export DEBUG=True
-
-# Run migrations
-python manage.py migrate
-
-# Create the first administrator interactively (password is never stored here)
-python manage.py createsuperuser
-
-# Initialize application settings without overwriting existing values
-python create_users.py
-
-# Seed demo products
-python seed_products.py
-
-# Run development server
-python manage.py runserver
+chmod 700 install.sh
+./install.sh
+./start_server.sh
 ```
 
-**Backend will be available at:** `http://localhost:8000`
-**API Documentation:** `http://localhost:8000/api/docs/`
+Pour une installation Zorin/Ubuntu démarrée automatiquement par systemd :
+
+```bash
+chmod 700 install.sh deployment/install-zorin.sh
+./deployment/install-zorin.sh
+```
+
+Les deux parcours exécutent migrations, bootstrap administrateur unique,
+`npm ci`, build frontend et vérification d’une sauvegarde chiffrée. Le POS est
+disponible sur **http://127.0.0.1:5173** et l’API ASGI sur
+`http://127.0.0.1:8000/api/`. Consultez
+[`GUIDE_ZORIN_OS.md`](GUIDE_ZORIN_OS.md) pour le mode terminal ou
+[`deployment/GUIDE_INSTALLATION.md`](deployment/GUIDE_INSTALLATION.md) pour
+systemd.
 
 ### Authentication
 - `POST /api/auth/login/` - Login (returns JWT tokens)
@@ -92,7 +83,8 @@ python manage.py runserver
 
 ```bash
 # First create a private .env file containing strong, installation-specific
-# SECRET_KEY, JWT_SIGNING_KEY, POSTGRES_PASSWORD, REDIS_PASSWORD,
+# SECRET_KEY, JWT_SIGNING_KEY, BACKUP_ENCRYPTION_KEY,
+# POSTGRES_PASSWORD, REDIS_PASSWORD,
 # BOOTSTRAP_ADMIN_USERNAME and BOOTSTRAP_ADMIN_PASSWORD values.
 
 # Build and start all services
@@ -101,22 +93,30 @@ docker-compose up --build
 # After the first healthy start, remove the BOOTSTRAP_ADMIN_* values from
 # .env. Existing administrator accounts are preserved on later restarts.
 
-# Backend will be at http://localhost:8000
-# Frontend will be at http://localhost:5173 (if build issues are resolved)
+# Backend API will be at http://127.0.0.1:8000/api/
+# Run/build the frontend separately; docker-compose.yml contains backend services.
 ```
+
+`BACKUP_ENCRYPTION_KEY` doit être une clé base64 URL-safe encodant exactement
+32 octets. Conservez-en une copie privée hors du serveur et hors du dépôt :
+sa perte rend les sauvegardes `.ltbk` irrécupérables. La rotation ne doit être
+faite qu'après avoir restauré ou ré-encrypté les archives encore nécessaires.
+Le nettoyage est piloté par `BACKUP_RETENTION_DAYS` (30 jours par défaut).
+Vérifiez régulièrement une archive avec `python manage.py verify_backup` et
+testez une restauration sur une base isolée.
+
+`BACKUP_OFFSITE_DIR` active une copie atomique de l'archive chiffrée vers un
+second dossier monté. Docker fournit le volume distinct
+`backup_offsite_data`; pour une vraie protection hors site, remplacez ce volume
+par un montage NFS/S3-FUSE ou un volume géré et répliqué indépendamment. Une
+panne de ce montage est journalisée mais ne supprime jamais l'archive locale.
 
 ## 🔄 Real-time Features
 
-The system uses Django Channels for real-time stock updates:
-
-```javascript
-// Frontend WebSocket connection (example)
-const ws = new WebSocket('ws://localhost:8000/ws/stock/');
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // Handle stock update: data.message.product_id, data.message.new_stock
-};
-```
+The frontend establishes the authenticated stock WebSocket automatically from
+its configured API origin (`ws://127.0.0.1:8000/ws/stock/` locally). JWT
+authentication is carried by the negotiated WebSocket subprotocol; do not put
+tokens in URLs or documentation.
 
 ## 📝 Development Notes
 

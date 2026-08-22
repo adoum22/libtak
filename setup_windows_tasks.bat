@@ -11,6 +11,7 @@ echo ============================================
 echo Libtak - Configuration des taches planifiees
 echo ============================================
 echo.
+set "APP_DIR=%~dp0"
 echo Ce script va creer:
 echo   1. Demarrage automatique du serveur local
 echo   2. Synchronisation toutes les 30 minutes
@@ -27,7 +28,7 @@ if %errorLevel% neq 0 (
 
 echo [1/2] Creation de la tache "Libtak Local Server"...
 schtasks /create /tn "Libtak Local Server" ^
-    /tr "\"D:\Application Librairie\App\start_local_server.bat\"" ^
+    /tr "\"%APP_DIR%start_local_server.bat\"" ^
     /sc onstart ^
     /ru "%USERNAME%" ^
     /rl highest ^
@@ -42,7 +43,7 @@ if %errorLevel% equ 0 (
 echo.
 echo [2/2] Creation de la tache "Libtak Sync"...
 schtasks /create /tn "Libtak Sync" ^
-    /tr "\"D:\Application Librairie\App\sync_task.bat\"" ^
+    /tr "\"%APP_DIR%sync_task.bat\"" ^
     /sc minute /mo 30 ^
     /ru "%USERNAME%" ^
     /f
@@ -65,7 +66,7 @@ set /p START_NOW=
 
 if /i "%START_NOW%"=="O" (
     echo Demarrage du serveur local...
-    start "" "D:\Application Librairie\App\start_local_server.bat"
+    start "" "%APP_DIR%start_local_server.bat"
 )
 
 pause

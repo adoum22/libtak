@@ -21,7 +21,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.core.files.base import ContentFile
 from django.shortcuts import get_object_or_404
 from django.db import IntegrityError, transaction
-from django.db.models import DecimalField, Sum, F, Q
+from django.db.models import DecimalField, Prefetch, Sum, F, Q
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 from io import BytesIO, StringIO
@@ -54,6 +54,7 @@ from .serializers import (
     SupplierSerializer,
     StockMovementSerializer,
     StockInSerializer,
+    BulkStockInSerializer,
     PurchaseOrderSerializer,
     PurchaseOrderCreateSerializer,
     PurchaseOrderReceiveSerializer,
@@ -536,16 +537,17 @@ class ProductViewSet(viewsets.ModelViewSet):
         low_stock_count = products.filter(stock__lte=F('min_stock')).count()
         out_of_stock = products.filter(stock=0).count()
 
-        product_ids = products.values('id')
-        stock_value = ProductCostLayer.objects.filter(
-            product_id__in=product_ids,
-            remaining_quantity__gt=0,
-        ).aggregate(
-            total=Sum(
-                F('remaining_quantity') * F('unit_cost'),
-                output_field=DecimalField(max_digits=14, decimal_places=2),
-            )
-        )['total'] or 0
+        valuation_products = products.prefetch_related(None).prefetch_related(Prefetch(
+            'cost_layers',
+            queryset=ProductCostLayer.objects.filter(
+                remaining_quantity__gt=0,
+            ).order_by('created_at', 'id'),
+            to_attr='_stock_value_layers',
+        ))
+        stock_value = sum(
+            (product.stock_value for product in valuation_products),
+            Decimal('0.00'),
+        )
 
         return Response({
             'total_products': total_products,
@@ -1275,32 +1277,28 @@ class StockMovementViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_stock_in(self, request):
-        """Entrée de stock en masse"""
-        items = request.data.get('items', [])
-        results = []
-        errors = []
-
-        for item in items:
-            serializer = StockInSerializer(data=item, context={'request': request})
-            if serializer.is_valid():
-                movement = serializer.save()
-                results.append({
-                    'product_id': item['product'],
-                    'quantity': item['quantity'],
-                    'success': True,
-                    'movement_id': movement.id
-                })
-            else:
-                errors.append({
-                    'product_id': item.get('product'),
-                    'errors': serializer.errors
-                })
+        """Create a bounded, fully validated batch with no partial writes."""
+        serializer = BulkStockInSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        movements = serializer.save()
+        results = [
+            {
+                'product_id': movement.product_id,
+                'quantity': movement.quantity,
+                'success': True,
+                'movement_id': movement.id,
+            }
+            for movement in movements
+        ]
 
         return Response({
             'success': results,
-            'errors': errors,
+            'errors': [],
             'total_success': len(results),
-            'total_errors': len(errors)
+            'total_errors': 0,
         })
 
 

@@ -1,179 +1,189 @@
 # Déploiement Libtak — PythonAnywhere + Vercel
 
 Architecture cible :
+
 - **Backend Django** → PythonAnywhere (`https://votre-compte.pythonanywhere.com`)
 - **Frontend React PWA** → Vercel (`https://libtak.vercel.app`)
-- **POS local** (ton PC) → continue à tourner en SQLite, et `sync_to_cloud.py` pousse les ventes vers PythonAnywhere toutes les 30 min.
+- **POS local** → SQLite ; `sync_to_cloud.py` pousse les ventes vers PythonAnywhere.
+
+Ne placez jamais de mot de passe, token ou clé réelle dans ce document, un
+commit, une commande partagée ou une capture d'écran. Tout secret déjà publié
+doit être considéré compromis et remplacé dans le service concerné.
 
 ---
 
-## 1. Backend — PythonAnywhere (gratuit)
+## 1. Backend — PythonAnywhere
 
-### 1.1 Créer le compte
-1. Va sur https://www.pythonanywhere.com/registration/register/beginner/ et crée ton propre compte.
-2. Ouvre une **Bash console** depuis le dashboard.
+### 1.1 Créer le compte et cloner le projet
 
-### 1.2 Cloner le projet
+Créez votre compte PythonAnywhere, puis ouvrez une console Bash :
+
 ```bash
 git clone https://github.com/adoum22/libtak.git
 cd libtak
 ```
 
-### 1.3 Créer le virtualenv
+### 1.2 Créer le virtualenv
+
 ```bash
 mkvirtualenv --python=python3.11 libtak
-pip install -r backend/requirements.txt
+pip install -r backend/requirements-cloud.txt
 ```
-> Le plan gratuit n'a **pas Redis** → Celery Beat ne tournera pas. Les rapports auto seront désactivés (pas grave : tu as toujours les endpoints `/api/reporting/daily/` etc. à appeler manuellement). Si tu veux Celery, passe au plan **Hacker (5 $/mois)**.
 
-### 1.4 Configurer la web app
-Dashboard → onglet **Web** → **Add a new web app** :
-- Choisis **Manual configuration** → **Python 3.11**
-- Une fois créée, va dans la section **Code** :
-  - **Source code** : `/home/votre-compte/libtak/backend`
-  - **Working directory** : `/home/votre-compte/libtak/backend`
-  - **WSGI configuration file** : clique sur le lien → remplace tout le contenu par celui de [`deployment/pythonanywhere_wsgi.py`](./deployment/pythonanywhere_wsgi.py)
-- Section **Virtualenv** : `/home/votre-compte/.virtualenvs/libtak`
-- Section **Static files** :
-  | URL | Directory |
-  |---|---|
-| `/static/` | `/home/votre-compte/libtak/backend/staticfiles` |
-| `/media/` | `/home/votre-compte/libtak/backend/media` |
+Le plan gratuit n'offre pas Redis. Le management command
+`send_scheduled_reports` fournit donc le planificateur de secours, sans worker
+Celery ni broker.
 
-### 1.5 Variables d'environnement (Web tab → Environment variables)
-| Variable | Valeur |
+### 1.3 Configurer la web app
+
+Dashboard → **Web** → **Add a new web app** :
+
+- choisissez **Manual configuration** → **Python 3.11** ;
+- **Source code** : `/home/votre-compte/libtak/backend` ;
+- **Working directory** : `/home/votre-compte/libtak/backend` ;
+- remplacez le fichier WSGI par
+  [`deployment/pythonanywhere_wsgi.py`](./deployment/pythonanywhere_wsgi.py) ;
+- **Virtualenv** : `/home/votre-compte/.virtualenvs/libtak` ;
+- static `/static/` → `/home/votre-compte/libtak/backend/staticfiles` ;
+- media `/media/` → `/home/votre-compte/libtak/backend/media`.
+
+### 1.4 Variables privées
+
+Générez les valeurs sur la machine cible et ne les copiez pas dans Git :
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(60))"  # SECRET_KEY
+python -c "import secrets; print(secrets.token_urlsafe(60))"  # JWT_SIGNING_KEY
+python -c "import secrets; print(secrets.token_urlsafe(48))"  # SYNC_TOKEN
+python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"  # BACKUP_ENCRYPTION_KEY
+```
+
+Renseignez-les dans **Web → Environment variables** ou dans
+`~/.libtak_env`, fichier privé hors du dépôt et lisible uniquement par votre
+compte (`chmod 600 ~/.libtak_env`). La tâche planifiée charge elle aussi ce
+fichier.
+
+| Variable | Valeur attendue |
 |---|---|
 | `DEBUG` | `False` |
-| `SECRET_KEY` | Générer avec `python -c "import secrets;print(secrets.token_urlsafe(60))"` |
+| `SECRET_KEY` | valeur aléatoire dédiée d'au moins 50 caractères |
+| `JWT_SIGNING_KEY` | autre valeur aléatoire d'au moins 50 caractères |
+| `BACKUP_ENCRYPTION_KEY` | base64 URL-safe encodant exactement 32 octets |
+| `BACKUP_RETENTION_DAYS` | `30` (à adapter à votre politique) |
+| `BACKUP_OFFSITE_DIR` | dossier monté séparément ; vide pour désactiver |
 | `ALLOWED_HOSTS` | `votre-compte.pythonanywhere.com` |
-| `CORS_ALLOWED_ORIGINS` | `https://libtak.vercel.app` (mets ton vrai domaine Vercel après step 2) |
-| `CSRF_TRUSTED_ORIGINS` | `https://libtak.vercel.app` |
+| `CORS_ALLOWED_ORIGINS` | URL HTTPS Vercel finale |
+| `CSRF_TRUSTED_ORIGINS` | URL HTTPS Vercel finale |
 | `DATABASE_URL` | `sqlite:////home/votre-compte/libtak/backend/db.sqlite3` |
-| `EMAIL_HOST` | `smtp.gmail.com` |
-| `EMAIL_PORT` | `587` |
-| `EMAIL_HOST_USER` | ton email Gmail |
-| `EMAIL_HOST_PASSWORD` | mot de passe d'application Gmail (pas ton mot de passe normal) |
-| `DEFAULT_FROM_EMAIL` | `Libtak <ton@gmail.com>` |
-| `SYNC_TOKEN` | un long token aléatoire (sera aussi mis dans `.env` du POS local) |
+| `IS_CLOUD_SERVER` | `True` sur ce backend récepteur PythonAnywhere |
+| `EMAIL_HOST` / `EMAIL_PORT` | `smtp.gmail.com` / `587` |
+| `EMAIL_HOST_USER` | compte SMTP dédié |
+| `EMAIL_HOST_PASSWORD` | mot de passe d'application, jamais le mot de passe principal |
+| `DEFAULT_FROM_EMAIL` | expéditeur des rapports |
+| `SYNC_TOKEN` | même secret aléatoire sur le cloud et le POS local |
 
-### 1.6 Migrations + admin
-Dans la console Bash :
+Conservez une copie de récupération de `BACKUP_ENCRYPTION_KEY` dans un coffre
+distinct. Sans cette clé, les sauvegardes `.ltbk` sont irrécupérables.
+Si `BACKUP_OFFSITE_DIR` est configuré, l'application y copie atomiquement
+l'archive déjà chiffrée. Montez ce dossier sur un stockage réellement séparé ;
+une indisponibilité hors site n'efface pas la copie locale.
+
+### 1.5 Migrations et premier administrateur
+
 ```bash
 workon libtak
 cd ~/libtak/backend
 python manage.py migrate
 python manage.py collectstatic --noinput
-python manage.py createsuperuser   # crée DidoEl / Adoum1723 (ou autre)
+python manage.py createsuperuser
 ```
 
-### 1.7 Recharger
-Onglet **Web** → bouton vert **Reload** → visite `https://votre-compte.pythonanywhere.com/api/`.
+Choisissez un identifiant unique et une phrase de passe longue. Ne documentez
+jamais ce mot de passe. Rechargez ensuite la web app et vérifiez
+`https://votre-compte.pythonanywhere.com/api/health/`.
 
----
+### 1.6 Tâches quotidiennes sans Redis
 
-### 1.8 Rapports automatiques par email (sans Celery/Redis)
+Dans **Tasks → Daily task**, configurez par exemple 23:00 :
 
-Le tier gratuit PA n'a pas Redis → Celery Beat ne tourne pas. À la place on utilise la **Scheduled Task** intégrée de PA (1 tâche/jour gratuite) qui appelle une commande Django unique.
+```text
+workon libtak && cd /home/votre-compte/libtak/backend && python manage.py send_scheduled_reports --daily-slot
+```
 
-1. Va sur le dashboard PA → onglet **Tasks**.
-2. Dans **"Daily task"**, choisis l'heure : **23:00**.
-3. Dans la case commande, adapte `votre-compte` à ton identifiant :
-   ```
-   workon libtak && cd /home/votre-compte/libtak/backend && python manage.py send_scheduled_reports
-   ```
-4. Clique **Create**.
+Cette commande envoie les rapports dus, effectue la sauvegarde chiffrée et
+supprime les refresh tokens JWT expirés. Le calendrier conserve ses marqueurs
+d'idempotence.
 
-Cette commande :
-- Envoie le rapport **quotidien** chaque jour
-- Envoie le **hebdomadaire** chaque dimanche
-- Envoie le **mensuel** le 28
-- Envoie le **trimestriel** le 28 mars/juin/sept/déc
-- Envoie l'**annuel** le 31 décembre
-- Envoie l'**alerte stock bas** chaque jour
-- Fait le **backup DB** chaque jour
+Tests manuels :
 
-**Test manuel** (depuis la console Bash) :
 ```bash
-workon libtak
-cd ~/libtak/backend
-python manage.py send_scheduled_reports --dry-run     # voir ce qui tournerait aujourd'hui
-python manage.py send_scheduled_reports --force-all   # forcer tous les rapports maintenant
+python manage.py send_scheduled_reports --dry-run --daily-slot
+python manage.py verify_backup /chemin/vers/une-archive.ltbk
 ```
 
-> ℹ️ Pour que les emails partent vraiment, vérifie que les variables `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL` sont bien définies (étape 1.5) et que `email_recipients` est rempli dans **Settings → Rapports** sur le frontend.
+Testez périodiquement la restauration sur une copie isolée de l'environnement,
+jamais directement sur la base de production.
 
 ---
 
-## 2. Frontend — Vercel (gratuit)
+## 2. Frontend — Vercel
 
-### 2.1 Push du code (déjà fait)
-Le code est sur https://github.com/adoum22/libtak.
+1. Importez le dépôt GitHub dans Vercel.
+2. Définissez **Root Directory** sur `frontend`.
+3. Conservez le preset Vite ; `vercel.json` configure le build, le fallback SPA
+   et les en-têtes de sécurité.
+4. Ajoutez `VITE_API_URL=https://votre-compte.pythonanywhere.com/api` pour les
+   environnements Production et Preview.
+5. Déployez.
 
-### 2.2 Importer sur Vercel
-1. Connecte-toi sur https://vercel.com avec GitHub.
-2. **Add New… → Project** → sélectionne le repo `libtak`.
-3. **Root Directory** : clique **Edit** → choisis `frontend`.
-4. **Framework Preset** : Vite (auto-détecté).
-5. **Build & Output** : laisse les valeurs par défaut (`vercel.json` les écrase au besoin).
+La CSP de `frontend/vercel.json` autorise l'origine API/WebSocket de production
+actuelle. Si le domaine backend change, mettez à jour ses entrées `https://` et
+`wss://` dans `connect-src` avant de redéployer.
 
-### 2.3 Variable d'environnement
-Project Settings → **Environment Variables** :
-| Name | Value | Environments |
-|---|---|---|
-| `VITE_API_URL` | `https://votre-compte.pythonanywhere.com/api` | Production, Preview |
-
-### 2.4 Deploy
-Clique **Deploy** → attend ~2 min → tu obtiens une URL `https://libtak-xxxxx.vercel.app`.
-
-> ⚠️ Une fois l'URL Vercel finale connue, **retourne sur PythonAnywhere** et mets cette URL dans `CORS_ALLOWED_ORIGINS` et `CSRF_TRUSTED_ORIGINS`, puis **Reload** la web app.
+Une fois l'URL Vercel finale connue, recopiez exactement son origine HTTPS dans
+`CORS_ALLOWED_ORIGINS` et `CSRF_TRUSTED_ORIGINS`, puis rechargez Django.
 
 ---
 
-## 3. Sync POS local → cloud
+## 3. Synchronisation POS local → cloud
 
-Sur ton PC Windows, le fichier `backend/sync_to_cloud.py` doit pouvoir joindre PythonAnywhere.
+Dans le fichier privé `backend/.env` du POS :
 
-### 3.1 Variables d'environnement locales
-Dans `backend/.env` (à créer si absent) :
+```dotenv
+CLOUD_API_URL=https://votre-compte.pythonanywhere.com/api
+SYNC_TOKEN=valeur-identique-au-secret-du-cloud
 ```
-SYNC_TOKEN=le-meme-token-que-sur-pythonanywhere
-```
 
-### 3.2 Planifier l'exécution toutes les 30 min (Windows)
-1. Ouvre **Planificateur de tâches** → **Créer une tâche**.
-2. Onglet **Général** : nom = `Libtak Cloud Sync`.
-3. Onglet **Déclencheurs** → Nouveau : Quotidien, Répéter la tâche **toutes les 30 minutes** pour une durée de **24 heures**.
-4. Onglet **Actions** → Nouveau :
-   - Programme : `C:\Users\ADIL\Desktop\libtak\backend\.venv\Scripts\python.exe`
-   - Arguments : `sync_to_cloud.py`
-   - Démarrer dans : `C:\Users\ADIL\Desktop\libtak\backend`
-5. Onglet **Conditions** : décoche "N'exécuter que si l'ordi est sur secteur" si laptop.
+En production, toute URL cloud non loopback doit utiliser HTTPS. Le HTTP reste
+accepté uniquement pour `localhost`, `127.0.0.0/8` et `::1` pendant une
+intégration locale.
 
-### 3.3 Vérifier
-Lance la tâche manuellement → ouvre PythonAnywhere → onglet **Files** → `backend/db.sqlite3` doit grossir, et le dashboard cloud doit montrer les nouvelles ventes.
+Sous Windows, créez une tâche toutes les 30 minutes :
+
+- programme : `C:\chemin\vers\libtak\backend\.venv\Scripts\python.exe` ;
+- arguments : `sync_to_cloud.py` ;
+- démarrer dans : `C:\chemin\vers\libtak\backend`.
 
 ---
 
 ## 4. Smoke test final
 
-1. ✅ `https://votre-compte.pythonanywhere.com/api/` → 200
-2. ✅ `https://libtak.vercel.app` → écran de login
-3. ✅ Login DidoEl / Adoum1723 → dashboard
-4. ✅ Sur ton PC : fais une vente POS local
-5. ⏱️ Lance manuellement `python backend/sync_to_cloud.py`
-6. ✅ Recharge le dashboard Vercel → la vente apparaît
+1. `https://votre-compte.pythonanywhere.com/api/health/` répond 200.
+2. Le frontend Vercel affiche l'écran de connexion sans erreur CSP.
+3. Connectez-vous avec le compte administrateur créé interactivement.
+4. Créez une vente de test locale puis lancez `python sync_to_cloud.py`.
+5. Vérifiez la vente côté cloud et l'absence de données sensibles dans les logs.
+6. Exécutez `python manage.py check --deploy` avec les variables de production.
 
 ---
 
-## 5. Coûts récap
+## 5. Coûts indicatifs
 
-| Service | Plan | Prix |
+| Service | Plan | Prix indicatif |
 |---|---|---|
-| PythonAnywhere | Beginner | **0 €/mois** |
-| Vercel | Hobby | **0 €/mois** |
-| Domaine custom (optionnel) | OVH .com | ~10 €/an |
-| **Total démarrage** | | **0 €** |
+| PythonAnywhere | Beginner | 0 €/mois |
+| Vercel | Hobby | 0 €/mois |
+| Domaine custom | selon registrar | environ 10 €/an |
 
-Upgrade plus tard si besoin :
-- PythonAnywhere Hacker (5 $/mois) → domaine custom + Celery + MySQL
-- Vercel Pro (20 $/mois) → seulement si trafic > 100 GB/mois
+Les offres et quotas peuvent changer ; vérifiez les pages tarifaires des
+fournisseurs avant le déploiement.

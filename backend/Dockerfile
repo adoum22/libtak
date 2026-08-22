@@ -51,6 +51,7 @@ RUN mkdir -p \
         /app/media \
         /app/staticfiles \
         /home/libtak/.libtak/backups \
+        /home/libtak/.libtak/offsite \
     && chown -R libtak:libtak \
         /app/data \
         /app/media \

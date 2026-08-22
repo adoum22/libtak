@@ -6,6 +6,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import F, Sum
 from django.utils import timezone
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from inventory.models import Product, ProductCostLayer, StockMovement
 from .models import Discount, Return, ReturnItem, Sale, SaleItem
@@ -43,7 +44,8 @@ class SaleItemSerializer(serializers.ModelSerializer):
     quantity = serializers.IntegerField(min_value=1)
     returnable_quantity = serializers.SerializerMethodField()
 
-    def get_returnable_quantity(self, obj):
+    @extend_schema_field(serializers.IntegerField)
+    def get_returnable_quantity(self, obj) -> int:
         returned = getattr(obj, 'returned_quantity', None)
         if returned is None:
             returned = (
@@ -70,7 +72,8 @@ class SaleItemDetailSerializer(serializers.ModelSerializer):
     product_barcode = serializers.CharField(source='product.barcode', read_only=True)
     returnable_quantity = serializers.SerializerMethodField()
 
-    def get_returnable_quantity(self, obj):
+    @extend_schema_field(serializers.IntegerField)
+    def get_returnable_quantity(self, obj) -> int:
         returned = getattr(obj, 'returned_quantity', None)
         if returned is None:
             returned = (
@@ -149,6 +152,16 @@ def return_payload_hash(data):
     return hashlib.sha256(encoded).hexdigest()
 
 
+class SaleCreditSummarySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    status = serializers.CharField()
+    paid_amount = serializers.FloatField()
+    adjusted_total = serializers.FloatField()
+    remaining_amount = serializers.FloatField()
+
+
 class SaleSerializer(serializers.ModelSerializer):
     items = SaleItemSerializer(many=True, allow_empty=False)
     user = serializers.StringRelatedField(read_only=True)
@@ -203,7 +216,8 @@ class SaleSerializer(serializers.ModelSerializer):
             'created_at',
         )
 
-    def get_credit(self, obj):
+    @extend_schema_field(SaleCreditSummarySerializer)
+    def get_credit(self, obj) -> dict[str, object] | None:
         credit = getattr(obj, 'credit', None)
         if not credit:
             return None
@@ -213,6 +227,8 @@ class SaleSerializer(serializers.ModelSerializer):
             'customer_name': credit.customer.name,
             'status': credit.status,
             'paid_amount': float(credit.paid_amount),
+            'adjusted_total': float(credit.adjusted_total),
+            'remaining_amount': float(credit.remaining_amount),
         }
 
     def validate(self, attrs):
@@ -722,12 +738,13 @@ class ReturnSerializer(serializers.ModelSerializer):
         model = Return
         fields = (
             'id', 'sale', 'sale_total', 'status', 'status_display',
-            'reason', 'refund_amount', 'refund_method', 'items',
+            'reason', 'refund_amount', 'cash_refund_amount',
+            'refund_method', 'items',
             'processed_by_name', 'idempotency_key',
             'stock_restored_at', 'completed_at', 'created_at', 'updated_at',
         )
         read_only_fields = (
-            'status', 'refund_amount', 'processed_by_name',
+            'status', 'refund_amount', 'cash_refund_amount', 'processed_by_name',
             'stock_restored_at', 'completed_at', 'created_at', 'updated_at',
         )
 
@@ -768,13 +785,6 @@ class ReturnSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'items': 'Au moins un article est requis.',
             })
-        if sale and sale.payment_method == Sale.PaymentMethod.CREDIT:
-            raise serializers.ValidationError({
-                'sale': (
-                    "Les retours sur ventes à crédit ne sont pas pris en charge. "
-                    "Ajustez le crédit directement avec le client."
-                ),
-            })
         aggregated = {}
         for item in items_data:
             key = item['sale_item'].pk
@@ -796,10 +806,12 @@ class ReturnSerializer(serializers.ModelSerializer):
         items_data = validated_data.pop('items')
         user = self.context['request'].user
         idempotency_key = validated_data.get('local_sync_id')
-        payload_hash = return_payload_hash({
-            **validated_data,
-            'items': items_data,
-        })
+        payload_hash = return_payload_hash(
+            getattr(self, 'initial_data', {
+                **validated_data,
+                'items': items_data,
+            })
+        )
 
         with transaction.atomic():
             sale = Sale.objects.select_for_update().get(pk=validated_data['sale'].pk)
@@ -871,7 +883,19 @@ class ReturnSerializer(serializers.ModelSerializer):
                 refund_amount,
                 remaining_refundable,
             ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            validated_data.setdefault('refund_method', sale.payment_method)
+            refund_method_supplied = (
+                'refund_method' in getattr(self, 'initial_data', {})
+            )
+            if (
+                sale.payment_method == Sale.PaymentMethod.CREDIT
+                and not refund_method_supplied
+            ):
+                # Aucun décaissement n'a lieu tant que le retour crédit n'est
+                # pas finalisé; la complétion calculera l'éventuel trop-perçu.
+                validated_data['refund_method'] = Sale.PaymentMethod.CREDIT
+            else:
+                validated_data.setdefault('refund_method', sale.payment_method)
+            validated_data['cash_refund_amount'] = Decimal('0.00')
             validated_data['processed_by'] = user
             validated_data['idempotency_payload_hash'] = (
                 payload_hash if idempotency_key else ''

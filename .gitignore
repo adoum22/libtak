@@ -68,10 +68,13 @@ htmlcov/
 .coverage.*
 coverage.xml
 frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
 
 # Misc
 *.bak
 *.tmp
+.tmp-playwright/
 .tmp-business-e2e-*/
 
 # Local secrets / notes (never push)

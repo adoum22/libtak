@@ -1,4 +1,6 @@
+import asyncio
 import json
+import time
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.contrib.auth import get_user_model
@@ -31,9 +33,26 @@ class StockConsumer(AsyncWebsocketConsumer):
             self.group_name,
             self.channel_name
         )
-        await self.accept()
+        selected_protocol = (
+            'libtak-stock-v1'
+            if 'libtak-stock-v1' in self.scope.get('subprotocols', [])
+            else None
+        )
+        await self.accept(subprotocol=selected_protocol)
+        expires_at = int(self.scope.get('jwt_expires_at') or 0)
+        if expires_at:
+            self.token_expiry_task = asyncio.create_task(
+                self._close_when_token_expires(expires_at),
+            )
+
+    async def _close_when_token_expires(self, expires_at):
+        await asyncio.sleep(max(0, expires_at - time.time()))
+        await self.close(code=4401)
 
     async def disconnect(self, close_code):
+        expiry_task = getattr(self, 'token_expiry_task', None)
+        if expiry_task and expiry_task is not asyncio.current_task():
+            expiry_task.cancel()
         if hasattr(self, 'group_name'):
             await self.channel_layer.group_discard(
                 self.group_name,

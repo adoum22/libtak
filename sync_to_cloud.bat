@@ -8,7 +8,7 @@ setlocal
 set "PROJECT_DIR=%~dp0"
 set "BACKEND_DIR=%PROJECT_DIR%backend"
 set "PYTHON_BIN=python"
-if exist "%PROJECT_DIR%.venv\Scripts\python.exe" set "PYTHON_BIN=%PROJECT_DIR%.venv\Scripts\python.exe"
+if exist "%BACKEND_DIR%\.venv\Scripts\python.exe" set "PYTHON_BIN=%BACKEND_DIR%\.venv\Scripts\python.exe"
 if exist "%BACKEND_DIR%\venv\Scripts\python.exe" set "PYTHON_BIN=%BACKEND_DIR%\venv\Scripts\python.exe"
 cd /d "%BACKEND_DIR%"
 
@@ -19,7 +19,7 @@ echo   %date% %time%
 echo ============================================
 echo.
 
-"%PYTHON_BIN%" sync_to_cloud.py --push
+"%PYTHON_BIN%" manage.py local_backup_sync
 set "SYNC_EXIT_CODE=%ERRORLEVEL%"
 
 echo.

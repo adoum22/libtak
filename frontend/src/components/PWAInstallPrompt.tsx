@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Download, X, Smartphone } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface BeforeInstallPromptEvent extends Event {
     prompt: () => Promise<void>;
@@ -7,6 +8,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 export default function PWAInstallPrompt() {
+    const { t } = useTranslation();
     const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
     const [showPrompt, setShowPrompt] = useState(false);
     const [isInstalled, setIsInstalled] = useState(() =>
@@ -77,7 +79,7 @@ export default function PWAInstallPrompt() {
                     type="button"
                     onClick={handleDismiss}
                     className="absolute top-3 right-3 p-1.5 text-muted hover:text-primary hover:bg-tertiary rounded-lg transition-colors"
-                    aria-label="Fermer la proposition d'installation"
+                    aria-label={t('CloseInstallPrompt')}
                 >
                     <X size={18} aria-hidden="true" />
                 </button>
@@ -89,10 +91,10 @@ export default function PWAInstallPrompt() {
 
                     <div className="flex-1 min-w-0">
                         <h3 id="pwa-install-title" className="font-bold text-lg text-primary mb-1">
-                            Installer l'application
+                            {t('InstallApplication')}
                         </h3>
                         <p className="text-sm text-muted mb-4">
-                            Installez Librairie POS sur votre appareil pour y accéder plus rapidement.
+                            {t('InstallApplicationHint')}
                         </p>
 
                         <div className="flex gap-3">
@@ -102,14 +104,14 @@ export default function PWAInstallPrompt() {
                                 className="btn-primary flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold shadow-lg shadow-accent/20"
                             >
                                 <Download size={18} />
-                                Installer
+                                {t('Install')}
                             </button>
                             <button
                                 type="button"
                                 onClick={handleDismiss}
                                 className="btn-ghost px-4 py-2.5 text-sm"
                             >
-                                Plus tard
+                                {t('Later')}
                             </button>
                         </div>
                     </div>

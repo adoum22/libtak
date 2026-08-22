@@ -1,5 +1,6 @@
-import React, { Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { Suspense, lazy, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ToastProvider } from './components/Toast';
 import Layout from './components/Layout';
 import AdminRoute from './components/AdminRoute';
@@ -30,10 +31,12 @@ const AccessDenied = lazy(() => import('./pages/AccessDenied'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 function PageLoader() {
+  const { t } = useTranslation();
+
   return (
     <div className="min-h-screen flex flex-col gap-3 items-center justify-center text-muted" role="status" aria-live="polite">
       <span className="spinner" aria-hidden="true" />
-      <span>Chargement…</span>
+      <span>{t('Loading')}</span>
     </div>
   );
 }
@@ -45,10 +48,49 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return children;
 }
 
+const routeTitleKeys: Record<string, string> = {
+  '/': 'Dashboard',
+  '/login': 'Login',
+  '/pos': 'POS',
+  '/credit': 'Credit',
+  '/cash-register': 'CashRegister',
+  '/inventory': 'Inventory',
+  '/suppliers': 'Suppliers',
+  '/reports': 'Reports',
+  '/users': 'Users',
+  '/settings': 'Settings',
+  '/returns': 'Returns',
+  '/purchase-orders': 'PurchaseOrders',
+  '/stock-count': 'StockCount',
+  '/zakat': 'Zakat',
+  '/accounting': 'Accounting',
+  '/activity': 'Activity',
+  '/discounts': 'Discounts',
+  '/forbidden': 'AccessDenied',
+};
+
+function RouteContextAnnouncer() {
+  const { pathname } = useLocation();
+  const { t } = useTranslation();
+  const pageName = t(routeTitleKeys[pathname] || 'PageNotFound');
+  const title = `${pageName} — Librairie POS`;
+
+  useEffect(() => {
+    document.title = title;
+  }, [title]);
+
+  return (
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {title}
+    </span>
+  );
+}
+
 function App() {
   return (
     <ToastProvider>
       <BrowserRouter>
+        <RouteContextAnnouncer />
         <NetworkStatusBanner />
         <Suspense fallback={<PageLoader />}>
           <Routes>

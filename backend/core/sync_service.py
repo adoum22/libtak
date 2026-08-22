@@ -354,6 +354,7 @@ class SyncService:
             'sale_sync_id': make_sync_id(origin, 'sale', return_order.sale_id),
             'reason': return_order.reason,
             'refund_amount': str(return_order.refund_amount),
+            'cash_refund_amount': str(return_order.cash_refund_amount),
             'refund_method': return_order.refund_method,
             'idempotency_payload_hash': return_order.idempotency_payload_hash,
             'status': return_order.status,
@@ -535,14 +536,28 @@ class SyncService:
                     'credit_sale_local_id': str(payment.credit_sale_id),
                     'amount': str(payment.amount),
                     'note': payment.note or '',
+                    'operation_id': payment.operation_id,
+                    'operation_payload_hash': payment.operation_payload_hash,
+                    'status': payment.status,
                     'created_by_username': (
                         payment.created_by.username
                         if payment.created_by_id else None
                     ),
+                    'reversed_by_username': (
+                        payment.reversed_by.username
+                        if payment.reversed_by_id else None
+                    ),
+                    'reversed_at': (
+                        payment.reversed_at.isoformat()
+                        if payment.reversed_at else None
+                    ),
+                    'reversal_reason': payment.reversal_reason,
+                    'reversal_operation_id': payment.reversal_operation_id,
+                    'reversal_payload_hash': payment.reversal_payload_hash,
                     'created_at': payment.created_at.isoformat(),
                 }
                 for payment in CreditPayment.objects.select_related(
-                    'created_by',
+                    'created_by', 'reversed_by',
                 ).order_by('id')
             ]
             response = self.http_client.post(

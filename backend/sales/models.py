@@ -224,6 +224,16 @@ class Return(models.Model):
     )
     reason = models.TextField(_('Reason'))
     refund_amount = models.DecimalField(_('Refund Amount'), max_digits=10, decimal_places=2, default=0)
+    cash_refund_amount = models.DecimalField(
+        _('Cash Refund Amount'),
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        help_text=_(
+            'Montant réellement rendu en espèces. Pour un crédit, la part '
+            'qui annule seulement la dette reste exclue.'
+        ),
+    )
     refund_method = models.CharField(
         _('Refund Method'),
         max_length=10,
@@ -267,6 +277,13 @@ class Return(models.Model):
             models.CheckConstraint(
                 condition=models.Q(refund_amount__gte=0),
                 name='return_refund_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(cash_refund_amount__gte=0)
+                    & models.Q(cash_refund_amount__lte=models.F('refund_amount'))
+                ),
+                name='return_cash_refund_valid',
             ),
         ]
 

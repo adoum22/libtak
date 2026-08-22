@@ -21,9 +21,38 @@ class CreditSaleAdmin(admin.ModelAdmin):
         'created_at', 'updated_at',
     )
 
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(CreditPayment)
 class CreditPaymentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'credit_sale', 'amount', 'created_by', 'created_at')
+    list_display = (
+        'id', 'credit_sale', 'amount', 'status', 'created_by', 'created_at',
+    )
+    list_filter = ('status',)
     search_fields = ('credit_sale__customer__name',)
-    readonly_fields = ('credit_sale', 'amount', 'note', 'created_by', 'created_at')
+    readonly_fields = (
+        'credit_sale',
+        'amount',
+        'note',
+        'created_by',
+        'operation_id',
+        'operation_payload_hash',
+        'status',
+        'reversed_by',
+        'reversed_at',
+        'reversal_reason',
+        'reversal_operation_id',
+        'reversal_payload_hash',
+        'created_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

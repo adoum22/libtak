@@ -26,12 +26,14 @@ describe('authentication session storage', () => {
     window.addEventListener('auth:changed', listener);
 
     auth.setAuthSession('access', 'refresh', 'CASHIER');
+    sessionStorage.setItem('libtak.posCart', JSON.stringify([{ product: { id: 1 }, quantity: 1 }]));
     expect(auth.hasAuthSession()).toBe(true);
     expect(auth.getStoredUserRole()).toBe('CASHIER');
 
     auth.clearAuthSession();
     expect(auth.hasAuthSession()).toBe(false);
     expect(auth.getStoredUserRole()).toBeNull();
+    expect(sessionStorage.getItem('libtak.posCart')).toBeNull();
     expect(listener).toHaveBeenCalledTimes(2);
     window.removeEventListener('auth:changed', listener);
   });

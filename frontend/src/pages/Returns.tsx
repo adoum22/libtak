@@ -1,8 +1,19 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import Pagination from '../components/Pagination';
+import useCurrency from '../hooks/useCurrency';
+import {
+    clearOperationAttempt,
+    getOrCreateOperationAttempt,
+    loadOperationAttempt,
+    operationFingerprint,
+    persistOperationAttempt,
+    type OperationAttempt,
+} from '../utils/operationAttempt';
+import { RETURN_CREATION_ATTEMPT_STORAGE_KEY } from '../utils/privateSessionStorage';
 import {
     RotateCcw,
     Search,
@@ -16,7 +27,7 @@ import {
 interface Sale {
     id: number;
     total_ttc: number;
-    payment_method: string;
+    payment_method: PaymentMethod;
     created_at: string;
     items: SaleItem[];
     user_name?: string;
@@ -39,6 +50,7 @@ interface Return {
     status_display: string;
     reason: string;
     refund_amount: number;
+    cash_refund_amount: number;
     refund_method: PaymentMethod;
     items: ReturnItem[];
     processed_by_name: string;
@@ -54,13 +66,18 @@ interface ReturnItem {
     restock: boolean;
 }
 
-type PaymentMethod = 'CASH' | 'CARD' | 'OTHER';
+type PaymentMethod = 'CASH' | 'CARD' | 'CREDIT' | 'OTHER';
 
-const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
-    CASH: 'Espèces',
-    CARD: 'Carte',
-    OTHER: 'Autre',
-};
+interface CreateReturnPayload {
+    sale: number;
+    reason: string;
+    refund_method: PaymentMethod;
+    items: {
+        sale_item: number;
+        quantity: number;
+        restock: boolean;
+    }[];
+}
 
 interface ReturnsPage {
     count: number;
@@ -70,6 +87,20 @@ interface ReturnsPage {
 const PAGE_SIZE = 50;
 
 export default function Returns() {
+    const { t, i18n } = useTranslation();
+    const currency = useCurrency();
+    const paymentMethodLabels: Record<PaymentMethod, string> = {
+        CASH: t('Cash'),
+        CARD: t('Card'),
+        CREDIT: t('Credit'),
+        OTHER: t('Other'),
+    };
+    const returnStatusLabel = (status: string, fallback: string) => ({
+        PENDING: t('Pending'),
+        APPROVED: t('Approved'),
+        REJECTED: t('Rejected'),
+        COMPLETED: t('Completed'),
+    }[status] || fallback);
     const queryClient = useQueryClient();
     const toast = useToast();
 
@@ -81,7 +112,9 @@ export default function Returns() {
     const [showCreateForm, setShowCreateForm] = useState(false);
     const [expandedReturn, setExpandedReturn] = useState<number | null>(null);
     const [page, setPage] = useState(1);
-    const [idempotencyKey, setIdempotencyKey] = useState(() => globalThis.crypto.randomUUID());
+    const [returnAttempt, setReturnAttempt] = useState<OperationAttempt | null>(() => (
+        loadOperationAttempt(RETURN_CREATION_ATTEMPT_STORAGE_KEY)
+    ));
 
     // Fetch returns list
     const { data: returnsPage, isLoading: loadingReturns, isError: returnsError, refetch: refetchReturns } = useQuery<ReturnsPage>({
@@ -112,29 +145,25 @@ export default function Returns() {
     const selectSale = (sale: Sale) => {
         setSelectedSale(sale);
         setReturnItems([]);
-        setRefundMethod(
-            sale.payment_method === 'CARD' || sale.payment_method === 'OTHER'
-                ? sale.payment_method
-                : 'CASH'
-        );
+        setRefundMethod(sale.payment_method);
         setSearchTerm('');
-        setIdempotencyKey(globalThis.crypto.randomUUID());
     };
 
     // Create return mutation
     const createReturn = useMutation({
-        mutationFn: (data: { sale: number; reason: string; refund_method: PaymentMethod; items: { sale_item: number; quantity: number; restock: boolean }[]; idempotency_key: string }) =>
+        mutationFn: (data: CreateReturnPayload & { idempotency_key: string }) =>
             client.post('/sales/returns/', data),
         onSuccess: () => {
-            toast.success("Demande de retour créée. Le stock sera modifié après l'approbation.");
+            toast.success(t('ReturnCreated'));
             queryClient.invalidateQueries({ queryKey: ['returns'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['recentSales'] });
-            setIdempotencyKey(globalThis.crypto.randomUUID());
+            clearOperationAttempt(RETURN_CREATION_ATTEMPT_STORAGE_KEY);
+            setReturnAttempt(null);
             resetForm();
         },
         onError: (error: unknown) => {
-            toast.error(getApiErrorMessage(error, 'Erreur lors de la creation du retour'));
+            toast.error(getApiErrorMessage(error, t('ReturnCreateFailed')));
         }
     });
 
@@ -142,13 +171,13 @@ export default function Returns() {
     const approveReturn = useMutation({
         mutationFn: (id: number) => client.post(`/sales/returns/${id}/approve/`),
         onSuccess: () => {
-            toast.success('Retour approuvé');
+            toast.success(t('ReturnApproved'));
             queryClient.invalidateQueries({ queryKey: ['returns'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
             queryClient.invalidateQueries({ queryKey: ['stock'] });
         },
         onError: (error: unknown) => {
-            toast.error(getApiErrorMessage(error, "L'approbation du retour a échoué"));
+            toast.error(getApiErrorMessage(error, t('ReturnApprovalFailed')));
         },
     });
 
@@ -156,11 +185,11 @@ export default function Returns() {
     const rejectReturn = useMutation({
         mutationFn: (id: number) => client.post(`/sales/returns/${id}/reject/`),
         onSuccess: () => {
-            toast.success('Retour rejeté');
+            toast.success(t('ReturnRejected'));
             queryClient.invalidateQueries({ queryKey: ['returns'] });
         },
         onError: (error: unknown) => {
-            toast.error(getApiErrorMessage(error, 'Le rejet du retour a échoué'));
+            toast.error(getApiErrorMessage(error, t('ReturnRejectionFailed')));
         },
     });
 
@@ -168,15 +197,17 @@ export default function Returns() {
     const completeReturn = useMutation({
         mutationFn: (id: number) => client.post(`/sales/returns/${id}/complete/`),
         onSuccess: () => {
-            toast.success('Retour terminé');
+            toast.success(t('ReturnCompleted'));
             queryClient.invalidateQueries({ queryKey: ['returns'] });
             queryClient.invalidateQueries({ queryKey: ['acc-month'] });
             queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
             queryClient.invalidateQueries({ queryKey: ['acc-period'] });
             queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
+            queryClient.invalidateQueries({ queryKey: ['credits'] });
+            queryClient.invalidateQueries({ queryKey: ['credit-detail'] });
         },
         onError: (error: unknown) => {
-            toast.error(getApiErrorMessage(error, 'Le remboursement du retour a échoué'));
+            toast.error(getApiErrorMessage(error, t('ReturnRefundFailed')));
         },
     });
 
@@ -187,7 +218,6 @@ export default function Returns() {
         setRefundMethod('CASH');
         setSearchTerm('');
         setShowCreateForm(false);
-        setIdempotencyKey(globalThis.crypto.randomUUID());
     };
 
     const toggleItem = (saleItemId: number, maxQty: number) => {
@@ -197,7 +227,6 @@ export default function Returns() {
         } else {
             setReturnItems([...returnItems, { saleItemId, quantity: maxQty, restock: true }]);
         }
-        setIdempotencyKey(globalThis.crypto.randomUUID());
     };
 
     const updateItemQty = (saleItemId: number, qty: number, maxQty: number) => {
@@ -207,32 +236,37 @@ export default function Returns() {
                 ? { ...i, quantity: safeQty }
                 : i
         ));
-        setIdempotencyKey(globalThis.crypto.randomUUID());
     };
 
     const updateItemRestock = (saleItemId: number, restock: boolean) => {
         setReturnItems(returnItems.map(i =>
             i.saleItemId === saleItemId ? { ...i, restock } : i
         ));
-        setIdempotencyKey(globalThis.crypto.randomUUID());
     };
 
     const handleSubmitReturn = () => {
         if (!selectedSale || returnItems.length === 0 || !reason.trim()) {
-            toast.error('Veuillez sélectionner des articles et indiquer une raison');
+            toast.error(t('SelectReturnItemsReason'));
             return;
         }
-        createReturn.mutate({
+        const payload: CreateReturnPayload = {
             sale: selectedSale.id,
             reason,
-            refund_method: refundMethod,
+            refund_method: selectedSale.payment_method === 'CREDIT' ? 'CREDIT' : refundMethod,
             items: returnItems.map(i => ({
                 sale_item: i.saleItemId,
                 quantity: i.quantity,
                 restock: i.restock,
             })),
-            idempotency_key: idempotencyKey,
-        });
+        };
+        const fingerprint = operationFingerprint(['return-create', payload]);
+        const attempt = getOrCreateOperationAttempt(
+            fingerprint,
+            loadOperationAttempt(RETURN_CREATION_ATTEMPT_STORAGE_KEY) ?? returnAttempt,
+        );
+        persistOperationAttempt(RETURN_CREATION_ATTEMPT_STORAGE_KEY, attempt);
+        setReturnAttempt(attempt);
+        createReturn.mutate({ ...payload, idempotency_key: attempt.key });
     };
 
     const getStatusBadge = (status: string) => {
@@ -244,6 +278,7 @@ export default function Returns() {
         };
         return styles[status] || 'badge-secondary';
     };
+    const isCreditSale = selectedSale?.payment_method === 'CREDIT';
 
     return (
         <div className="space-y-6 animate-fadeIn">
@@ -252,9 +287,9 @@ export default function Returns() {
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-3">
                         <RotateCcw className="text-accent" />
-                        Gestion des Retours
+                        {t('Returns')}
                     </h1>
-                    <p className="text-muted mt-1">Gérez les retours produits et remboursements</p>
+                    <p className="text-muted mt-1">{t('ReturnsSubtitle')}</p>
                 </div>
                 <button
                     type="button"
@@ -264,28 +299,28 @@ export default function Returns() {
                     aria-controls="return-create-form"
                 >
                     <RotateCcw size={18} />
-                    Nouveau Retour
+                    {t('NewReturn')}
                 </button>
             </div>
 
             {/* Create Return Form */}
             {showCreateForm && (
                 <div id="return-create-form" className="card p-6 border-accent border-2">
-                    <h2 className="text-xl font-bold mb-4">Créer un Retour</h2>
+                    <h2 className="text-xl font-bold mb-4">{t('CreateReturn')}</h2>
 
                     {!selectedSale ? (
                         <>
                             {/* Search & Select Sale */}
                             <div className="mb-4">
                                 <label htmlFor="return-sale-search" className="block text-sm font-medium mb-2">
-                                    Rechercher une vente (par ID ou produit)
+                                    {t('SearchSaleForReturn')}
                                 </label>
                                 <div className="relative">
                                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={18} />
                                     <input
                                         id="return-sale-search"
                                         type="text"
-                                        placeholder="N° de vente ou nom du produit..."
+                                        placeholder={t('SaleOrProductPlaceholder')}
                                         className="input pl-10 w-full"
                                         value={searchTerm}
                                         onChange={(e) => setSearchTerm(e.target.value)}
@@ -296,14 +331,14 @@ export default function Returns() {
                             {/* Sales List */}
                             <div className="space-y-2 max-h-64 overflow-auto">
                                 <p className="text-sm text-muted mb-2">
-                                    {searchTerm ? `Résultats pour "${searchTerm}"` : 'Ventes récentes'}
+                                    {searchTerm ? t('SearchResultsFor', { search: searchTerm }) : t('RecentSales')}
                                 </p>
                                 {salesLoading ? (
-                                    <p className="text-center text-muted py-4" role="status">Chargement…</p>
+                                    <p className="text-center text-muted py-4" role="status">{t('Loading')}</p>
                                 ) : salesError ? (
-                                    <div className="network-error-state" role="alert"><p>Les ventes ne peuvent pas être recherchées.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchSales()}>Réessayer</button></div>
+                                    <div className="network-error-state" role="alert"><p>{t('SalesSearchFailed')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchSales()}>{t('Retry')}</button></div>
                                 ) : filteredSales.length === 0 ? (
-                                    <p className="text-center text-muted py-4">Aucune vente trouvée</p>
+                                    <p className="text-center text-muted py-4">{t('NoSalesFound')}</p>
                                 ) : (
                                     filteredSales.map(sale => (
                                         <button
@@ -314,17 +349,17 @@ export default function Returns() {
                                         >
                                             <div className="flex justify-between items-center">
                                                 <div>
-                                                    <span className="font-bold">Vente #{sale.id}</span>
+                                                    <span className="font-bold">{t('SaleNumber', { id: sale.id })}</span>
                                                     <div className="text-xs text-muted flex items-center gap-2 mt-1">
                                                         <Calendar size={12} />
-                                                        {new Date(sale.created_at).toLocaleString('fr-FR')}
+                                                        {new Date(sale.created_at).toLocaleString(i18n.language)}
                                                     </div>
                                                 </div>
-                                                <span className="font-bold text-accent">{sale.total_ttc.toFixed(2)} DH</span>
+                                                <span className="font-bold text-accent">{currency.format(sale.total_ttc)}</span>
                                             </div>
                                             <div className="mt-2 text-sm text-muted">
                                                 {sale.items?.slice(0, 3).map(item => item.product_name).join(', ')}
-                                                {sale.items?.length > 3 && ` +${sale.items.length - 3} autres`}
+                                                {sale.items?.length > 3 && t('MoreItems', { count: sale.items.length - 3 })}
                                             </div>
                                         </button>
                                     ))
@@ -337,26 +372,29 @@ export default function Returns() {
                             <div className="space-y-4">
                                 <div className="p-4 bg-tertiary rounded-lg flex justify-between items-center">
                                     <div>
-                                        <span className="font-bold">Vente #{selectedSale.id}</span>
+                                        <span className="font-bold">{t('SaleNumber', { id: selectedSale.id })}</span>
                                         <p className="text-sm text-muted">
-                                            {new Date(selectedSale.created_at).toLocaleString('fr-FR')}
+                                            {new Date(selectedSale.created_at).toLocaleString(i18n.language)}
+                                        </p>
+                                        <p className="text-sm text-muted">
+                                            {t('PaymentMethod')}: {paymentMethodLabels[selectedSale.payment_method]}
                                         </p>
                                     </div>
                                     <div className="flex items-center gap-4">
-                                        <span className="text-accent font-bold">{selectedSale.total_ttc.toFixed(2)} DH</span>
+                                        <span className="text-accent font-bold">{currency.format(selectedSale.total_ttc)}</span>
                                         <button
                                             type="button"
                                             onClick={() => setSelectedSale(null)}
                                             className="btn-ghost text-sm"
                                         >
-                                            Changer
+                                            {t('ChangeCustomer')}
                                         </button>
                                     </div>
                                 </div>
 
                                 {/* Items Selection */}
                                 <div>
-                                    <h3 className="font-medium mb-2">Sélectionnez les articles à retourner :</h3>
+                                    <h3 className="font-medium mb-2">{t('SelectItemsToReturn')}</h3>
                                     <div className="space-y-2">
                                         {selectedSale.items?.map((item) => {
                                             const selected = returnItems.find(i => i.saleItemId === item.id);
@@ -376,18 +414,18 @@ export default function Returns() {
                                                                 checked={Boolean(selected)}
                                                                 disabled={returnableQuantity === 0}
                                                                 onChange={() => toggleItem(item.id, returnableQuantity)}
-                                                                aria-label={`Retourner ${item.product_name}`}
+                                                                aria-label={t('ReturnNamedProduct', { product: item.product_name })}
                                                             />
                                                             <span className="font-medium">{item.product_name}</span>
                                                         </div>
                                                         <span className="text-sm text-muted">
-                                                            Vendue : {item.quantity} · encore retournable : {returnableQuantity}
+                                                            {t('SoldAndReturnable', { sold: item.quantity, returnable: returnableQuantity })}
                                                         </span>
                                                     </div>
                                                     {selected && (
                                                         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
                                                             <div className="flex items-center gap-2">
-                                                                <label htmlFor={`return-quantity-${item.id}`} className="text-sm">Quantité à retourner :</label>
+                                                                <label htmlFor={`return-quantity-${item.id}`} className="text-sm">{t('QuantityToReturn')}</label>
                                                                 <input
                                                                     id={`return-quantity-${item.id}`}
                                                                     type="number"
@@ -405,7 +443,7 @@ export default function Returns() {
                                                                     checked={selected.restock}
                                                                     onChange={(e) => updateItemRestock(item.id, e.target.checked)}
                                                                 />
-                                                                Remettre dans le stock vendable
+                                                                {t('RestockSellable')}
                                                             </label>
                                                         </div>
                                                     )}
@@ -418,43 +456,47 @@ export default function Returns() {
                                 {/* Refund method */}
                                 <div>
                                     <label htmlFor="return-refund-method" className="block text-sm font-medium mb-2">
-                                        Mode de remboursement
+                                        {t('RefundMethod')}
                                     </label>
                                     <select
                                         id="return-refund-method"
                                         value={refundMethod}
-                                        onChange={(e) => {
-                                            setRefundMethod(e.target.value as PaymentMethod);
-                                            setIdempotencyKey(globalThis.crypto.randomUUID());
-                                        }}
+                                        onChange={(e) => setRefundMethod(e.target.value as PaymentMethod)}
+                                        disabled={isCreditSale}
+                                        aria-describedby={isCreditSale ? 'credit-return-refund-notice' : 'return-refund-method-hint'}
                                         className="input w-full"
                                     >
-                                        {Object.entries(PAYMENT_METHOD_LABELS).map(([value, label]) => (
+                                        {Object.entries(paymentMethodLabels).map(([value, label]) => (
                                             <option key={value} value={value}>{label}</option>
                                         ))}
                                     </select>
-                                    <p className="mt-1 text-xs text-muted">
-                                        Par défaut, le mode de paiement de la vente est repris.
-                                    </p>
+                                    {isCreditSale ? (
+                                        <p id="credit-return-refund-notice" className="mt-2 rounded-lg border border-info/30 bg-info-light p-3 text-sm">
+                                            {t('CreditSaleRefundNotice')}
+                                        </p>
+                                    ) : (
+                                        <p id="return-refund-method-hint" className="mt-1 text-xs text-muted">
+                                            {t('RefundMethodDefaultHint')}
+                                        </p>
+                                    )}
                                 </div>
 
                                 {/* Reason */}
                                 <div>
-                                    <label htmlFor="return-reason" className="block text-sm font-medium mb-2">Raison du retour *</label>
+                                    <label htmlFor="return-reason" className="block text-sm font-medium mb-2">{t('ReturnReason')} *</label>
                                     <textarea
                                         id="return-reason"
                                         value={reason}
-                                        onChange={(e) => { setReason(e.target.value); setIdempotencyKey(globalThis.crypto.randomUUID()); }}
-                                        placeholder="Produit défectueux, erreur de commande..."
+                                        onChange={(e) => setReason(e.target.value)}
+                                        maxLength={2000}
+                                        placeholder={t('ReturnReasonPlaceholder')}
                                         className="input w-full h-24 resize-none"
                                     />
                                 </div>
 
                                 {/* Info */}
                                 <div className="p-3 bg-info-light rounded-lg border border-info/20 text-sm">
-                                    <strong>Note :</strong> la création enregistre une demande en attente. Le stock des articles
-                                    cochés « vendables » ne sera remis à jour qu'après approbation. Décochez cette option pour
-                                    un article endommagé ou invendable.
+                                    <strong>{t('Notes')}:</strong> {t('ReturnWorkflowNotice')}
                                 </div>
 
                                 {/* Actions */}
@@ -465,10 +507,10 @@ export default function Returns() {
                                         disabled={returnItems.length === 0 || !reason.trim() || createReturn.isPending}
                                         className="btn-primary flex-1"
                                     >
-                                        {createReturn.isPending ? 'Création...' : 'Créer le Retour'}
+                                        {createReturn.isPending ? t('Creating') : t('CreateReturn')}
                                     </button>
                                     <button type="button" onClick={resetForm} className="btn-secondary">
-                                        Annuler
+                                        {t('Cancel')}
                                     </button>
                                 </div>
                             </div>
@@ -480,24 +522,24 @@ export default function Returns() {
             {/* Returns List */}
             <div className="card">
                 <div className="card-header">
-                    <h2 className="font-semibold">Historique des Retours</h2>
+                    <h2 className="font-semibold">{t('ReturnHistory')}</h2>
                 </div>
                 <div className="divide-y">
                     {loadingReturns ? (
-                        <div className="p-8 text-center text-muted" role="status">Chargement…</div>
+                        <div className="p-8 text-center text-muted" role="status">{t('Loading')}</div>
                     ) : returnsError ? (
-                        <div className="network-error-state m-4" role="alert"><p>Les retours n’ont pas pu être chargés.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchReturns()}>Réessayer</button></div>
+                        <div className="network-error-state m-4" role="alert"><p>{t('ReturnsLoadFailed')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchReturns()}>{t('Retry')}</button></div>
                     ) : returns.length === 0 ? (
                         <div className="p-8 text-center text-muted">
                             <RotateCcw size={48} className="mx-auto mb-4 opacity-50" />
-                            <p>Aucun retour enregistré</p>
+                            <p>{t('NoReturns')}</p>
                         </div>
                     ) : (
                         returns.map((ret) => (
                             <div key={ret.id} className="p-4">
                                 <button
                                     type="button"
-                                    className="w-full flex items-center justify-between text-left bg-transparent p-0"
+                                    className="w-full flex flex-col gap-3 text-left bg-transparent p-0 sm:flex-row sm:items-center sm:justify-between"
                                     onClick={() => setExpandedReturn(expandedReturn === ret.id ? null : ret.id)}
                                     aria-expanded={expandedReturn === ret.id}
                                     aria-controls={`return-details-${ret.id}`}
@@ -507,17 +549,23 @@ export default function Returns() {
                                             <RotateCcw size={20} className="text-muted" />
                                         </div>
                                         <div>
-                                            <p className="font-medium">Retour #{ret.id} - Vente #{ret.sale}</p>
+                                            <p className="font-medium">{t('ReturnAndSaleNumber', { returnId: ret.id, saleId: ret.sale })}</p>
                                             <p className="text-sm text-muted">
-                                                {new Date(ret.created_at).toLocaleString('fr-FR')}
+                                                {new Date(ret.created_at).toLocaleString(i18n.language)}
                                             </p>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-4">
+                                    <div className="flex w-full items-center justify-between gap-4 sm:w-auto sm:justify-end">
                                         <span className={`badge ${getStatusBadge(ret.status)}`}>
-                                            {ret.status_display || ret.status}
+                                            {returnStatusLabel(ret.status, ret.status_display || ret.status)}
                                         </span>
-                                        <span className="font-bold text-lg">{ret.refund_amount?.toFixed(2) || '0.00'} DH</span>
+                                        <div className="text-right">
+                                            <span className="block text-xs text-muted">{t('ReturnValue')}</span>
+                                            <span className="block font-bold text-lg">{currency.format(ret.refund_amount)}</span>
+                                            <span className="block text-xs text-muted">
+                                                {t('CashRefundAmount')}: {currency.format(ret.cash_refund_amount ?? 0)}
+                                            </span>
+                                        </div>
                                         {expandedReturn === ret.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                                     </div>
                                 </button>
@@ -526,22 +574,33 @@ export default function Returns() {
                                 {expandedReturn === ret.id && (
                                     <div id={`return-details-${ret.id}`} className="mt-4 pl-14 space-y-3">
                                         <div className="p-3 bg-tertiary/50 rounded-lg">
-                                            <p className="text-sm font-medium mb-1">Raison:</p>
+                                            <p className="text-sm font-medium mb-1">{t('Reason')}:</p>
                                             <p className="text-muted">{ret.reason}</p>
                                             <p className="text-sm text-muted mt-2">
-                                                Remboursement : {PAYMENT_METHOD_LABELS[ret.refund_method] ?? ret.refund_method}
+                                                {t('RefundMethod')}: {paymentMethodLabels[ret.refund_method] ?? ret.refund_method}
                                             </p>
                                         </div>
 
+                                        <dl className="grid gap-3 sm:grid-cols-2">
+                                            <div className="rounded-lg border border-border p-3">
+                                                <dt className="text-xs text-muted">{t('ReturnValue')}</dt>
+                                                <dd className="mt-1 font-semibold">{currency.format(ret.refund_amount)}</dd>
+                                            </div>
+                                            <div className="rounded-lg border border-border p-3">
+                                                <dt className="text-xs text-muted">{t('CashRefundAmount')}</dt>
+                                                <dd className="mt-1 font-semibold">{currency.format(ret.cash_refund_amount ?? 0)}</dd>
+                                            </div>
+                                        </dl>
+
                                         <div className="space-y-1">
-                                            <p className="text-sm font-medium">Articles retournés:</p>
+                                            <p className="text-sm font-medium">{t('ReturnedItems')}</p>
                                             {ret.items?.map((item) => (
                                                 <div key={item.id} className="flex justify-between text-sm">
                                                     <span>
                                                         {item.quantity}x {item.product_name}
-                                                        {' · '}{item.restock ? 'retour au stock' : 'hors stock (endommagé/invendable)'}
+                                                        {' · '}{item.restock ? t('Restocked') : t('NotRestocked')}
                                                     </span>
-                                                    <span className="text-muted">{item.unit_price?.toFixed(2)} DH/u</span>
+                                                    <span className="text-muted">{currency.format(item.unit_price)}/u</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -552,26 +611,26 @@ export default function Returns() {
                                                 <button
                                                     type="button"
                                                     onClick={() => {
-                                                        if (globalThis.confirm("Approuver ce retour et appliquer les mouvements de stock indiqués ?")) {
+                                                        if (globalThis.confirm(t('ApproveReturnConfirmation'))) {
                                                             approveReturn.mutate(ret.id);
                                                         }
                                                     }}
                                                     disabled={approveReturn.isPending}
                                                     className="btn-success flex items-center gap-1 text-sm"
                                                 >
-                                                    <Check size={16} /> Approuver
+                                                    <Check size={16} /> {t('Approve')}
                                                 </button>
                                                 <button
                                                     type="button"
                                                     onClick={() => {
-                                                        if (globalThis.confirm('Rejeter définitivement cette demande de retour ?')) {
+                                                        if (globalThis.confirm(t('RejectReturnConfirmation'))) {
                                                             rejectReturn.mutate(ret.id);
                                                         }
                                                     }}
                                                     disabled={rejectReturn.isPending}
                                                     className="btn-danger flex items-center gap-1 text-sm"
                                                 >
-                                                    <X size={16} /> Rejeter
+                                                    <X size={16} /> {t('Reject')}
                                                 </button>
                                             </div>
                                         )}
@@ -579,14 +638,14 @@ export default function Returns() {
                                             <button
                                                 type="button"
                                                 onClick={() => {
-                                                    if (globalThis.confirm('Confirmer que le remboursement a réellement été effectué ?')) {
+                                                    if (globalThis.confirm(t('CompleteReturnConfirmation'))) {
                                                         completeReturn.mutate(ret.id);
                                                     }
                                                 }}
                                                 disabled={completeReturn.isPending}
                                                 className="btn-primary flex items-center gap-1 text-sm"
                                             >
-                                                <Check size={16} /> Marquer Terminé
+                                                <Check size={16} /> {t('MarkCompleted')}
                                             </button>
                                         )}
                                     </div>

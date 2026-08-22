@@ -4,9 +4,40 @@ import logging
 from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
-from .models import Product, ProductCostLayer, Supplier
+from .models import Product, ProductCostLayer, StockMovement, Supplier
 
 logger = logging.getLogger(__name__)
+
+
+@receiver(post_save, sender=StockMovement)
+def broadcast_stock_movement(sender, instance, created, **kwargs):
+    """Publish every audited stock change after its DB transaction commits."""
+    if not created:
+        return
+
+    def publish():
+        try:
+            from asgiref.sync import async_to_sync
+            from channels.layers import get_channel_layer
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    'stock_updates',
+                    {
+                        'type': 'stock_update',
+                        'message': {
+                            'product_id': instance.product_id,
+                            'new_stock': instance.stock_after,
+                            'movement_id': instance.pk,
+                        },
+                    },
+                )
+        except Exception:
+            # A transient realtime failure must never roll back stock.
+            logger.exception('Unable to broadcast stock movement %s', instance.pk)
+
+    transaction.on_commit(publish, robust=True)
 
 
 @receiver(pre_save, sender=Product)

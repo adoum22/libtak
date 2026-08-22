@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { RefreshCw, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 type ApplyUpdate = () => void | Promise<void>;
 
 export default function PWAUpdatePrompt() {
+  const { t } = useTranslation();
   const [applyUpdate, setApplyUpdate] = useState<ApplyUpdate | null>(null);
   const [updating, setUpdating] = useState(false);
 
@@ -26,7 +28,7 @@ export default function PWAUpdatePrompt() {
     >
       <RefreshCw className="shrink-0 text-accent" aria-hidden="true" />
       <p className="min-w-0 flex-1 text-sm">
-        Une nouvelle version est prête. Enregistrez votre travail puis actualisez l’application.
+        {t('UpdateAvailable')}
       </p>
       <button
         type="button"
@@ -42,12 +44,12 @@ export default function PWAUpdatePrompt() {
           }
         }}
       >
-        {updating ? 'Mise à jour…' : 'Actualiser'}
+        {updating ? t('Updating') : t('Refresh')}
       </button>
       <button
         type="button"
         className="btn-ghost shrink-0 p-2"
-        aria-label="Reporter la mise à jour"
+        aria-label={t('DismissUpdate')}
         onClick={() => setApplyUpdate(null)}
       >
         <X size={18} />

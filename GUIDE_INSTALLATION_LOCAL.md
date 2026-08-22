@@ -1,156 +1,69 @@
-# 📋 Guide d'Installation - PC Librairie
+# Installation locale LibTak — Windows
 
-## Architecture
+Ce guide complète les installateurs Linux. Le POS Windows final s’ouvre sur
+**http://127.0.0.1:5173** ; le port 8000 est réservé à l’API ASGI.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│   PC Librairie (LOCAL)              Cloud (PythonAnywhere)      │
-│   ──────────────────────            ────────────────────────    │
-│   ✅ Fonctionne SANS internet       ✅ Accessible partout       │
-│   ✅ Ventes instantanées            ✅ Rapports automatiques    │
-│   ✅ Sync toutes les 30 min         ✅ Backup quotidien         │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Prérequis
 
----
+- Python 3.10+ ;
+- Node.js officiel 20.19+ ou 22.12+ avec npm ;
+- le dossier complet du projet dans un chemin détenu par votre compte.
 
-## 📥 Étape 1: Copier l'application
+## Première installation
 
-1. Copiez le dossier `D:\Application Librairie\App` sur le PC de la librairie
-2. Assurez-vous que Python est installé (version 3.10+)
+Dans PowerShell, depuis la racine du projet :
 
----
-
-## 📦 Étape 2: Installer les dépendances
-
-Ouvrez une invite de commandes (cmd) et exécutez:
-
-```cmd
-cd "D:\Application Librairie\App\backend"
-pip install -r requirements.txt
+```powershell
+py -3 -m venv backend\.venv
+backend\.venv\Scripts\python.exe -m pip install --upgrade pip wheel
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+start_local_server.bat
 ```
 
----
+Au premier démarrage, le script crée les clés locales privées, applique les
+migrations, demande interactivement le premier administrateur si nécessaire,
+exécute `npm ci`, construit le frontend et démarre :
 
-## 🗄️ Étape 3: Initialiser la base de données locale
+- Daphne/ASGI sur `http://127.0.0.1:8000/api/` ;
+- le frontend sur **http://127.0.0.1:5173** ;
+- les tâches de sauvegarde/rapports et la synchronisation configurée.
 
-```cmd
-cd "D:\Application Librairie\App\backend"
-python manage.py migrate
-python manage.py createsuperuser
+Ne documentez ni identifiant, ni mot de passe. Le fichier `backend/.env` ne
+doit jamais être envoyé ou ajouté à Git.
+
+## Synchronisation cloud optionnelle
+
+Ajoutez une URL HTTPS et le secret partagé dans `backend/.env` :
+
+```dotenv
+CLOUD_API_URL=https://votre-backend.example/api
+SYNC_TOKEN=secret-aleatoire-long-partage-avec-le-cloud
 ```
 
-Créez un compte admin avec:
-- Nom d'utilisateur: `admin`
-- Email: `admin@libtak.com`
-- Mot de passe: (votre choix)
+Redémarrez ensuite `start_local_server.bat`. Pour une exécution au boot et une
+sync toutes les 30 minutes, lancez `setup_windows_tasks.bat` en administrateur.
 
----
+## Sauvegardes
 
-## 📥 Étape 4: Synchroniser les produits depuis le cloud
+Les tâches de fond créent des archives `.ltbk` chiffrées. Conservez une copie
+privée de `BACKUP_ENCRYPTION_KEY` séparément du PC. Vérification manuelle :
 
-```cmd
-cd "D:\Application Librairie\App\backend"
-python sync_to_cloud.py --pull
+```powershell
+cd backend
+.venv\Scripts\python.exe manage.py backup_database
+.venv\Scripts\python.exe manage.py verify_backup C:\chemin\archive.ltbk
 ```
 
-Cela télécharge tous les produits depuis PythonAnywhere.
+Pour restaurer SQLite, arrêtez d'abord toutes les fenêtres LibTak et les tâches
+planifiées (serveur et arrière-plan). Aucun processus ne doit garder la base
+ouverte pendant `manage.py restore_backup ... --confirm RESTORE`.
 
----
+## Dépannage sûr
 
-## 🚀 Étape 5: Démarrer le serveur local
-
-**Double-cliquez sur:** `start_local_server.bat`
-
-Ou manuellement:
-```cmd
-cd "D:\Application Librairie\App\backend"
-python manage.py runserver 0.0.0.0:8000
+```powershell
+backend\.venv\Scripts\python.exe backend\manage.py check
+npm.cmd --prefix frontend run build
 ```
 
-Le POS sera accessible sur: **http://localhost:8000**
-
----
-
-## ⏰ Étape 6: Configurer la synchronisation automatique (30 min)
-
-### Méthode 1: Planificateur de tâches Windows (Recommandé)
-
-1. Ouvrez le **Planificateur de tâches** Windows
-   - Recherchez "Planificateur de tâches" dans le menu Démarrer
-
-2. Cliquez sur **"Créer une tâche de base..."**
-
-3. **Nom**: `LibTak Sync`
-   **Description**: `Synchronise les ventes vers le cloud`
-
-4. **Déclencheur**: `Quotidiennement`
-
-5. **Action**: `Démarrer un programme`
-
-6. **Programme/script**: 
-   ```
-   D:\Application Librairie\App\sync_to_cloud.bat
-   ```
-   **Ajouter des arguments**: `auto`
-
-7. Cochez **"Ouvrir les propriétés..."** → Terminer
-
-8. Dans les propriétés, onglet **Déclencheurs**:
-   - Modifiez le déclencheur
-   - Cochez **"Répéter la tâche toutes les:"** → `30 minutes`
-   - **"Pendant une durée de:"** → `Indéfiniment`
-
-9. Cliquez **OK**
-
-### Méthode 2: Script au démarrage
-
-Ajoutez un raccourci vers `start_local_server.bat` dans:
-```
-C:\Users\[VotreNom]\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
-```
-
----
-
-## 🔧 Utilisation quotidienne
-
-### Démarrer le travail:
-1. Double-cliquez sur `start_local_server.bat`
-2. Ouvrez le navigateur sur `http://localhost:8000`
-3. Connectez-vous
-
-### Pendant la journée:
-- Faites les ventes normalement
-- La synchronisation se fait automatiquement toutes les 30 minutes
-- **Pas besoin d'internet** pour les ventes !
-
-### Sync manuelle (si besoin):
-Double-cliquez sur `sync_to_cloud.bat`
-
----
-
-## 🛠️ Dépannage
-
-### Le serveur ne démarre pas
-```cmd
-cd "D:\Application Librairie\App\backend"
-python manage.py check
-```
-
-### Erreur de synchronisation
-- Vérifiez la connexion internet
-- Les ventes seront synchronisées à la prochaine tentative
-
-### Réinitialiser la base locale
-```cmd
-cd "D:\Application Librairie\App\backend"
-del db.sqlite3
-python manage.py migrate
-python sync_to_cloud.py --pull
-```
-
----
-
-## 📞 Support
-
-En cas de problème, contactez l'administrateur.
+Ne supprimez pas `db.sqlite3`, `.env` ou les archives pour réinstaller. Corrigez
+l’erreur signalée, puis relancez `start_local_server.bat`.

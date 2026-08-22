@@ -1,8 +1,10 @@
 import os
 import secrets
 import sys
+import ipaddress
 from pathlib import Path
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 # Celery est optionnel (pas installé sur PA free tier). On garde le
 # CELERY_BEAT_SCHEDULE en tant que documentation/fallback pour les
@@ -139,6 +141,7 @@ INSTALLED_APPS = _OPTIONAL_APPS + [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'core.middleware.RequestSizeLimitMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # Static files in production
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -372,35 +375,15 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
-# Celery Beat Schedule - Rapports automatiques
+# Celery Beat delegates due-date decisions to the database-driven scheduler.
 CELERY_BEAT_SCHEDULE = {
-    'daily-report': {
-        'task': 'reporting.tasks.send_daily_report',
-        'schedule': crontab(hour=23, minute=0),  # Tous les jours à 23h00
+    'scheduled-reports': {
+        'task': 'reporting.tasks.run_scheduled_reports',
+        'schedule': crontab(minute='*/10'),
     },
-    'weekly-report': {
-        'task': 'reporting.tasks.send_weekly_report',
-        'schedule': crontab(hour=23, minute=30, day_of_week=0),  # Dimanche à 23h30
-    },
-    'monthly-report': {
-        'task': 'reporting.tasks.send_monthly_report',
-        'schedule': crontab(hour=23, minute=45, day_of_month=28),  # 28 du mois
-    },
-    'quarterly-report': {
-        'task': 'reporting.tasks.send_quarterly_report',
-        'schedule': crontab(hour=23, minute=50, day_of_month=28, month_of_year='3,6,9,12'),
-    },
-    'yearly-report': {
-        'task': 'reporting.tasks.send_yearly_report',
-        'schedule': crontab(hour=23, minute=55, month_of_year=12, day_of_month=31),
-    },
-    'low-stock-alert': {
-        'task': 'reporting.tasks.send_low_stock_alert',
-        'schedule': crontab(hour=9, minute=0),  # Tous les jours à 9h
-    },
-    'daily-backup': {
-        'task': 'reporting.tasks.daily_database_backup',
-        'schedule': crontab(hour=18, minute=0),  # Tous les jours à 18h
+    'purge-expired-jwt-tokens': {
+        'task': 'core.tasks.purge_expired_jwt_tokens',
+        'schedule': crontab(hour=2, minute=15),
     },
 }
 
@@ -445,6 +428,7 @@ SPECTACULAR_SETTINGS = {
     'ENUM_NAME_OVERRIDES': {
         'SalePaymentMethodEnum': 'sales.models.Sale.PaymentMethod',
         'ReturnStatusEnum': 'sales.models.Return.ReturnStatus',
+        'CreditSaleStatusEnum': 'credit.models.CreditSale.Status',
         'DiscountTypeEnum': 'sales.models.Discount.DiscountType',
         'PurchaseOrderStatusEnum': 'inventory.models.PurchaseOrder.OrderStatus',
         'InventoryCountStatusEnum': 'inventory.models.InventoryCount.CountStatus',
@@ -456,6 +440,40 @@ SPECTACULAR_SETTINGS = {
 # For cloud server: set IS_CLOUD_SERVER=True
 CLOUD_API_URL = os.environ.get('CLOUD_API_URL', '').strip()  # e.g., 'https://librairie-api.onrender.com/api'
 SYNC_TOKEN = os.environ.get('SYNC_TOKEN', '').strip()  # Shared secret for sync authentication
+
+
+def _cloud_api_url_uses_secure_transport(url):
+    """Allow HTTPS, or plain HTTP only to an exact loopback host."""
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname
+        # Accessing ``port`` also rejects malformed values such as ``:abc``.
+        parsed.port
+    except (TypeError, ValueError):
+        return False
+    if not hostname or parsed.username or parsed.password or parsed.fragment:
+        return False
+    if parsed.scheme.lower() == 'https':
+        return True
+    if parsed.scheme.lower() != 'http':
+        return False
+    if hostname.lower() == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+if (
+    CLOUD_API_URL
+    and not DEBUG
+    and not TESTING
+    and not _cloud_api_url_uses_secure_transport(CLOUD_API_URL)
+):
+    raise RuntimeError(
+        'CLOUD_API_URL must use HTTPS outside localhost/loopback addresses'
+    )
 # SYNC_TOKEN is only required when cloud sync is explicitly configured.
 # PythonAnywhere currently runs as the main app with SQLite and no sync, so
 # blocking startup on a missing token prevents migrations/reloads for no gain.
@@ -488,6 +506,17 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = int(
 FILE_UPLOAD_MAX_MEMORY_SIZE = int(
     os.environ.get('FILE_UPLOAD_MAX_MEMORY_SIZE', 5 * 1024 * 1024)
 )
+MAX_REQUEST_BODY_SIZE = int(
+    os.environ.get('MAX_REQUEST_BODY_SIZE', 25 * 1024 * 1024)
+)
+MAX_SINGLE_FILE_UPLOAD_SIZE = int(
+    os.environ.get('MAX_SINGLE_FILE_UPLOAD_SIZE', 20 * 1024 * 1024)
+)
+FILE_UPLOAD_HANDLERS = [
+    'core.upload_handlers.UploadSizeGuard',
+    'django.core.files.uploadhandler.MemoryFileUploadHandler',
+    'django.core.files.uploadhandler.TemporaryFileUploadHandler',
+]
 
 # ===== SECURITY HEADERS (production only) =====
 if not DEBUG and not TESTING:

@@ -205,19 +205,46 @@ class Product(models.Model):
 
     @property
     def stock_value(self):
-        """Valeur du stock au prix d'achat"""
-        try:
-            layered_value = self.cost_layers.aggregate(
-                total=models.Sum(
-                    models.F('remaining_quantity') * models.F('unit_cost'),
-                    output_field=models.DecimalField(max_digits=14, decimal_places=2),
-                ),
-            )['total']
-        except Exception:
-            layered_value = None
-        if layered_value is not None:
-            return layered_value
-        return self._safe_int(self.stock) * self._safe_decimal(self.purchase_price)
+        """Valeur exacte du stock, en FIFO avec repli sur le coût courant.
+
+        Les lots actifs sont consommés dans leur ordre FIFO et plafonnés à la
+        quantité réellement en stock. Si des unités de stock n'ont pas encore
+        de lot (données historiques, seed ou import ancien), elles sont
+        valorisées au ``purchase_price`` courant. Cette méthode est la source
+        unique utilisée aussi bien par l'API produit que par les statistiques
+        globales/Zakat.
+        """
+        layers = getattr(self, '_stock_value_layers', None)
+        if layers is None:
+            cached_layers = getattr(
+                self, '_prefetched_objects_cache', {},
+            ).get('cost_layers')
+            if cached_layers is not None:
+                layers = (
+                    layer for layer in cached_layers
+                    if layer.remaining_quantity > 0
+                )
+            else:
+                layers = self.cost_layers.filter(
+                    remaining_quantity__gt=0,
+                ).order_by('created_at', 'id')
+        return self.stock_value_from_layers(layers)
+
+    def stock_value_from_layers(self, layers):
+        """Calcule la valorisation à partir d'une séquence de lots FIFO."""
+        remaining_stock = max(self._safe_int(self.stock), 0)
+        total = Decimal('0.00')
+        for layer in layers:
+            if remaining_stock <= 0:
+                break
+            layer_quantity = max(self._safe_int(layer.remaining_quantity), 0)
+            valued_quantity = min(remaining_stock, layer_quantity)
+            total += valued_quantity * self._safe_decimal(layer.unit_cost)
+            remaining_stock -= valued_quantity
+
+        if remaining_stock > 0:
+            total += remaining_stock * self._safe_decimal(self.purchase_price)
+        return total
 
     @property
     def is_low_stock(self):

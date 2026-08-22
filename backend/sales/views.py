@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from core.models import AuditLog
 from core.permissions import IsAdminRole
+from accounting.models import CashRegisterState
 from inventory.models import Product, StockMovement
 from .models import Sale, SaleItem, Discount, Return
 from .serializers import (
@@ -343,10 +344,10 @@ class ReturnViewSet(viewsets.ModelViewSet):
         """Approve a return request"""
         with transaction.atomic():
             self.get_object()
-            return_order = (
+            return_order = get_object_or_404(
                 Return.objects.select_for_update()
-                .select_related('sale')
-                .get(pk=pk)
+                .select_related('sale'),
+                pk=pk,
             )
             if return_order.status != Return.ReturnStatus.PENDING:
                 return Response(
@@ -449,25 +450,103 @@ class ReturnViewSet(viewsets.ModelViewSet):
     def complete(self, request, pk=None):
         """Mark a return as completed (refund processed)"""
         with transaction.atomic():
-            self.get_object()
-            return_order = Return.objects.select_for_update().get(pk=pk)
+            # Même verrou que les paiements crédit et le comptage physique :
+            # le solde de caisse ne peut pas être figé au milieu du retour.
+            CashRegisterState.objects.get_or_create(pk=1)
+            CashRegisterState.objects.select_for_update().get(pk=1)
+            return_order = (
+                Return.objects.select_for_update()
+                .select_related('sale')
+                .get(pk=pk)
+            )
             if return_order.status != Return.ReturnStatus.APPROVED:
                 return Response(
                     {'error': 'Seul un retour approuve peut etre rembourse.'},
                     status=status.HTTP_409_CONFLICT,
                 )
+
+            credit = None
+            credit_changes = None
+            if return_order.sale.payment_method == Sale.PaymentMethod.CREDIT:
+                from credit.models import CreditSale
+
+                try:
+                    credit = (
+                        CreditSale.objects.select_for_update()
+                        .select_related('sale')
+                        .get(sale_id=return_order.sale_id)
+                    )
+                except CreditSale.DoesNotExist:
+                    return Response(
+                        {
+                            'error': (
+                                'Le registre de crédit lié à cette vente est introuvable.'
+                            ),
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                ledger_before = credit.synchronize_from_ledger()
+                overpaid_before = max(
+                    ledger_before['net_paid'] - ledger_before['adjusted_total'],
+                    Decimal('0.00'),
+                )
+                adjusted_after = max(
+                    ledger_before['adjusted_total'] - return_order.refund_amount,
+                    Decimal('0.00'),
+                )
+                overpaid_after = max(
+                    ledger_before['net_paid'] - adjusted_after,
+                    Decimal('0.00'),
+                )
+                return_order.cash_refund_amount = min(
+                    max(overpaid_after - overpaid_before, Decimal('0.00')),
+                    return_order.refund_amount,
+                )
+                return_order.refund_method = (
+                    Sale.PaymentMethod.CASH
+                    if return_order.cash_refund_amount > 0
+                    else Sale.PaymentMethod.CREDIT
+                )
+                credit_changes = {
+                    'adjusted_total_before': str(ledger_before['adjusted_total']),
+                    'adjusted_total_after': str(adjusted_after),
+                    'paid_amount_before': str(ledger_before['net_paid']),
+                    'cash_refund_amount': str(return_order.cash_refund_amount),
+                }
+            else:
+                return_order.cash_refund_amount = (
+                    return_order.refund_amount
+                    if return_order.refund_method == Sale.PaymentMethod.CASH
+                    else Decimal('0.00')
+                )
+
             return_order.status = Return.ReturnStatus.COMPLETED
             return_order.completed_at = timezone.now()
             return_order.processed_by = request.user
             return_order.synced = False
             return_order.save(update_fields=[
-                'status', 'completed_at', 'processed_by', 'synced', 'updated_at',
+                'status',
+                'refund_method',
+                'cash_refund_amount',
+                'completed_at',
+                'processed_by',
+                'synced',
+                'updated_at',
             ])
-        AuditLog.log(
-            user=request.user, action=AuditLog.ActionType.RETURN,
-            model_name='Return', object_id=return_order.id,
-            object_repr=f"Return #{return_order.id} -> {return_order.status}",
-            request=request,
-        )
+            if credit is not None:
+                ledger_after = credit.synchronize_from_ledger()
+                credit_changes.update({
+                    'paid_amount_after': str(ledger_after['net_paid']),
+                    'credit_status_after': credit.status,
+                })
+            AuditLog.log(
+                user=request.user,
+                action=AuditLog.ActionType.RETURN,
+                model_name='Return',
+                object_id=return_order.id,
+                object_repr=f"Return #{return_order.id} -> {return_order.status}",
+                changes=credit_changes,
+                request=request,
+            )
         return Response(self.get_serializer(return_order).data)
 

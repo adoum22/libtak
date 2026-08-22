@@ -1,12 +1,18 @@
 import os
 import django
-import random
 from decimal import Decimal
+from django.db import transaction
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-from inventory.models import Category, Product, Supplier
+from inventory.models import (
+    Category,
+    Product,
+    ProductCostLayer,
+    StockMovement,
+    Supplier,
+)
 
 def seed_suppliers():
     """Créer des fournisseurs de démo"""
@@ -42,7 +48,7 @@ def seed_suppliers():
         )
         suppliers[data['name']] = supplier
         if created:
-            print(f"✓ Fournisseur '{data['name']}' créé")
+            print(f"[OK] Fournisseur '{data['name']}' créé")
     
     return suppliers
 
@@ -66,7 +72,7 @@ def seed_categories():
         )
         categories[data['name']] = cat
         if created:
-            print(f"✓ Catégorie '{data['name']}' créée")
+            print(f"[OK] Catégorie '{data['name']}' créée")
     
     return categories
 
@@ -241,29 +247,52 @@ def seed_products(categories, suppliers):
     ]
     
     for data in products_data:
-        if not Product.objects.filter(barcode=data['barcode']).exists():
-            Product.objects.create(
+        product = Product.objects.filter(barcode=data['barcode']).first()
+        if product is None:
+            initial_stock = int(data['stock'])
+            product = Product.objects.create(
                 name=data['name'],
                 barcode=data['barcode'],
                 purchase_price=Decimal(str(data['purchase_price'])),
                 sale_price_ht=Decimal(str(data['sale_price_ht'])),
                 category=categories.get(data['category']),
                 supplier=suppliers.get(data['supplier']),
-                stock=data['stock'],
+                # Initial stock must go through the audited movement path so
+                # its FIFO cost layer exists from the first sale.
+                stock=0,
                 min_stock=5
             )
-            print(f"✓ Produit '{data['name']}' créé")
+            StockMovement.objects.create(
+                product=product,
+                movement_type=StockMovement.MovementType.IN,
+                quantity=initial_stock,
+                unit_cost=product.purchase_price,
+                sale_price=product.sale_price_ht,
+                supplier=product.supplier,
+                reference='SEED',
+                notes='Stock initial de démonstration',
+            )
+            print(f"[OK] Produit '{data['name']}' créé")
+        else:
+            # Repair historical demo rows created before FIFO layers existed,
+            # without changing their current stock or duplicating quantities.
+            ProductCostLayer.reconcile_to_stock(
+                product,
+                note='Rattrapage du seed historique',
+            )
 
 
 if __name__ == '__main__':
-    print("\n=== Création des fournisseurs ===")
-    suppliers = seed_suppliers()
-    
-    print("\n=== Création des catégories ===")
-    categories = seed_categories()
-    
-    print("\n=== Création des produits ===")
-    seed_products(categories, suppliers)
+    # One failure must leave no half-seeded database behind.
+    with transaction.atomic():
+        print("\n=== Création des fournisseurs ===")
+        suppliers = seed_suppliers()
+
+        print("\n=== Création des catégories ===")
+        categories = seed_categories()
+
+        print("\n=== Création des produits ===")
+        seed_products(categories, suppliers)
     
     print("\n=== Terminé ===")
     print(f"Total produits: {Product.objects.count()}")

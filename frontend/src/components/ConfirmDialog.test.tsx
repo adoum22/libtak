@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import '../i18n';
 import ConfirmDialog from './ConfirmDialog';
 
 describe('ConfirmDialog', () => {
@@ -12,6 +13,8 @@ describe('ConfirmDialog', () => {
         open
         title="Désactiver ?"
         description="Cette donnée restera dans l’historique."
+        cancelLabel="Annuler"
+        confirmLabel="Confirmer"
         onCancel={onCancel}
         onConfirm={onConfirm}
       />,
@@ -20,10 +23,18 @@ describe('ConfirmDialog', () => {
     expect(screen.getByRole('alertdialog')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Annuler' })).toHaveFocus();
 
-    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(document, { key: 'Escape' });
     expect(onCancel).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirmer' }));
+    const cancelButton = screen.getByRole('button', { name: 'Annuler' });
+    const confirmButton = screen.getByRole('button', { name: 'Confirmer' });
+    confirmButton.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(cancelButton).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(confirmButton).toHaveFocus();
+
+    fireEvent.click(confirmButton);
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });

@@ -133,7 +133,7 @@ body,
   transform: translate(-50%, calc(-100% - 2rem));
   padding: 0.75rem 1rem;
   border-radius: 0.75rem;
-  background: var(--color-primary);
+  background: var(--color-accent);
   color: white;
   font-weight: 700;
   box-shadow: var(--shadow-lg);
@@ -1014,6 +1014,21 @@ button,
   border: none;
   border-radius: var(--radius-md);
   transition: all var(--transition-fast);
+}
+
+/* Keep the flex treatment on application button variants only. Applying
+   display to every <button> overrides responsive utilities such as lg:hidden. */
+.btn,
+.btn-primary,
+.btn-outline,
+.btn-secondary,
+.btn-success,
+.btn-danger,
+.btn-info,
+.btn-ghost,
+.btn-icon,
+.btn-sm,
+.btn-lg {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1396,9 +1411,16 @@ input:disabled {
   border-top: 1px solid var(--color-border);
 }
 
+.sidebar-close,
+.sidebar-language-switcher {
+  display: none;
+}
+
 /* ===== MAIN CONTENT ===== */
 .main-content {
   margin-left: 280px;
+  width: calc(100% - 280px);
+  min-width: 0;
   min-height: 100vh;
   min-height: 100dvh;
   background-color: var(--color-bg-primary);
@@ -1421,6 +1443,24 @@ input:disabled {
 
 .page-content {
   padding: 1.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-content .overflow-x-auto {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.pos-products-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 1rem;
+}
+
+.suppliers-mobile-list {
+  display: none;
 }
 
 /* ===== TABLE STYLES ===== */
@@ -1669,12 +1709,35 @@ tbody tr:last-child td {
     transition: transform var(--transition-normal);
   }
 
+  .sidebar-close {
+    display: inline-flex;
+    position: relative;
+    z-index: 2;
+    margin-inline-start: auto;
+    flex: 0 0 auto;
+  }
+
+  .sidebar-language-switcher {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.35rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .sidebar-language-switcher button {
+    justify-content: center;
+    min-height: 44px;
+  }
+
   .sidebar.open {
     transform: translateX(0);
   }
 
   .main-content {
     margin-left: 0;
+    width: 100%;
   }
 }
 
@@ -1694,6 +1757,74 @@ tbody tr:last-child td {
   transform: translateX(-4px);
 }
 
+/* Logical alignment for icon/suffix fields and data-heavy screens. */
+[dir="rtl"] .page-content .left-3 {
+  left: auto;
+  right: 0.75rem;
+}
+
+[dir="rtl"] .page-content .left-4 {
+  left: auto;
+  right: 1rem;
+}
+
+[dir="rtl"] .page-content .right-3 {
+  right: auto;
+  left: 0.75rem;
+}
+
+[dir="rtl"] .page-content .right-4 {
+  right: auto;
+  left: 1rem;
+}
+
+[dir="rtl"] .page-content .pl-10 {
+  padding-left: 0.75rem;
+  padding-right: 2.5rem;
+}
+
+[dir="rtl"] .page-content .pl-12 {
+  padding-left: 0.75rem;
+  padding-right: 3rem;
+}
+
+[dir="rtl"] .page-content .pr-10 {
+  padding-right: 0.75rem;
+  padding-left: 2.5rem;
+}
+
+[dir="rtl"] .page-content .text-left {
+  text-align: right;
+}
+
+[dir="rtl"] .page-content .text-right {
+  text-align: left;
+}
+
+[dir="rtl"] .page-content .ml-auto {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.inventory-search-input {
+  padding-inline-start: 3rem !important;
+}
+
+.inventory-purchase-filter-input {
+  padding-inline-start: 2.75rem !important;
+  padding-inline-end: 2.5rem !important;
+}
+
+[dir="rtl"] .inventory-filter-icon {
+  left: auto;
+  right: 0.75rem;
+}
+
+[dir="rtl"] .inventory-filter-suffix {
+  right: auto;
+  left: 0.75rem;
+}
+
 @media (max-width: 1023px) {
   [dir="rtl"] .sidebar {
     transform: translateX(100%);
@@ -1705,11 +1836,18 @@ tbody tr:last-child td {
 
   [dir="rtl"] .main-content {
     margin-right: 0;
+    width: 100%;
   }
 }
 
 .mobile-bottom-nav {
   display: none;
+}
+
+@media (min-width: 1024px) {
+  .mobile-menu-toggle {
+    display: none !important;
+  }
 }
 
 @media (max-width: 767px) {
@@ -1925,6 +2063,10 @@ tbody tr:last-child td {
     backdrop-filter: blur(16px);
   }
 
+  .mobile-bottom-nav.sidebar-open {
+    display: none;
+  }
+
   .mobile-bottom-item {
     min-width: 0;
     min-height: 54px;
@@ -2048,6 +2190,15 @@ tbody tr:last-child td {
     padding-right: 0.7rem;
   }
 
+  .pos-quick-actions {
+    width: 100%;
+    justify-content: center;
+    border: 1px solid var(--color-border);
+    border-radius: 0.75rem;
+    padding: 0.25rem;
+    background: var(--color-bg-tertiary);
+  }
+
   .pos-products-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     gap: 0.75rem;
@@ -2057,7 +2208,7 @@ tbody tr:last-child td {
     border-radius: 14px;
   }
 
-  .pos-products-grid .card > div:first-of-type {
+  .pos-products-grid .pos-product-image {
     height: 132px;
   }
 
@@ -2422,12 +2573,46 @@ tbody tr:last-child td {
   }
 
   .inventory-mobile-list,
+  .suppliers-mobile-list,
   .reports-mobile-items,
   .accounting-mobile-list,
   .cash-mobile-adjustments,
   .dashboard-mobile-list {
     display: grid;
     gap: 0.75rem;
+  }
+
+  .suppliers-mobile-list {
+    padding: 0.75rem;
+  }
+
+  .mobile-data-card {
+    display: grid;
+    gap: 0.9rem;
+    padding: 1rem;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-bg-secondary);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .mobile-data-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.55rem;
+    min-width: 0;
+    color: var(--color-text-muted);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-data-line svg {
+    flex: 0 0 auto;
+    margin-top: 0.1rem;
+  }
+
+  .suppliers-desktop-table {
+    display: none;
   }
 
   .inventory-table-card .overflow-x-auto,

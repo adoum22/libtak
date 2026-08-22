@@ -23,10 +23,13 @@ if PROJECT_HOME not in sys.path:
 #
 # os.environ['DEBUG'] = 'False'
 # os.environ['SECRET_KEY'] = 'replace-with-50-char-random-string'
+# os.environ['JWT_SIGNING_KEY'] = 'replace-with-a-different-50-char-random-string'
+# os.environ['BACKUP_ENCRYPTION_KEY'] = 'urlsafe-base64-encoded-32-byte-key'
 # os.environ['ALLOWED_HOSTS'] = f'{USERNAME}.pythonanywhere.com'
 # os.environ['CORS_ALLOWED_ORIGINS'] = 'https://libtak.vercel.app'
 # os.environ['CSRF_TRUSTED_ORIGINS'] = 'https://libtak.vercel.app'
 # os.environ['DATABASE_URL'] = f'sqlite:////home/{USERNAME}/libtak/backend/db.sqlite3'
+# os.environ['IS_CLOUD_SERVER'] = 'True'
 # os.environ['EMAIL_HOST'] = 'smtp.gmail.com'
 # os.environ['EMAIL_PORT'] = '587'
 # os.environ['EMAIL_HOST_USER'] = 'your@gmail.com'
@@ -34,6 +37,7 @@ if PROJECT_HOME not in sys.path:
 # os.environ['DEFAULT_FROM_EMAIL'] = 'Libtak <your@gmail.com>'
 # os.environ['SYNC_TOKEN'] = 'long-random-token-shared-with-local-pos'
 
+os.environ.setdefault('IS_CLOUD_SERVER', 'True')
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 
 # ---- 3. Activate virtualenv -----------------------------------------

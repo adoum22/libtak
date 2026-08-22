@@ -10,10 +10,11 @@ from calendar import monthrange
 from datetime import time, timedelta
 from uuid import uuid4
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from core.security import purge_expired_refresh_tokens
 from reporting.models import ReportSettings, ScheduledJobClaim
 from reporting.tasks import (
     daily_database_backup,
@@ -157,12 +158,13 @@ class Command(BaseCommand):
         if dry_run:
             if self._is_due(marker, today, eligible):
                 self._run(label, func, True)
-            return
+            return None
         token = self._claim(job_name, marker, today, eligible)
         if not token:
-            return
+            return None
         succeeded = self._run(label, func, False)
         self._complete(job_name, marker, today, token, succeeded)
+        return succeeded
 
     def handle(self, *args, **opts):
         local_now = timezone.localtime()
@@ -171,6 +173,7 @@ class Command(BaseCommand):
         force = opts['force_all']
         daily_slot = opts['daily_slot']
         dry_run = opts['dry_run']
+        failures = []
 
         def time_is_due(configured_time):
             return force or daily_slot or self._at_or_after(now_time, configured_time)
@@ -178,6 +181,13 @@ class Command(BaseCommand):
         self.stdout.write(
             f'send_scheduled_reports - {local_now.isoformat(timespec="minutes")}'
         )
+        cleanup_succeeded = self._run(
+            'expired JWT cleanup',
+            purge_expired_refresh_tokens,
+            dry_run,
+        )
+        if cleanup_succeeded is False and not dry_run:
+            failures.append('expired JWT cleanup')
 
         last_day = today.day == monthrange(today.year, today.month)[1]
         quarter_end = last_day and today.month in (3, 6, 9, 12)
@@ -230,21 +240,32 @@ class Command(BaseCommand):
             ),
         ]
         for label, func, job_name, marker, eligible in jobs:
-            self._attempt(
+            succeeded = self._attempt(
                 label, func, job_name, marker, today, eligible, dry_run,
             )
+            if succeeded is False:
+                failures.append(label)
 
-        self._attempt(
+        low_stock_succeeded = self._attempt(
             'low stock alert', send_low_stock_alert, 'LOW_STOCK',
             'low_stock_last_sent_on', today,
             lambda settings: time_is_due(time(9, 0)),
             dry_run,
         )
+        if low_stock_succeeded is False:
+            failures.append('low stock alert')
 
         if not opts['skip_backup']:
-            self._attempt(
+            backup_succeeded = self._attempt(
                 'database backup', daily_database_backup, 'BACKUP',
                 'backup_last_sent_on', today, lambda settings: True, dry_run,
+            )
+            if backup_succeeded is False:
+                failures.append('database backup')
+
+        if failures:
+            raise CommandError(
+                'Scheduled jobs failed: ' + ', '.join(dict.fromkeys(failures))
             )
 
         self.stdout.write(self.style.SUCCESS('Done.'))

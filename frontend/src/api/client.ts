@@ -2,6 +2,7 @@ import axios, {
     type AxiosError,
     type InternalAxiosRequestConfig,
 } from 'axios';
+import { clearPrivateSessionStorage } from '../utils/privateSessionStorage';
 
 const configuredApiUrl = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
 const API_URL = (configuredApiUrl || '/api').replace(/\/$/, '');
@@ -55,6 +56,7 @@ export const clearAuthSession = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('userRole');
+    clearPrivateSessionStorage();
     window.dispatchEvent(new Event('auth:changed'));
 };
 

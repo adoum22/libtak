@@ -1,6 +1,7 @@
 import { Navigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import client, { hasAuthSession } from '../api/client';
+import { useTranslation } from 'react-i18next';
 
 export default function AdminRoute({
     children,
@@ -9,6 +10,7 @@ export default function AdminRoute({
     children: React.ReactNode;
     redirectTo?: string;
 }) {
+    const { t } = useTranslation();
     const authenticated = hasAuthSession();
     const { data, isLoading, isError, refetch, isFetching } = useQuery({
         queryKey: ['currentUser'],
@@ -20,15 +22,15 @@ export default function AdminRoute({
 
     if (!authenticated) return <Navigate to="/login" replace />;
     if (isLoading) {
-        return <div className="p-8 text-center text-muted" role="status">Vérification des droits…</div>;
+        return <div className="p-8 text-center text-muted" role="status">{t('CheckingPermissions')}</div>;
     }
     if (isError) {
         return (
             <div className="empty-state" role="alert">
-                <h2>Impossible de vérifier vos droits</h2>
-                <p>Contrôlez la connexion puis réessayez.</p>
+                <h2>{t('PermissionCheckFailed')}</h2>
+                <p>{t('CheckConnectionRetry')}</p>
                 <button className="btn-primary" onClick={() => refetch()} disabled={isFetching}>
-                    {isFetching ? 'Nouvelle tentative…' : 'Réessayer'}
+                    {isFetching ? t('TryingAgain') : t('Retry')}
                 </button>
             </div>
         );

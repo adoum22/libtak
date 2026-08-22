@@ -1,10 +1,25 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import ProductCreateModal from '../components/ProductCreateModal';
 import Pagination from '../components/Pagination';
 import { normalizeDecimalInput, parseDecimalInput } from '../utils/numberInput';
+import useCurrency from '../hooks/useCurrency';
+import {
+    clearOperationAttempt,
+    getOrCreateOperationAttempt,
+    loadOperationAttempt,
+    operationFingerprint,
+    persistOperationAttempt,
+    type OperationAttempt,
+} from '../utils/operationAttempt';
+import {
+    PURCHASE_ORDER_PAYMENT_ATTEMPT_STORAGE_KEY,
+    PURCHASE_ORDER_RECEIPT_ATTEMPT_STORAGE_KEY,
+    PURCHASE_ORDER_REVERSAL_ATTEMPT_STORAGE_KEY,
+} from '../utils/privateSessionStorage';
 import {
     buildReceiveOrderItem,
     type ReceiveOrderItem,
@@ -171,6 +186,13 @@ const localDateInput = () => {
 };
 
 export default function PurchaseOrders() {
+    const { t, i18n } = useTranslation();
+    const currency = useCurrency();
+    const locale = i18n.resolvedLanguage === 'ar'
+        ? 'ar-MA'
+        : i18n.resolvedLanguage === 'en'
+            ? 'en-GB'
+            : 'fr-FR';
     const queryClient = useQueryClient();
     const toast = useToast();
 
@@ -180,11 +202,13 @@ export default function PurchaseOrders() {
     const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
     const [receivingOrder, setReceivingOrder] = useState<PurchaseOrder | null>(null);
     const [receiveDrafts, setReceiveDrafts] = useState<ReceiveDraft[]>([]);
-    const [receiptId, setReceiptId] = useState(() => globalThis.crypto.randomUUID());
+    const [receiptAttempt, setReceiptAttempt] = useState<OperationAttempt | null>(() => (
+        loadOperationAttempt(PURCHASE_ORDER_RECEIPT_ATTEMPT_STORAGE_KEY)
+    ));
     const [payingOrder, setPayingOrder] = useState<PurchaseOrder | null>(null);
-    const [paymentOperationId, setPaymentOperationId] = useState(
-        () => globalThis.crypto.randomUUID(),
-    );
+    const [paymentAttempt, setPaymentAttempt] = useState<OperationAttempt | null>(() => (
+        loadOperationAttempt(PURCHASE_ORDER_PAYMENT_ATTEMPT_STORAGE_KEY)
+    ));
     const [paymentForm, setPaymentForm] = useState({
         amount: '',
         method: 'CASH' as SupplierPayment['method'],
@@ -197,9 +221,9 @@ export default function PurchaseOrders() {
         payment: SupplierPayment;
     } | null>(null);
     const [reversalReason, setReversalReason] = useState('');
-    const [reversalOperationId, setReversalOperationId] = useState(
-        () => globalThis.crypto.randomUUID(),
-    );
+    const [reversalAttempt, setReversalAttempt] = useState<OperationAttempt | null>(() => (
+        loadOperationAttempt(PURCHASE_ORDER_REVERSAL_ATTEMPT_STORAGE_KEY)
+    ));
     const [formData, setFormData] = useState({
         supplier: '',
         notes: '',
@@ -251,12 +275,12 @@ export default function PurchaseOrders() {
     const createOrder = useMutation({
         mutationFn: (data: PurchaseOrderForm) => client.post('/inventory/purchase-orders/', data),
         onSuccess: () => {
-            toast.success('Commande créée');
+            toast.success(t('PurchaseOrderCreated'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             resetForm();
         },
         onError: (err: unknown) => {
-            toast.error(getApiErrorMessage(err, 'Impossible de créer la commande. Réessayez.'));
+            toast.error(getApiErrorMessage(err, t('PurchaseOrderCreateFailed')));
         }
     });
 
@@ -264,7 +288,7 @@ export default function PurchaseOrders() {
     const sendOrder = useMutation({
         mutationFn: (id: number) => client.post(`/inventory/purchase-orders/${id}/send/`),
         onSuccess: () => {
-            toast.success('Commande envoyée');
+            toast.success(t('PurchaseOrderSent'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
         }
     });
@@ -274,13 +298,14 @@ export default function PurchaseOrders() {
         mutationFn: ({ id, items, receipt_id }: { id: number, items: ReceiveOrderItem[], receipt_id: string }) =>
             client.post(`/inventory/purchase-orders/${id}/receive/`, { items, receipt_id }),
         onSuccess: () => {
-            toast.success('Réception validée - Stock mis à jour');
+            toast.success(t('PurchaseOrderReceived'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
-            setReceiptId(globalThis.crypto.randomUUID());
+            setReceiptAttempt(null);
+            clearOperationAttempt(PURCHASE_ORDER_RECEIPT_ATTEMPT_STORAGE_KEY);
         },
         onError: () => {
-            toast.error('La réception n’a pas pu être enregistrée. Vous pouvez réessayer sans risque de doublon.');
+            toast.error(t('PurchaseOrderReceiveFailed'));
         }
     });
 
@@ -288,7 +313,7 @@ export default function PurchaseOrders() {
     const cancelOrder = useMutation({
         mutationFn: (id: number) => client.post(`/inventory/purchase-orders/${id}/cancel/`),
         onSuccess: () => {
-            toast.success('Commande annulée');
+            toast.success(t('PurchaseOrderCancelled'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
         }
     });
@@ -302,19 +327,20 @@ export default function PurchaseOrders() {
             payload,
         ),
         onSuccess: () => {
-            toast.success('Règlement fournisseur enregistré.');
+            toast.success(t('SupplierPaymentRecorded'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
             queryClient.invalidateQueries({ queryKey: ['acc-month'] });
             queryClient.invalidateQueries({ queryKey: ['acc-summary'] });
             queryClient.invalidateQueries({ queryKey: ['acc-period'] });
             setPayingOrder(null);
-            setPaymentOperationId(globalThis.crypto.randomUUID());
+            setPaymentAttempt(null);
+            clearOperationAttempt(PURCHASE_ORDER_PAYMENT_ATTEMPT_STORAGE_KEY);
         },
         onError: (error: unknown) => {
             toast.error(getApiErrorMessage(
                 error,
-                'Impossible d’enregistrer le règlement.',
+                t('SupplierPaymentRecordFailed'),
             ));
         },
     });
@@ -330,7 +356,7 @@ export default function PurchaseOrders() {
             { reason, operation_id: operationId },
         ),
         onSuccess: () => {
-            toast.success('Règlement fournisseur contrepassé.');
+            toast.success(t('SupplierPaymentReversed'));
             queryClient.invalidateQueries({ queryKey: ['purchaseOrders'] });
             queryClient.invalidateQueries({ queryKey: ['cashRegister'] });
             queryClient.invalidateQueries({ queryKey: ['acc-month'] });
@@ -338,12 +364,13 @@ export default function PurchaseOrders() {
             queryClient.invalidateQueries({ queryKey: ['acc-period'] });
             setReversingPayment(null);
             setReversalReason('');
-            setReversalOperationId(globalThis.crypto.randomUUID());
+            setReversalAttempt(null);
+            clearOperationAttempt(PURCHASE_ORDER_REVERSAL_ATTEMPT_STORAGE_KEY);
         },
         onError: (error: unknown) => {
             toast.error(getApiErrorMessage(
                 error,
-                'Impossible de contrepasser le règlement.',
+                t('SupplierPaymentReverseFailed'),
             ));
         },
     });
@@ -357,29 +384,58 @@ export default function PurchaseOrders() {
             reference: '',
             note: '',
         });
-        setPaymentOperationId(globalThis.crypto.randomUUID());
     };
 
     const submitPayment = () => {
         if (!payingOrder) return;
         const amount = parseDecimalInput(paymentForm.amount);
         if (!Number.isFinite(amount) || amount <= 0) {
-            toast.error('Saisissez un montant positif.');
+            toast.error(t('EnterPositiveAmount'));
             return;
         }
         if (amount > payingOrder.balance_due + 0.0001) {
-            toast.error('Le montant dépasse le solde restant.');
+            toast.error(t('AmountExceedsBalance'));
             return;
         }
+        const payload = {
+            ...paymentForm,
+            amount: amount.toFixed(2),
+            reference: paymentForm.reference.trim(),
+            note: paymentForm.note.trim(),
+        };
+        const attempt = getOrCreateOperationAttempt(
+            operationFingerprint(['purchase-order-payment', payingOrder.id, payload]),
+            loadOperationAttempt(PURCHASE_ORDER_PAYMENT_ATTEMPT_STORAGE_KEY) ?? paymentAttempt,
+        );
+        setPaymentAttempt(attempt);
+        persistOperationAttempt(PURCHASE_ORDER_PAYMENT_ATTEMPT_STORAGE_KEY, attempt);
         createPayment.mutate({
             orderId: payingOrder.id,
             payload: {
-                ...paymentForm,
-                amount: amount.toFixed(2),
-                reference: paymentForm.reference.trim(),
-                note: paymentForm.note.trim(),
-                operation_id: paymentOperationId,
+                ...payload,
+                operation_id: attempt.key,
             },
+        });
+    };
+
+    const submitPaymentReversal = () => {
+        if (!reversingPayment) return;
+        const reason = reversalReason.trim();
+        if (!reason) return;
+        const operationPayload = {
+            orderId: reversingPayment.order.id,
+            paymentId: reversingPayment.payment.id,
+            reason,
+        };
+        const attempt = getOrCreateOperationAttempt(
+            operationFingerprint(['purchase-order-payment-reversal', operationPayload]),
+            loadOperationAttempt(PURCHASE_ORDER_REVERSAL_ATTEMPT_STORAGE_KEY) ?? reversalAttempt,
+        );
+        setReversalAttempt(attempt);
+        persistOperationAttempt(PURCHASE_ORDER_REVERSAL_ATTEMPT_STORAGE_KEY, attempt);
+        reversePayment.mutate({
+            ...operationPayload,
+            operationId: attempt.key,
         });
     };
 
@@ -429,11 +485,11 @@ export default function PurchaseOrders() {
 
     const handleSubmit = () => {
         if (!formData.supplier) {
-            toast.error('Veuillez sélectionner un fournisseur');
+            toast.error(t('SelectSupplierRequired'));
             return;
         }
         if (formData.items.length === 0) {
-            toast.error('Veuillez ajouter au moins un produit');
+            toast.error(t('AddProductRequired'));
             return;
         }
 
@@ -465,7 +521,7 @@ export default function PurchaseOrders() {
                 const currentSale = Number(item.current_sale_price ?? item.sale_price ?? 0);
                 return {
                     item_id: item.id,
-                    product_name: item.product_name || `Produit #${item.product}`,
+                    product_name: item.product_name || t('ProductNumber', { id: item.product }),
                     barcode: item.barcode,
                     ordered_qty: item.quantity,
                     already_received: item.received_quantity || 0,
@@ -479,7 +535,7 @@ export default function PurchaseOrders() {
             });
 
         if (drafts.length === 0) {
-            toast.info('Tous les articles de cette commande ont déjà été reçus.');
+            toast.info(t('AllOrderItemsReceived'));
             return;
         }
 
@@ -497,7 +553,7 @@ export default function PurchaseOrders() {
         if (!receivingOrder) return;
 
         if (receiveDrafts.some(d => (Number(d.quantity) || 0) > d.remaining)) {
-            toast.error('Une quantité reçue dépasse la quantité restante.');
+            toast.error(t('ReceivedQuantityExceedsRemaining'));
             return;
         }
 
@@ -506,12 +562,18 @@ export default function PurchaseOrders() {
             .filter((item): item is ReceiveOrderItem => item !== null);
 
         if (items.length === 0) {
-            toast.error('Aucune quantité à réceptionner.');
+            toast.error(t('NoQuantityToReceive'));
             return;
         }
 
+        const attempt = getOrCreateOperationAttempt(
+            operationFingerprint(['purchase-order-receipt', receivingOrder.id, items]),
+            loadOperationAttempt(PURCHASE_ORDER_RECEIPT_ATTEMPT_STORAGE_KEY) ?? receiptAttempt,
+        );
+        setReceiptAttempt(attempt);
+        persistOperationAttempt(PURCHASE_ORDER_RECEIPT_ATTEMPT_STORAGE_KEY, attempt);
         receiveOrder.mutate(
-            { id: receivingOrder.id, items, receipt_id: receiptId },
+            { id: receivingOrder.id, items, receipt_id: attempt.key },
             {
                 onSuccess: () => {
                     setReceivingOrder(null);
@@ -525,7 +587,6 @@ export default function PurchaseOrders() {
         if (receiveOrder.isPending) return;
         setReceivingOrder(null);
         setReceiveDrafts([]);
-        setReceiptId(globalThis.crypto.randomUUID());
     };
 
     const handleProductCreated = (newProduct: CreatedProduct) => {
@@ -567,38 +628,38 @@ export default function PurchaseOrders() {
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-3">
                         <ClipboardList className="text-accent" />
-                        Commandes Fournisseurs
+                        {t('PurchaseOrders')}
                     </h1>
-                    <p className="text-muted mt-1">Gérez vos commandes d'approvisionnement</p>
+                    <p className="text-muted mt-1">{t('PurchaseOrdersSubtitle')}</p>
                 </div>
                 <button type="button" onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2" aria-expanded={showForm} aria-controls="purchase-order-form">
                     <Plus size={18} />
-                    Nouvelle Commande
+                    {t('NewPurchaseOrder')}
                 </button>
             </div>
 
             {/* Create Order Form */}
             {showForm && (
                 <form id="purchase-order-form" className="card p-6 border-accent border-2" onSubmit={(event) => { event.preventDefault(); handleSubmit(); }}>
-                    <h2 className="text-xl font-bold mb-4">Nouvelle Commande</h2>
+                    <h2 className="text-xl font-bold mb-4">{t('NewPurchaseOrder')}</h2>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-supplier">Fournisseur *</label>
+                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-supplier">{t('Supplier')} *</label>
                             <select
                                 id="purchase-order-supplier"
                                 value={formData.supplier}
                                 onChange={(e) => setFormData({ ...formData, supplier: e.target.value })}
                                 className="input w-full"
                             >
-                                <option value="">{suppliersError ? 'Fournisseurs indisponibles' : 'Sélectionner…'}</option>
+                                <option value="">{suppliersError ? t('SuppliersUnavailable') : t('SelectEllipsis')}</option>
                                 {suppliers.map(s => (
                                     <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                             </select>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-date">Date prévue</label>
+                            <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-date">{t('ExpectedDate')}</label>
                             <div className="relative">
                                 <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" size={16} />
                                 <input
@@ -614,7 +675,7 @@ export default function PurchaseOrders() {
 
                     {/* Add Product Section */}
                     <div className="mb-4 bg-tertiary/30 p-4 rounded-lg">
-                        <label className="block text-sm font-medium mb-2" htmlFor="purchase-order-product-search">Ajouter des articles</label>
+                        <label className="block text-sm font-medium mb-2" htmlFor="purchase-order-product-search">{t('AddItems')}</label>
                         <div className="flex flex-wrap gap-2 items-start">
                             <div className="flex-1 min-w-[250px] relative z-50">
                                 <div className="relative">
@@ -622,7 +683,7 @@ export default function PurchaseOrders() {
                                     <input
                                         id="purchase-order-product-search"
                                         type="text"
-                                        placeholder="Nom ou Code-barres..."
+                                        placeholder={t('NameOrBarcode')}
                                         className="input w-full pl-10"
                                         value={searchProduct}
                                         onChange={(e) => {
@@ -658,7 +719,7 @@ export default function PurchaseOrders() {
                                                         <span className="flex items-center gap-1">
                                                             <Barcode size={12} /> {p.barcode}
                                                         </span>
-                                                        <span className="font-bold text-accent">{p.purchase_price} DH</span>
+                                                        <span className="font-bold text-accent">{currency.format(p.purchase_price)}</span>
                                                     </div>
                                                 </button>
                                             </li>
@@ -667,32 +728,32 @@ export default function PurchaseOrders() {
                                 )}
 
                                 {productsError && searchProduct.length > 1 && (
-                                    <p className="text-sm text-danger mt-2" role="alert">La recherche de produits est indisponible.</p>
+                                    <p className="text-sm text-danger mt-2" role="alert">{t('ProductSearchUnavailable')}</p>
                                 )}
 
                                 {/* "New Product" Prompt if no results */}
                                 {searchProduct.length > 1 && products.length === 0 && !productsError && (
                                     <div className="absolute top-full left-0 right-0 bg-secondary border rounded-lg shadow-lg z-20 p-2 mt-1 text-center">
-                                        <p className="text-sm text-muted mb-2">Aucun produit trouvé</p>
+                                        <p className="text-sm text-muted mb-2">{t('NoProductFound')}</p>
                                         <button
                                             type="button"
                                             onClick={() => setShowCreateProduct(true)}
                                             className="btn-primary-outline text-xs w-full"
                                         >
-                                            <Plus size={14} className="inline mr-1" /> Créer "{searchProduct}"
+                                            <Plus size={14} className="inline mr-1" /> {t('CreateNamedProduct', { name: searchProduct })}
                                         </button>
                                     </div>
                                 )}
                             </div>
 
                             <input
-                                aria-label="Quantité à ajouter"
+                                aria-label={t('QuantityToAdd')}
                                 type="number"
                                 min={1}
                                 value={itemQty}
                                 onChange={(e) => setItemQty(parseInt(e.target.value) || 1)}
                                 className="input w-20 text-center h-[42px]"
-                                placeholder="Qté"
+                                placeholder={t('QtyShort')}
                             />
 
                             <button
@@ -700,8 +761,8 @@ export default function PurchaseOrders() {
                                 onClick={addItem}
                                 disabled={!selectedProduct}
                                 className="btn-secondary h-[42px]"
-                                title="Ajouter à la liste"
-                                aria-label="Ajouter le produit sélectionné à la commande"
+                                title={t('AddToList')}
+                                aria-label={t('AddSelectedProductToOrder')}
                             >
                                 <Plus size={18} />
                             </button>
@@ -710,9 +771,9 @@ export default function PurchaseOrders() {
                                 type="button"
                                 onClick={() => setShowCreateProduct(true)}
                                 className="btn-primary h-[42px]"
-                                title="Créer un nouveau produit"
+                                title={t('CreateNewProduct')}
                             >
-                                <Plus size={18} /> Nouveau Produit
+                                <Plus size={18} /> {t('NewProduct')}
                             </button>
                         </div>
                     </div>
@@ -720,27 +781,27 @@ export default function PurchaseOrders() {
                     {/* Items List */}
                     {formData.items.length > 0 && (
                         <div className="mb-4">
-                            <h3 className="font-medium mb-2">Articles ({formData.items.length})</h3>
+                            <h3 className="font-medium mb-2">{t('ItemsCount', { count: formData.items.length })}</h3>
                             <div className="space-y-2 border rounded-lg overflow-hidden">
                                 <div className="bg-tertiary px-3 py-2 text-xs font-semibold uppercase text-muted flex">
-                                    <div className="flex-1">Produit</div>
-                                    <div className="w-24 text-right">Prix Achat</div>
-                                    <div className="w-24 text-right">Prix vente prévu</div>
-                                    <div className="w-20 text-center">Qté</div>
-                                    <div className="w-24 text-right">Total</div>
+                                    <div className="flex-1">{t('Product')}</div>
+                                    <div className="w-24 text-right">{t('PurchasePrice')}</div>
+                                    <div className="w-24 text-right">{t('ExpectedSalePrice')}</div>
+                                    <div className="w-20 text-center">{t('QtyShort')}</div>
+                                    <div className="w-24 text-right">{t('Total')}</div>
                                     <div className="w-10"></div>
                                 </div>
                                 {formData.items.map((item) => (
                                     <div key={item.product} className="flex items-center p-3 border-t border-border hover:bg-tertiary/30 gap-2">
                                         <div className="flex-1 min-w-0">
-                                            <div className="font-medium truncate">{item.productName || `Produit #${item.product}`}</div>
+                                            <div className="font-medium truncate">{item.productName || t('ProductNumber', { id: item.product })}</div>
                                             <div className="text-xs text-muted flex items-center gap-1">
                                                 <Barcode size={10} /> {item.barcode || '---'}
                                             </div>
                                         </div>
                                         <div className="w-24">
                                             <input
-                                                aria-label={`Prix d'achat de ${item.productName || `produit ${item.product}`}`}
+                                                aria-label={t('PurchasePriceOfProduct', { product: item.productName || t('ProductNumber', { id: item.product }) })}
                                                 type="number"
                                                 step="0.01"
                                                 min="0"
@@ -757,12 +818,12 @@ export default function PurchaseOrders() {
                                                     });
                                                 }}
                                                 className="w-full text-right text-sm py-1 px-2"
-                                                title="Prix d'achat négocié pour cette commande (DH)"
+                                                title={t('NegotiatedPurchasePriceHelp', { symbol: currency.symbol })}
                                             />
                                         </div>
                                         <div className="w-24">
                                             <input
-                                                aria-label={`Prix de vente de ${item.productName || `produit ${item.product}`}`}
+                                                aria-label={t('SalePriceOfProduct', { product: item.productName || t('ProductNumber', { id: item.product }) })}
                                                 type="text"
                                                 step="0.01"
                                                 min="0"
@@ -779,12 +840,12 @@ export default function PurchaseOrders() {
                                                     });
                                                 }}
                                                 className="w-full text-right text-sm py-1 px-2"
-                                                title="Prix de vente qui sera appliquÃ© au stock et Ã  la caisse Ã  la rÃ©ception"
+                                                title={t('ReceiptSalePriceHelp')}
                                             />
                                         </div>
                                         <div className="w-20">
                                             <input
-                                                aria-label={`Quantité de ${item.productName || `produit ${item.product}`}`}
+                                                aria-label={t('QuantityOfProduct', { product: item.productName || t('ProductNumber', { id: item.product }) })}
                                                 type="text"
                                                 min="1"
                                                 value={item.quantity}
@@ -803,18 +864,18 @@ export default function PurchaseOrders() {
                                             />
                                         </div>
                                         <div className="w-24 text-right font-bold text-accent">
-                                            {(item.quantity * (parseDecimalInput(item.unit_cost) || 0)).toFixed(2)}
+                                            {currency.format(item.quantity * (parseDecimalInput(item.unit_cost) || 0))}
                                         </div>
                                         <div className="w-10 text-right">
-                                            <button type="button" onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded" aria-label={`Retirer ${item.productName || `produit ${item.product}`}`}>
+                                            <button type="button" onClick={() => removeItem(item.product)} className="text-danger hover:bg-danger/10 p-1 rounded" aria-label={t('RemoveProductFromOrder', { product: item.productName || t('ProductNumber', { id: item.product }) })}>
                                                 <Trash2 size={16} aria-hidden="true" />
                                             </button>
                                         </div>
                                     </div>
                                 ))}
                                 <div className="bg-tertiary/50 p-3 flex justify-end items-center border-t border-border">
-                                    <span className="text-muted mr-3">Total achat estimé:</span>
-                                    <span className="text-xl font-bold">{orderTotal.toFixed(2)} DH</span>
+                                    <span className="text-muted mr-3">{t('EstimatedPurchaseTotal')}:</span>
+                                    <span className="text-xl font-bold">{currency.format(orderTotal)}</span>
                                 </div>
                             </div>
                         </div>
@@ -822,22 +883,22 @@ export default function PurchaseOrders() {
 
                     {/* Notes */}
                     <div className="mb-4">
-                        <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-notes">Notes</label>
+                        <label className="block text-sm font-medium mb-1" htmlFor="purchase-order-notes">{t('Notes')}</label>
                         <textarea
                             id="purchase-order-notes"
                             value={formData.notes}
                             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                             className="input w-full h-20 resize-none"
-                            placeholder="Notes pour le fournisseur..."
+                            placeholder={t('SupplierNotesPlaceholder')}
                         />
                     </div>
 
                     {/* Actions */}
                     <div className="flex gap-3 pt-4 border-t border-border">
                         <button type="submit" disabled={createOrder.isPending} className="btn-primary flex-1 py-3 text-lg">
-                            {createOrder.isPending ? 'Création...' : 'Valider la Commande'}
+                            {createOrder.isPending ? t('Creating') : t('SubmitPurchaseOrder')}
                         </button>
-                        <button type="button" onClick={resetForm} className="btn-secondary px-6">Annuler</button>
+                        <button type="button" onClick={resetForm} className="btn-secondary px-6">{t('Cancel')}</button>
                     </div>
                 </form>
             )}
@@ -845,22 +906,22 @@ export default function PurchaseOrders() {
             {/* Orders List */}
             <div className="card">
                 <div className="card-header">
-                    <h2 className="font-semibold">Historique des Commandes</h2>
+                    <h2 className="font-semibold">{t('PurchaseOrderHistory')}</h2>
                 </div>
                 <div className="divide-y">
                     {isLoading ? (
-                        <div className="p-8 text-center text-muted" role="status">Chargement…</div>
+                        <div className="p-8 text-center text-muted" role="status">{t('Loading')}</div>
                     ) : isError ? (
                         <div className="network-error-state m-4" role="alert">
-                            <p className="font-semibold">Impossible de charger les commandes.</p>
+                            <p className="font-semibold">{t('PurchaseOrdersLoadFailed')}</p>
                             <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>
-                                Réessayer
+                                {t('Retry')}
                             </button>
                         </div>
                     ) : orders.length === 0 ? (
                         <div className="p-8 text-center text-muted">
                             <ClipboardList size={48} className="mx-auto mb-4 opacity-50" />
-                            <p>Aucune commande</p>
+                            <p>{t('NoPurchaseOrders')}</p>
                         </div>
                     ) : (
                         orders.map((order) => (
@@ -879,19 +940,19 @@ export default function PurchaseOrders() {
                                         <div>
                                             <p className="font-medium">{order.reference}</p>
                                             <div className="flex items-center gap-2 text-sm text-muted">
-                                                <span>{order.supplier_name || `Fournisseur #${order.supplier}`}</span>
+                                                <span>{order.supplier_name || t('SupplierNumber', { id: order.supplier })}</span>
                                                 <span>•</span>
                                                 <span className="flex items-center gap-1">
-                                                    <Calendar size={12} /> {new Date(order.created_at).toLocaleDateString('fr-FR')}
+                                                    <Calendar size={12} /> {new Date(order.created_at).toLocaleDateString(locale)}
                                                 </span>
                                             </div>
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-4">
                                         <span className={`badge ${getStatusBadge(order.status)}`}>
-                                            {order.status_display || order.status}
+                                            {t(`PurchaseOrderStatus${order.status}`, { defaultValue: order.status_display || order.status })}
                                         </span>
-                                        <span className="font-bold">{order.total_amount?.toFixed(2) || '0.00'} DH</span>
+                                        <span className="font-bold">{currency.format(order.total_amount)}</span>
                                         {expandedOrder === order.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                                     </div>
                                 </button>
@@ -900,11 +961,11 @@ export default function PurchaseOrders() {
                                     <div id={`purchase-order-${order.id}`} className="mt-4 pl-14 space-y-3">
                                         <div className="bg-tertiary/20 rounded-lg p-3">
                                             {/* Order Items Detail */}
-                                            <h4 className="font-medium text-sm mb-2">Détails de la commande</h4>
+                                            <h4 className="font-medium text-sm mb-2">{t('PurchaseOrderDetails')}</h4>
                                             {order.status === 'PARTIAL' && (
                                                 <div className="text-xs text-warning mb-2 flex items-center gap-1">
                                                     <AlertTriangle size={12} />
-                                                    Cette commande est partiellement reçue. Les quantités affichées ci-dessous sont le total commandé.
+                                                    {t('PartiallyReceivedOrderHelp')}
                                                 </div>
                                             )}
                                             <div className="space-y-1">
@@ -916,7 +977,7 @@ export default function PurchaseOrders() {
                                                             {/* Show verification progress if received > 0 */}
                                                             {(item.received_quantity > 0 || order.status === 'PARTIAL') && (
                                                                 <span className="text-xs text-muted ml-2">
-                                                                    (Reçu: <span className={item.received_quantity >= item.quantity ? 'text-success' : 'text-warning'}>
+                                                                    ({t('Received')}: <span className={item.received_quantity >= item.quantity ? 'text-success' : 'text-warning'}>
                                                                         {item.received_quantity}/{item.quantity}
                                                                     </span>)
                                                                 </span>
@@ -925,18 +986,18 @@ export default function PurchaseOrders() {
                                                                 <span className="text-xs text-muted ml-2">x {item.quantity}</span>
                                                             )}
                                                             </div>
-                                                            <span>{item.unit_cost} DH</span>
+                                                            <span>{currency.format(item.unit_cost)}</span>
                                                         </div>
                                                         {asArray<StockLayer>(item.product_layers).length > 0 && (
                                                             <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                                                                 {asArray<StockLayer>(item.product_layers).map((layer, idx) => (
                                                                     <div key={`${item.id}-${idx}`} className="rounded-lg bg-secondary border border-border px-3 py-2 text-xs">
                                                                         <div className="flex items-center justify-between gap-2">
-                                                                            <span className="font-semibold">Lot FIFO #{idx + 1}</span>
-                                                                            <span className="badge badge-accent">{layer.remaining_quantity}/{layer.initial_quantity} pcs</span>
+                                                                            <span className="font-semibold">{t('FifoLotNumber', { number: idx + 1 })}</span>
+                                                                            <span className="badge badge-accent">{layer.remaining_quantity}/{layer.initial_quantity} {t('PiecesShort')}</span>
                                                                         </div>
                                                                         <div className="mt-1 text-muted">
-                                                                            <span>Achat {Number(layer.unit_cost).toFixed(2)} DH</span>
+                                                                            <span>{t('Purchase')} {currency.format(layer.unit_cost)}</span>
                                                                         </div>
                                                                     </div>
                                                                 ))}
@@ -951,18 +1012,18 @@ export default function PurchaseOrders() {
                                             <div className="flex items-center justify-between gap-3 flex-wrap">
                                                 <div className="flex items-center gap-2">
                                                     <Wallet size={18} className="text-accent" />
-                                                    <h4 className="font-semibold text-sm">Règlements fournisseur</h4>
+                                                    <h4 className="font-semibold text-sm">{t('SupplierPayments')}</h4>
                                                 </div>
                                                 <div className="flex gap-3 text-sm flex-wrap">
-                                                    <span>Payé : <b>{order.paid_amount.toFixed(2)} DH</b></span>
-                                                    <span>Solde : <b className={order.balance_due > 0 ? 'text-warning' : 'text-success'}>{order.balance_due.toFixed(2)} DH</b></span>
+                                                    <span>{t('Paid')}: <b>{currency.format(order.paid_amount)}</b></span>
+                                                    <span>{t('Balance')}: <b className={order.balance_due > 0 ? 'text-warning' : 'text-success'}>{currency.format(order.balance_due)}</b></span>
                                                 </div>
                                             </div>
                                             <p className="text-xs text-muted">
-                                                Mouvement de trésorerie uniquement : ces règlements ne réduisent ni la marge ni le bénéfice.
+                                                {t('SupplierPaymentCashFlowNotice')}
                                             </p>
                                             {order.payments.length === 0 ? (
-                                                <p className="text-sm text-muted">Aucun règlement enregistré.</p>
+                                                <p className="text-sm text-muted">{t('NoSupplierPayments')}</p>
                                             ) : (
                                                 <div className="space-y-2">
                                                     {order.payments.map(payment => (
@@ -972,31 +1033,30 @@ export default function PurchaseOrders() {
                                                         >
                                                             <div className="flex items-center justify-between gap-3 flex-wrap">
                                                                 <div>
-                                                                    <span className="font-semibold">{Number(payment.amount).toFixed(2)} DH</span>
+                                                                    <span className="font-semibold">{currency.format(payment.amount)}</span>
                                                                     <span className="text-muted ml-2">
-                                                                        {payment.method === 'CASH' ? 'Espèces' : payment.method === 'BANK' ? 'Banque' : 'Autre'} · {payment.paid_on}
+                                                                        {t(`SupplierPaymentMethod${payment.method}`)} · {new Date(`${payment.paid_on}T00:00:00`).toLocaleDateString(locale)}
                                                                     </span>
-                                                                    {payment.reference && <span className="text-muted ml-2">Réf. {payment.reference}</span>}
+                                                                    {payment.reference && <span className="text-muted ml-2">{t('ReferenceShort')} {payment.reference}</span>}
                                                                 </div>
                                                                 {payment.status === 'ACTIVE' ? (
                                                                     <button
                                                                         type="button"
                                                                         className="btn-secondary text-xs"
-                                                                        onClick={() => {
-                                                                            setReversingPayment({ order, payment });
-                                                                            setReversalReason('');
-                                                                            setReversalOperationId(globalThis.crypto.randomUUID());
-                                                                        }}
+                                                                         onClick={() => {
+                                                                             setReversingPayment({ order, payment });
+                                                                             setReversalReason('');
+                                                                         }}
                                                                     >
-                                                                        <RotateCcw size={14} /> Contrepasser
+                                                                        <RotateCcw size={14} /> {t('Reverse')}
                                                                     </button>
                                                                 ) : (
-                                                                    <span className="badge badge-danger">Contrepassé</span>
+                                                                    <span className="badge badge-danger">{t('Reversed')}</span>
                                                                 )}
                                                             </div>
                                                             {payment.note && <p className="text-xs text-muted mt-1">{payment.note}</p>}
                                                             {payment.status === 'REVERSED' && payment.reversal_reason && (
-                                                                <p className="text-xs text-danger mt-1">Motif : {payment.reversal_reason}</p>
+                                                                <p className="text-xs text-danger mt-1">{t('Reason')}: {payment.reversal_reason}</p>
                                                             )}
                                                         </div>
                                                     ))}
@@ -1008,7 +1068,7 @@ export default function PurchaseOrders() {
                                                     className="btn-primary text-sm"
                                                     onClick={() => openPayment(order)}
                                                 >
-                                                    <CreditCard size={16} /> Enregistrer un règlement
+                                                    <CreditCard size={16} /> {t('RecordSupplierPayment')}
                                                 </button>
                                             )}
                                         </div>
@@ -1025,14 +1085,14 @@ export default function PurchaseOrders() {
                                                         onClick={() => sendOrder.mutate(order.id)}
                                                         className="btn-info flex items-center gap-1 text-sm"
                                                     >
-                                                        <Send size={16} /> Envoyer
+                                                        <Send size={16} /> {t('Send')}
                                                     </button>
                                                     <button
                                                         type="button"
                                                         onClick={() => cancelOrder.mutate(order.id)}
                                                         className="btn-danger flex items-center gap-1 text-sm"
                                                     >
-                                                        <X size={16} /> Annuler
+                                                        <X size={16} /> {t('Cancel')}
                                                     </button>
                                                 </>
                                             )}
@@ -1044,7 +1104,7 @@ export default function PurchaseOrders() {
                                                     disabled={receiveOrder.isPending}
                                                 >
                                                     <Check size={16} />
-                                                    {receiveOrder.isPending ? 'Mise à jour...' : 'Confirmer la Réception (Ajouter au Stock)'}
+                                                    {receiveOrder.isPending ? t('Updating') : t('ConfirmReceiptAddStock')}
                                                 </button>
                                             )}
                                         </div>
@@ -1084,15 +1144,15 @@ export default function PurchaseOrders() {
                         <div className="card-header flex items-center justify-between">
                             <div>
                                 <h2 id="supplier-payment-title" className="text-xl font-bold flex items-center gap-2">
-                                    <Wallet size={20} className="text-accent" /> Règlement fournisseur
+                                    <Wallet size={20} className="text-accent" /> {t('SupplierPayment')}
                                 </h2>
-                                <p className="text-sm text-muted mt-1">{payingOrder.reference} · solde {payingOrder.balance_due.toFixed(2)} DH</p>
+                                <p className="text-sm text-muted mt-1">{payingOrder.reference} · {t('Balance').toLocaleLowerCase()} {currency.format(payingOrder.balance_due)}</p>
                             </div>
-                            <button type="button" className="btn-icon" aria-label="Fermer" disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}><X size={20} /></button>
+                            <button type="button" className="btn-icon" aria-label={t('Close')} disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}><X size={20} /></button>
                         </div>
                         <div className="card-body space-y-4">
                             <label className="block">
-                                <span className="text-sm font-semibold">Montant (DH)</span>
+                                <span className="text-sm font-semibold">{t('Amount')} ({currency.symbol})</span>
                                 <input
                                     type="text"
                                     inputMode="decimal"
@@ -1104,39 +1164,39 @@ export default function PurchaseOrders() {
                             </label>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <label className="block">
-                                    <span className="text-sm font-semibold">Mode</span>
+                                    <span className="text-sm font-semibold">{t('Method')}</span>
                                     <select
                                         value={paymentForm.method}
                                         onChange={event => setPaymentForm(current => ({ ...current, method: event.target.value as SupplierPayment['method'] }))}
                                         className="w-full mt-1"
                                     >
-                                        <option value="CASH">Espèces (sortie de caisse)</option>
-                                        <option value="BANK">Banque</option>
-                                        <option value="OTHER">Autre</option>
+                                        <option value="CASH">{t('CashRegisterOutflow')}</option>
+                                        <option value="BANK">{t('Bank')}</option>
+                                        <option value="OTHER">{t('Other')}</option>
                                     </select>
                                 </label>
                                 <label className="block">
-                                    <span className="text-sm font-semibold">Date</span>
+                                    <span className="text-sm font-semibold">{t('Date')}</span>
                                     <input type="date" value={paymentForm.paid_on} onChange={event => setPaymentForm(current => ({ ...current, paid_on: event.target.value }))} className="w-full mt-1" />
                                 </label>
                             </div>
                             <label className="block">
-                                <span className="text-sm font-semibold">Référence (optionnelle)</span>
-                                <input value={paymentForm.reference} maxLength={100} onChange={event => setPaymentForm(current => ({ ...current, reference: event.target.value }))} className="w-full mt-1" placeholder="Virement, reçu, chèque…" />
+                                <span className="text-sm font-semibold">{t('OptionalReference')}</span>
+                                <input value={paymentForm.reference} maxLength={100} onChange={event => setPaymentForm(current => ({ ...current, reference: event.target.value }))} className="w-full mt-1" placeholder={t('PaymentReferencePlaceholder')} />
                             </label>
                             <label className="block">
-                                <span className="text-sm font-semibold">Note (optionnelle)</span>
+                                <span className="text-sm font-semibold">{t('OptionalNote')}</span>
                                 <textarea value={paymentForm.note} onChange={event => setPaymentForm(current => ({ ...current, note: event.target.value }))} className="w-full mt-1" rows={2} />
                             </label>
                             <div className="rounded-lg bg-tertiary p-3 text-xs text-muted">
                                 <Banknote size={15} className="inline mr-1" />
-                                Un paiement en espèces réduit la caisse physique. Aucun mode ne modifie la marge ou le bénéfice.
+                                {t('SupplierPaymentAccountingNotice')}
                             </div>
                         </div>
                         <div className="card-header border-t flex justify-end gap-3">
-                            <button type="button" className="btn-secondary" disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}>Annuler</button>
+                            <button type="button" className="btn-secondary" data-modal-close disabled={createPayment.isPending} onClick={() => setPayingOrder(null)}>{t('Cancel')}</button>
                             <button type="button" className="btn-primary" disabled={createPayment.isPending} onClick={submitPayment}>
-                                {createPayment.isPending ? 'Enregistrement…' : 'Enregistrer le règlement'}
+                                {createPayment.isPending ? t('Saving') : t('RecordSupplierPayment')}
                             </button>
                         </div>
                     </div>
@@ -1148,14 +1208,14 @@ export default function PurchaseOrders() {
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true" />
                     <div className="relative card w-full max-w-md p-0" role="dialog" aria-modal="true" aria-labelledby="reverse-payment-title">
                         <div className="card-header">
-                            <h2 id="reverse-payment-title" className="text-xl font-bold">Contrepasser le règlement</h2>
+                            <h2 id="reverse-payment-title" className="text-xl font-bold">{t('ReverseSupplierPayment')}</h2>
                             <p className="text-sm text-muted mt-1">
-                                {Number(reversingPayment.payment.amount).toFixed(2)} DH · {reversingPayment.order.reference}
+                                {currency.format(reversingPayment.payment.amount)} · {reversingPayment.order.reference}
                             </p>
                         </div>
                         <div className="card-body">
                             <label className="block">
-                                <span className="text-sm font-semibold">Motif obligatoire</span>
+                                <span className="text-sm font-semibold">{t('RequiredReason')}</span>
                                 <textarea
                                     value={reversalReason}
                                     onChange={event => setReversalReason(event.target.value)}
@@ -1165,22 +1225,17 @@ export default function PurchaseOrders() {
                                     autoFocus
                                 />
                             </label>
-                            <p className="text-xs text-muted mt-3">L’historique sera conservé. Si le paiement était en espèces, le montant sera réintégré au solde théorique de caisse.</p>
+                            <p className="text-xs text-muted mt-3">{t('SupplierPaymentReversalNotice')}</p>
                         </div>
                         <div className="card-header border-t flex justify-end gap-3">
-                            <button type="button" className="btn-secondary" disabled={reversePayment.isPending} onClick={() => setReversingPayment(null)}>Annuler</button>
+                            <button type="button" className="btn-secondary" data-modal-close disabled={reversePayment.isPending} onClick={() => setReversingPayment(null)}>{t('Cancel')}</button>
                             <button
                                 type="button"
                                 className="btn-danger"
                                 disabled={!reversalReason.trim() || reversePayment.isPending}
-                                onClick={() => reversePayment.mutate({
-                                    orderId: reversingPayment.order.id,
-                                    paymentId: reversingPayment.payment.id,
-                                    reason: reversalReason.trim(),
-                                    operationId: reversalOperationId,
-                                })}
+                                onClick={submitPaymentReversal}
                             >
-                                <RotateCcw size={16} /> {reversePayment.isPending ? 'Contrepassation…' : 'Confirmer'}
+                                <RotateCcw size={16} /> {reversePayment.isPending ? t('Reversing') : t('Confirm')}
                             </button>
                         </div>
                     </div>
@@ -1202,12 +1257,10 @@ export default function PurchaseOrders() {
                             <div>
                                 <h2 id="receive-order-title" className="text-xl font-bold flex items-center gap-2">
                                     <Check size={22} className="text-success" />
-                                    Réception — {receivingOrder.reference}
+                                    {t('Receipt')} — {receivingOrder.reference}
                                 </h2>
                                 <p id="receive-order-description" className="text-sm text-muted mt-1">
-                                    Saisis les quantités réellement reçues. Tu peux ajuster le prix
-                                    payé si le fournisseur l'a modifié, et propager ce nouveau prix
-                                    sur la fiche produit.
+                                    {t('ReceivePurchaseOrderInstructions')}
                                 </p>
                             </div>
                             <button
@@ -1215,7 +1268,7 @@ export default function PurchaseOrders() {
                                 onClick={handleReceiveCancel}
                                 disabled={receiveOrder.isPending}
                                 className="btn-ghost btn-icon"
-                                aria-label="Fermer"
+                                aria-label={t('Close')}
                             >
                                 <X size={22} />
                             </button>
@@ -1239,23 +1292,23 @@ export default function PurchaseOrders() {
                                                     <Barcode size={10} /> {draft.barcode || '---'}
                                                 </p>
                                                 <p className="text-xs text-muted mt-1">
-                                                    Commandé : <b>{draft.ordered_qty}</b>
+                                                    {t('Ordered')}: <b>{draft.ordered_qty}</b>
                                                     {draft.already_received > 0 && (
-                                                        <> · Déjà reçu : <b className="text-warning">{draft.already_received}</b></>
+                                                        <> · {t('AlreadyReceived')}: <b className="text-warning">{draft.already_received}</b></>
                                                     )}
-                                                    {' '}· Restant : <b className="text-success">{draft.remaining}</b>
+                                                    {' '}· {t('Remaining')}: <b className="text-success">{draft.remaining}</b>
                                                 </p>
                                             </div>
                                             <div className="text-right text-sm">
-                                                <span className="text-muted">Total ligne </span>
-                                                <span className="font-bold text-accent">{lineTotal.toFixed(2)} DH</span>
+                                                <span className="text-muted">{t('LineTotal')} </span>
+                                                <span className="font-bold text-accent">{currency.format(lineTotal)}</span>
                                             </div>
                                         </div>
 
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                             <div>
                                                 <label htmlFor={`receive-quantity-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
-                                                    Quantité reçue
+                                                    {t('ReceivedQuantity')}
                                                 </label>
                                                 <input
                                                     id={`receive-quantity-${draft.item_id}`}
@@ -1276,7 +1329,7 @@ export default function PurchaseOrders() {
                                             </div>
                                             <div>
                                                 <label htmlFor={`receive-cost-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
-                                                    Prix d'achat appliqué (DH)
+                                                    {t('AppliedPurchasePrice')} ({currency.symbol})
                                                 </label>
                                                 <input
                                                     id={`receive-cost-${draft.item_id}`}
@@ -1289,12 +1342,12 @@ export default function PurchaseOrders() {
                                                     className="w-full text-right"
                                                 />
                                                 <p className="text-xs text-muted mt-1">
-                                                    Crée un nouveau lot FIFO à ce prix.
+                                                    {t('CreatesFifoLayerAtPrice')}
                                                 </p>
                                             </div>
                                             <div>
                                                 <label htmlFor={`receive-sale-price-${draft.item_id}`} className="block text-xs font-semibold text-muted mb-1">
-                                                    Prix de vente unique après réception (optionnel)
+                                                    {t('OptionalSalePriceAfterReceipt')}
                                                 </label>
                                                 <input
                                                     id={`receive-sale-price-${draft.item_id}`}
@@ -1304,11 +1357,11 @@ export default function PurchaseOrders() {
                                                     inputMode="decimal"
                                                     value={draft.new_sale_price}
                                                     onChange={(e) => updateDraft(draft.item_id, { new_sale_price: normalizeDecimalInput(e.target.value) })}
-                                                    placeholder={`actuel : ${draft.current_sale_price.toFixed(2)}`}
+                                                    placeholder={t('CurrentPricePlaceholder', { price: currency.format(draft.current_sale_price) })}
                                                     className="w-full text-right"
                                                 />
                                                 <p className="text-xs text-muted mt-1">
-                                                    Si rempli, ce prix s'applique immédiatement à tout le stock, ancien et nouveau.
+                                                    {t('SalePriceAppliesToAllStock')}
                                                 </p>
                                             </div>
                                         </div>
@@ -1320,8 +1373,7 @@ export default function PurchaseOrders() {
                                                 onChange={(e) => updateDraft(draft.item_id, { update_purchase_price: e.target.checked })}
                                             />
                                             <span>
-                                                Mettre à jour aussi le <b>prix d'achat par défaut</b> du produit
-                                                (pour les prochaines commandes)
+                                                {t('AlsoUpdateDefaultPurchasePrice')}
                                             </span>
                                         </label>
                                     </div>
@@ -1331,7 +1383,7 @@ export default function PurchaseOrders() {
 
                         <div className="card-header sticky bottom-0 bg-secondary z-10 flex items-center justify-end gap-3 border-t">
                             <button type="button" onClick={handleReceiveCancel} disabled={receiveOrder.isPending} className="btn-secondary">
-                                Annuler
+                                {t('Cancel')}
                             </button>
                             <button
                                 type="button"
@@ -1340,7 +1392,7 @@ export default function PurchaseOrders() {
                                 className="btn-primary flex items-center gap-2"
                             >
                                 <Check size={18} />
-                                {receiveOrder.isPending ? 'Enregistrement…' : 'Confirmer la réception'}
+                                {receiveOrder.isPending ? t('Saving') : t('ConfirmReceipt')}
                             </button>
                         </div>
                     </div>

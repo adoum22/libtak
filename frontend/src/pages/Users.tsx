@@ -4,6 +4,7 @@ import client, { getApiErrorMessage } from '../api/client';
 import { useToast } from '../components/ToastContext';
 import { useTranslation } from 'react-i18next';
 import Pagination from '../components/Pagination';
+import ConfirmDialog from '../components/ConfirmDialog';
 import {
     Users as UsersIcon,
     UserPlus,
@@ -60,6 +61,7 @@ export default function Users() {
     const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [selectedUserForPassword, setSelectedUserForPassword] = useState<User | null>(null);
+    const [pendingStatusUser, setPendingStatusUser] = useState<User | null>(null);
     const [newPassword, setNewPassword] = useState('');
     const [formData, setFormData] = useState({
         username: '',
@@ -81,7 +83,11 @@ export default function Users() {
         queryKey: ['users'],
         queryFn: fetchAllUsers,
     });
-
+    const { data: currentUser } = useQuery<User>({
+        queryKey: ['currentUser'],
+        queryFn: () => client.get('/auth/me/').then(response => response.data),
+        staleTime: 60_000,
+    });
     // Mutations
     const createMutation = useMutation({
         mutationFn: (data: FormData) => client.post('/auth/users/', data, {
@@ -92,7 +98,7 @@ export default function Users() {
             closeModal();
         },
         onError: (error: unknown) => {
-            toast.error('Erreur: ' + getApiErrorMessage(error));
+            toast.error(t('OperationError', { message: getApiErrorMessage(error) }));
         }
     });
 
@@ -102,10 +108,10 @@ export default function Users() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
             closeModal();
-            toast.success('Utilisateur mis à jour avec succès !');
+            toast.success(t('UserUpdated'));
         },
         onError: (error: unknown) => {
-            toast.error('Erreur: ' + getApiErrorMessage(error));
+            toast.error(t('OperationError', { message: getApiErrorMessage(error) }));
         }
     });
 
@@ -113,18 +119,24 @@ export default function Users() {
         mutationFn: (id: number) => client.post(`/auth/users/${id}/toggle_active/`),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['users'] });
-        }
+            setPendingStatusUser(null);
+            toast.success(t('UserStatusUpdated'));
+        },
+        onError: (error: unknown) => {
+            setPendingStatusUser(null);
+            toast.error(t('OperationError', { message: getApiErrorMessage(error) }));
+        },
     });
 
     const resetPasswordMutation = useMutation({
         mutationFn: ({ id, password }: { id: number; password: string }) =>
             client.post(`/auth/users/${id}/reset_password/`, { new_password: password }),
         onSuccess: () => {
-            toast.success('Mot de passe réinitialisé avec succès.');
+            toast.success(t('PasswordResetSuccess'));
             closePasswordModal();
         },
         onError: (error: unknown) => {
-            toast.error('Erreur: ' + getApiErrorMessage(error, 'Impossible de changer le mot de passe'));
+            toast.error(t('OperationError', { message: getApiErrorMessage(error, t('PasswordChangeFailed')) }));
         }
     });
 
@@ -189,7 +201,7 @@ export default function Users() {
         e.preventDefault();
 
         if (!editingUser && formData.password !== formData.password_confirm) {
-            toast.error('Les mots de passe ne correspondent pas.');
+            toast.error(t('PasswordsDoNotMatch'));
             return;
         }
 
@@ -204,7 +216,7 @@ export default function Users() {
                 phone: formData.phone,
                 can_view_stock: formData.can_view_stock,
                 can_manage_stock: formData.can_manage_stock,
-                is_active: formData.role === 'ADMIN' ? true : (editingUser.is_active ?? true)
+                is_active: editingUser.is_active ?? true,
             };
             updateMutation.mutate({ id: editingUser.id, data: updatePayload });
         } else {
@@ -266,6 +278,7 @@ export default function Users() {
                     type="button"
                     onClick={() => handleOpenModal()}
                     className="btn-primary flex items-center gap-2"
+                    title={t('AddUser')}
                 >
                     <UserPlus size={20} />
                     {t('AddUser')}
@@ -285,7 +298,7 @@ export default function Users() {
                         onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
                     />
                 </div>
-                <div className="flex bg-tertiary/30 p-1 rounded-lg" role="group" aria-label="Filtrer par rôle">
+                <div className="flex bg-tertiary/30 p-1 rounded-lg" role="group" aria-label={t('FilterByRole')}>
                     {(['ALL', 'ADMIN', 'CASHIER'] as const).map((role) => (
                         <button
                             type="button"
@@ -308,18 +321,18 @@ export default function Users() {
                 {isLoading ? (
                     <div className="col-span-full text-center py-12">
                         <div className="loader mx-auto"></div>
-                        <p className="mt-4 text-muted">Chargement des utilisateurs...</p>
+                        <p className="mt-4 text-muted">{t('UsersLoading')}</p>
                     </div>
                 ) : isError ? (
                     <div className="col-span-full network-error-state" role="alert">
-                        <p className="font-semibold">Les utilisateurs n’ont pas pu être chargés.</p>
-                        <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>Réessayer</button>
+                        <p className="font-semibold">{t('UsersLoadFailed')}</p>
+                        <button type="button" className="btn-secondary mt-4" onClick={() => void refetch()}>{t('Retry')}</button>
                     </div>
                 ) : filteredUsers.length === 0 ? (
                     <div className="col-span-full text-center py-12 bg-tertiary/10 rounded-xl border border-dashed border-tertiary">
                         <UsersIcon size={48} className="mx-auto text-muted mb-4" />
-                        <h3 className="text-lg font-bold">Aucun utilisateur trouvé</h3>
-                        <p className="text-muted">{users.length === 0 ? 'Créez votre premier utilisateur pour commencer.' : 'Modifiez vos filtres pour élargir la recherche.'}</p>
+                        <h2 className="text-lg font-bold">{t('NoUsersFound')}</h2>
+                        <p className="text-muted">{users.length === 0 ? t('CreateFirstUser') : t('BroadenUserFilters')}</p>
                     </div>
                 ) : (
                     visibleUsers.map((user) => (
@@ -340,8 +353,8 @@ export default function Users() {
                                                 </div>
                                             )}
                                         </div>
-                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-white ${user.is_active ? 'bg-success' : 'bg-danger'}`} title={user.is_active ? 'Actif' : 'Inactif'}>
-                                            <span className="sr-only">{user.is_active ? 'Compte actif' : 'Compte inactif'}</span>
+                                        <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-white ${user.is_active ? 'bg-success' : 'bg-danger'}`} title={user.is_active ? t('Active') : t('Inactive')}>
+                                            <span className="sr-only">{user.is_active ? t('ActiveAccount') : t('InactiveAccount')}</span>
                                         </div>
                                     </div>
                                     <div className="flex gap-2">
@@ -349,8 +362,8 @@ export default function Users() {
                                             type="button"
                                             onClick={() => handleOpenPasswordModal(user)}
                                             className="p-2 hover:bg-tertiary/20 rounded-full text-muted hover:text-primary transition-colors"
-                                            title="Changer mot de passe"
-                                            aria-label={`Changer le mot de passe de ${user.username}`}
+                                            title={t('ChangePassword')}
+                                            aria-label={t('ChangePasswordFor', { username: user.username })}
                                         >
                                             <Lock size={18} />
                                         </button>
@@ -358,25 +371,30 @@ export default function Users() {
                                             type="button"
                                             onClick={() => handleOpenModal(user)}
                                             className="p-2 hover:bg-tertiary/20 rounded-full text-muted hover:text-accent transition-colors"
-                                            title="Modifier"
-                                            aria-label={`Modifier ${user.username}`}
+                                            title={t('Edit')}
+                                            aria-label={t('EditNamed', { name: user.username })}
                                         >
                                             <Edit size={18} />
                                         </button>
                                         <button
                                             type="button"
-                                            onClick={() => toggleActiveMutation.mutate(user.id)}
+                                            onClick={() => setPendingStatusUser(user)}
+                                            disabled={user.id === currentUser?.id}
                                             className={`p-2 hover:bg-tertiary/20 rounded-full transition-colors ${user.is_active ? 'text-success hover:text-red-500' : 'text-red-500 hover:text-success'
                                                 }`}
-                                            title={user.is_active ? 'Désactiver' : 'Activer'}
-                                            aria-label={`${user.is_active ? 'Désactiver' : 'Activer'} ${user.username}`}
+                                            title={user.id === currentUser?.id
+                                                ? t('CannotDisableOwnAccount')
+                                                : user.is_active ? t('Disable') : t('Enable')}
+                                            aria-label={user.id === currentUser?.id
+                                                ? t('CannotDisableOwnAccount')
+                                                : t(user.is_active ? 'DisableNamed' : 'EnableNamed', { name: user.username })}
                                         >
                                             <Power size={18} />
                                         </button>
                                     </div>
                                 </div>
 
-                                <h3 className="text-lg font-bold mb-1">{user.first_name} {user.last_name}</h3>
+                                <h2 className="text-lg font-bold mb-1">{user.first_name} {user.last_name}</h2>
                                 <p className="text-sm text-muted mb-3">@{user.username}</p>
 
                                 <div className="flex items-center gap-2 mb-4">
@@ -385,33 +403,33 @@ export default function Users() {
                                         : 'bg-accent/10 text-accent'
                                         }`}>
                                         {user.role === 'ADMIN' ? <Shield size={12} /> : <UsersIcon size={12} />}
-                                        {user.role === 'ADMIN' ? 'Administrateur' : 'Vendeur'}
+                                        {user.role === 'ADMIN' ? t('Administrator') : t('Seller')}
                                     </span>
                                 </div>
 
                                 <div className="space-y-2 text-sm text-muted border-t pt-4">
                                     <div>
-                                        <span className="opacity-70 block text-xs uppercase tracking-wider mb-1">Email</span>
+                                        <span className="opacity-70 block text-xs uppercase tracking-wider mb-1">{t('Email')}</span>
                                         {user.email}
                                     </div>
                                     <div>
-                                        <span className="opacity-70 block text-xs uppercase tracking-wider mb-1">Téléphone</span>
+                                        <span className="opacity-70 block text-xs uppercase tracking-wider mb-1">{t('Phone')}</span>
                                         {user.phone || '-'}
                                     </div>
                                     {user.role === 'CASHIER' && (
                                         <div className="grid grid-cols-2 gap-2 mt-3">
                                             <div className={`p-2 rounded bg-tertiary/20 text-center ${user.effective_can_view_stock ? 'text-success' : 'text-muted'}`}>
-                                                <span className="text-xs font-bold block">Voir Stock</span>
+                                                <span className="text-xs font-bold block">{t('ViewStockShort')}</span>
                                                 {user.effective_can_view_stock ? '✓' : '✗'}
                                                 {user.effective_can_view_stock !== user.can_view_stock && (
-                                                    <span className="block text-[10px] text-muted">droit global</span>
+                                                    <span className="block text-[10px] text-muted">{t('GlobalPermission')}</span>
                                                 )}
                                             </div>
                                             <div className={`p-2 rounded bg-tertiary/20 text-center ${user.effective_can_manage_stock ? 'text-success' : 'text-muted'}`}>
-                                                <span className="text-xs font-bold block">Gérer Stock</span>
+                                                <span className="text-xs font-bold block">{t('ManageStockShort')}</span>
                                                 {user.effective_can_manage_stock ? '✓' : '✗'}
                                                 {user.effective_can_manage_stock !== user.can_manage_stock && (
-                                                    <span className="block text-[10px] text-muted">droit global</span>
+                                                    <span className="block text-[10px] text-muted">{t('GlobalPermission')}</span>
                                                 )}
                                             </div>
                                         </div>
@@ -439,9 +457,9 @@ export default function Users() {
                     <div className="bg-secondary rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl animate-scaleIn" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
                         <div className="p-6 border-b flex justify-between items-center bg-tertiary/50">
                             <h2 id="user-modal-title" className="text-2xl font-bold text-primary">
-                                {editingUser ? 'Modifier l\'utilisateur' : 'Nouvel utilisateur'}
+                                {editingUser ? t('EditUser') : t('NewUser')}
                             </h2>
-                            <button type="button" onClick={closeModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary transition-colors" aria-label="Fermer la fenêtre">
+                            <button type="button" onClick={closeModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary transition-colors" aria-label={t('CloseWindow')}>
                                 ×
                             </button>
                         </div>
@@ -453,11 +471,11 @@ export default function Users() {
                                     <div className="relative group cursor-pointer">
                                         <div className="w-24 h-24 rounded-full overflow-hidden bg-tertiary/20 border-2 border-dashed border-tertiary hover:border-primary transition-colors flex items-center justify-center">
                                             {previewImage ? (
-                                                <img src={previewImage} alt="Aperçu de l’avatar" className="w-full h-full object-cover" />
+                                                <img src={previewImage} alt={t('AvatarPreview')} className="w-full h-full object-cover" />
                                             ) : (
                                                 <div className="text-center p-2">
                                                     <UserPlus className="mx-auto text-muted mb-1" size={20} />
-                                                    <span className="text-xs text-muted block">Photo</span>
+                                                    <span className="text-xs text-muted block">{t('Photo')}</span>
                                                 </div>
                                             )}
                                         </div>
@@ -466,7 +484,7 @@ export default function Users() {
                                             className="absolute inset-0 opacity-0 cursor-pointer"
                                             onChange={handleImageChange}
                                             accept="image/*"
-                                            aria-label="Choisir un avatar"
+                                            aria-label={t('ChooseAvatar')}
                                         />
                                         <div className="absolute bottom-0 right-0 bg-primary text-white p-1 rounded-full shadow-lg transform translate-x-1/4 translate-y-1/4">
                                             <Edit size={12} />
@@ -476,7 +494,7 @@ export default function Users() {
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="form-group">
-                                        <label htmlFor="user-first-name">Prénom</label>
+                                        <label htmlFor="user-first-name">{t('FirstName')}</label>
                                         <input
                                             id="user-first-name"
                                             type="text"
@@ -486,7 +504,7 @@ export default function Users() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label htmlFor="user-last-name">Nom</label>
+                                        <label htmlFor="user-last-name">{t('LastName')}</label>
                                         <input
                                             id="user-last-name"
                                             type="text"
@@ -499,7 +517,7 @@ export default function Users() {
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div className="form-group">
-                                        <label htmlFor="user-username">Nom d'utilisateur</label>
+                                        <label htmlFor="user-username">{t('Username')}</label>
                                         <input
                                             id="user-username"
                                             type="text"
@@ -509,21 +527,21 @@ export default function Users() {
                                         />
                                     </div>
                                     <div className="form-group">
-                                        <label htmlFor="user-role">Rôle</label>
+                                        <label htmlFor="user-role">{t('Role')}</label>
                                         <select
                                             id="user-role"
                                             value={formData.role}
                                             onChange={e => setFormData({ ...formData, role: e.target.value as 'ADMIN' | 'CASHIER' })}
                                         >
-                                            <option value="CASHIER">Vendeur</option>
-                                            <option value="ADMIN">Administrateur</option>
+                                            <option value="CASHIER">{t('Seller')}</option>
+                                            <option value="ADMIN">{t('Administrator')}</option>
                                         </select>
                                     </div>
                                 </div>
 
                                 {formData.role === 'CASHIER' && (
                                     <div className="card bg-tertiary/20 p-4 border border-tertiary">
-                                        <h3 className="font-bold text-sm mb-3 text-muted">Permissions Vendeur</h3>
+                                        <h3 className="font-bold text-sm mb-3 text-muted">{t('SellerPermissions')}</h3>
                                         <div className="space-y-3">
                                             <label className="flex items-center gap-3 cursor-pointer">
                                                 <input
@@ -533,8 +551,8 @@ export default function Users() {
                                                     className="w-5 h-5 accent-accent"
                                                 />
                                                 <div>
-                                                    <span className="font-medium block">Voir le stock</span>
-                                                    <span className="text-xs text-muted">Peut consulter l'inventaire en lecture seule</span>
+                                                    <span className="font-medium block">{t('ViewStock')}</span>
+                                                    <span className="text-xs text-muted">{t('ViewStockReadOnlyHint')}</span>
                                                 </div>
                                             </label>
 
@@ -546,8 +564,8 @@ export default function Users() {
                                                     className="w-5 h-5 accent-accent"
                                                 />
                                                 <div>
-                                                    <span className="font-medium block">Modifier le stock</span>
-                                                    <span className="text-xs text-muted">Peut ajouter, modifier et supprimer des produits</span>
+                                                    <span className="font-medium block">{t('ManageStock')}</span>
+                                                    <span className="text-xs text-muted">{t('ManageStockHint')}</span>
                                                 </div>
                                             </label>
                                         </div>
@@ -555,7 +573,7 @@ export default function Users() {
                                 )}
 
                                 <div className="form-group">
-                                    <label htmlFor="user-email">Email</label>
+                                    <label htmlFor="user-email">{t('Email')}</label>
                                     <input
                                         id="user-email"
                                         type="email"
@@ -566,7 +584,7 @@ export default function Users() {
                                 </div>
 
                                 <div className="form-group">
-                                    <label htmlFor="user-phone">Téléphone</label>
+                                    <label htmlFor="user-phone">{t('Phone')}</label>
                                     <input
                                         id="user-phone"
                                         type="tel"
@@ -578,7 +596,7 @@ export default function Users() {
                                 {!editingUser && (
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="form-group">
-                                            <label htmlFor="user-password">Mot de passe</label>
+                                            <label htmlFor="user-password">{t('Password')}</label>
                                             <input
                                                 id="user-password"
                                                 type="password"
@@ -590,7 +608,7 @@ export default function Users() {
                                             />
                                         </div>
                                         <div className="form-group">
-                                            <label htmlFor="user-password-confirm">Confirmer le mot de passe</label>
+                                            <label htmlFor="user-password-confirm">{t('ConfirmPassword')}</label>
                                             <input
                                                 id="user-password-confirm"
                                                 type="password"
@@ -602,7 +620,7 @@ export default function Users() {
                                         </div>
                                     </div>
                                 )}
-                                {!editingUser && <p id="user-password-help" className="text-xs text-muted">Utilisez au moins 12 caractères.</p>}
+                                {!editingUser && <p id="user-password-help" className="text-xs text-muted">{t('MinimumPasswordLength')}</p>}
 
                                 <div className="pt-6 border-t flex justify-end gap-3">
                                     <button
@@ -610,7 +628,7 @@ export default function Users() {
                                         onClick={closeModal}
                                         className="btn-ghost"
                                     >
-                                        Annuler
+                                        {t('Cancel')}
                                     </button>
                                     <button
                                         type="submit"
@@ -620,10 +638,10 @@ export default function Users() {
                                         {createMutation.isPending || updateMutation.isPending ? (
                                             <span className="flex items-center gap-2">
                                                 <span className="loader w-4 h-4 border-2"></span>
-                                                Traitement...
+                                                {t('Processing')}
                                             </span>
                                         ) : (
-                                            editingUser ? 'Mettre à jour' : 'Créer'
+                                            editingUser ? t('UpdateUser') : t('Create')
                                         )}
                                     </button>
                                 </div>
@@ -638,17 +656,17 @@ export default function Users() {
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn" role="presentation">
                     <div className="bg-secondary rounded-2xl w-full max-w-sm shadow-2xl animate-scaleIn" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
                         <div className="p-6 border-b flex justify-between items-center bg-tertiary/50">
-                            <h3 id="password-modal-title" className="text-lg font-bold">Changer le mot de passe</h3>
-                            <button type="button" onClick={closePasswordModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary" aria-label="Fermer la fenêtre">×</button>
+                            <h2 id="password-modal-title" className="text-lg font-bold">{t('ChangePassword')}</h2>
+                            <button type="button" onClick={closePasswordModal} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-tertiary" aria-label={t('CloseWindow')}>×</button>
                         </div>
                         <form className="p-6" onSubmit={(event) => { event.preventDefault(); if (selectedUserForPassword) resetPasswordMutation.mutate({ id: selectedUserForPassword.id, password: newPassword }); }}>
                             <p className="text-sm text-muted mb-4">
-                                Réinitialisation pour <strong>{selectedUserForPassword?.username}</strong>
+                                {t('PasswordResetFor', { username: selectedUserForPassword?.username })}
                             </p>
                             <input
-                                aria-label="Nouveau mot de passe"
+                                aria-label={t('NewPassword')}
                                 type="password"
-                                placeholder="Nouveau mot de passe"
+                                placeholder={t('NewPassword')}
                                 className="input w-full mb-4"
                                 value={newPassword}
                                 onChange={e => setNewPassword(e.target.value)}
@@ -656,21 +674,35 @@ export default function Users() {
                                 required
                                 aria-describedby="reset-password-help"
                             />
-                            <p id="reset-password-help" className="text-xs text-muted mb-4">Utilisez au moins 12 caractères.</p>
+                            <p id="reset-password-help" className="text-xs text-muted mb-4">{t('MinimumPasswordLength')}</p>
                             <div className="flex justify-end gap-2">
-                                <button type="button" onClick={closePasswordModal} className="btn-ghost">Annuler</button>
+                                <button type="button" onClick={closePasswordModal} className="btn-ghost">{t('Cancel')}</button>
                                 <button
                                     type="submit"
                                     className="btn-primary"
                                     disabled={resetPasswordMutation.isPending || newPassword.length < 12}
                                 >
-                                    Sauvegarder
+                                    {t('Save')}
                                 </button>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
+
+            <ConfirmDialog
+                open={Boolean(pendingStatusUser)}
+                title={pendingStatusUser?.is_active ? t('DisableUserTitle') : t('EnableUserTitle')}
+                description={pendingStatusUser?.is_active
+                    ? t('DisableUserDescription', { name: pendingStatusUser.username })
+                    : t('EnableUserDescription', { name: pendingStatusUser?.username })}
+                confirmLabel={pendingStatusUser?.is_active ? t('Disable') : t('Enable')}
+                busy={toggleActiveMutation.isPending}
+                onCancel={() => setPendingStatusUser(null)}
+                onConfirm={() => {
+                    if (pendingStatusUser) toggleActiveMutation.mutate(pendingStatusUser.id);
+                }}
+            />
         </div>
     );
 }

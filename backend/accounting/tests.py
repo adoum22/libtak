@@ -193,6 +193,7 @@ class CashRegisterTests(TestCase):
             status=Return.ReturnStatus.COMPLETED,
             reason='Test',
             refund_amount=Decimal('20.00'),
+            cash_refund_amount=Decimal('0.00'),
             refund_method=Sale.PaymentMethod.CARD,
             processed_by=self.admin,
         )

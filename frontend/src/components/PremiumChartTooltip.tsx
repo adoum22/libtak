@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next';
+
 interface TooltipPayloadItem {
     color?: string;
     name?: string;
@@ -11,10 +13,10 @@ interface PremiumChartTooltipProps {
     valueSuffix?: string;
 }
 
-const formatTooltipValue = (value: number | string | undefined, suffix: string) => {
+const formatTooltipValue = (value: number | string | undefined, suffix: string, locale: string) => {
     const numberValue = Number(value);
     if (Number.isFinite(numberValue)) {
-        return `${numberValue.toLocaleString('fr-FR', {
+        return `${numberValue.toLocaleString(locale, {
             maximumFractionDigits: 2,
         })}${suffix}`;
     }
@@ -27,10 +29,17 @@ export default function PremiumChartTooltip({
     label,
     valueSuffix = '',
 }: PremiumChartTooltipProps) {
+    const { t, i18n } = useTranslation();
     if (!active || !payload?.length) return null;
 
+    const locale = i18n.resolvedLanguage === 'ar'
+        ? 'ar-MA'
+        : i18n.resolvedLanguage === 'en'
+            ? 'en-US'
+            : 'fr-FR';
+
     return (
-        <div className="chart-tooltip">
+        <div className="chart-tooltip" role="status" aria-live="polite" aria-atomic="true">
             {label !== undefined && (
                 <p className="chart-tooltip-title">{label}</p>
             )}
@@ -40,10 +49,11 @@ export default function PremiumChartTooltip({
                         <span
                             className="chart-tooltip-dot"
                             style={{ backgroundColor: item.color || 'var(--color-accent)' }}
+                            aria-hidden="true"
                         />
-                        <span className="chart-tooltip-name">{item.name || 'Valeur'}</span>
+                        <span className="chart-tooltip-name">{item.name || t('Value')}</span>
                         <span className="chart-tooltip-value">
-                            {formatTooltipValue(item.value, valueSuffix)}
+                            {formatTooltipValue(item.value, valueSuffix, locale)}
                         </span>
                     </div>
                 ))}

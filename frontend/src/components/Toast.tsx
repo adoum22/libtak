@@ -1,8 +1,10 @@
 import { useCallback, useState, useEffect, useRef, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from 'lucide-react';
 import { ToastContext, type Toast, type ToastContextType, type ToastType } from './ToastContext';
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+    const { t } = useTranslation();
     const [toasts, setToasts] = useState<Toast[]>([]);
     const toastIdRef = useRef(0);
 
@@ -27,7 +29,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         <ToastContext.Provider value={value}>
             {children}
             {/* Toast Container */}
-            <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 pointer-events-none" aria-label="Notifications">
+            <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 pointer-events-none" aria-label={t('Notifications')}>
                 {toasts.map(toast => (
                     <ToastItem key={toast.id} toast={toast} onClose={removeToast} />
                 ))}
@@ -37,6 +39,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 function ToastItem({ toast, onClose }: { toast: Toast; onClose: (id: number) => void }) {
+    const { t } = useTranslation();
     const timerRef = useRef<number | null>(null);
     const startedAtRef = useRef(0);
     const remainingRef = useRef(toast.duration || 4000);
@@ -96,7 +99,7 @@ function ToastItem({ toast, onClose }: { toast: Toast; onClose: (id: number) => 
                 type="button"
                 onClick={() => onClose(toast.id)}
                 className="text-muted hover:text-foreground transition-colors"
-                aria-label="Fermer la notification"
+                aria-label={t('CloseNotification')}
             >
                 <X size={16} aria-hidden="true" />
             </button>

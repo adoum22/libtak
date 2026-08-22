@@ -26,7 +26,7 @@ fi
 chmod +x "$SYNC_SCRIPT"
 
 # Créer l'entrée cron (toutes les 30 minutes)
-CRON_ENTRY="*/30 * * * * $SYNC_SCRIPT >> $APP_DIR/sync.log 2>&1"
+CRON_ENTRY="*/30 * * * * flock -n '$APP_DIR/.sync.lock' '$SYNC_SCRIPT' >> '$APP_DIR/sync.log' 2>&1"
 
 # Vérifier si l'entrée existe déjà
 if crontab -l 2>/dev/null | grep -q "sync_to_cloud.sh"; then
@@ -39,7 +39,7 @@ fi
 (crontab -l 2>/dev/null; echo "$CRON_ENTRY") | crontab -
 
 echo ""
-echo -e "${GREEN}✓ Synchronisation automatique configurée !${NC}"
+echo -e "${GREEN}[OK] Synchronisation automatique configurée !${NC}"
 echo ""
 echo "La synchronisation s'exécutera toutes les 30 minutes."
 echo "Les logs sont dans: $APP_DIR/sync.log"

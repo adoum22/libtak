@@ -1,9 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client, { getApiUrl } from '../api/client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useToast } from '../components/ToastContext';
 import { Settings as SettingsIcon, Mail, Clock, Save, Check, Upload, Printer, Shield, Lock, Users, Database, Download, Send, AlertCircle } from 'lucide-react';
+import { resolveWeeklyReportDay } from '../utils/reportSettings';
 
 interface ReportSettings {
     email_recipients: string;
@@ -83,16 +85,42 @@ interface AppVersion {
     debug?: boolean;
 }
 
+type SettingsTab = 'store' | 'reports' | 'permissions' | 'backup';
+
 export default function Settings() {
+    const { t } = useTranslation();
     const queryClient = useQueryClient();
     const toast = useToast();
     const navigate = useNavigate();
     const [showSuccess, setShowSuccess] = useState(false);
-    const [activeTab, setActiveTab] = useState<'store' | 'reports' | 'permissions' | 'backup'>('store');
+    const [activeTab, setActiveTab] = useState<SettingsTab>('store');
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const [reportDiagnostic, setReportDiagnostic] = useState<ReportDiagnostic | null>(null);
-    const [backupDiagnostic, setBackupDiagnostic] = useState<string | null>(null);
+    const [backupDiagnostic, setBackupDiagnostic] = useState<{ message: string; isError: boolean } | null>(null);
+
+    const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        const tablist = event.currentTarget.closest<HTMLElement>('[role="tablist"]');
+        const tabs = tablist
+            ? Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+            : [];
+        if (!tabs.length) return;
+
+        event.preventDefault();
+        const currentIndex = Math.max(0, tabs.indexOf(event.currentTarget));
+        let nextIndex = currentIndex;
+        if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = tabs.length - 1;
+        else {
+            const isRtl = document.documentElement.dir === 'rtl';
+            const visualDelta = event.key === 'ArrowRight' ? 1 : -1;
+            const delta = isRtl ? -visualDelta : visualDelta;
+            nextIndex = (currentIndex + delta + tabs.length) % tabs.length;
+        }
+        tabs[nextIndex]?.focus();
+        tabs[nextIndex]?.click();
+    };
 
     const { data: appSettings, isLoading: appSettingsLoading, isError: appSettingsError, refetch: refetchAppSettings } = useQuery<AppSettings>({
         queryKey: ['appSettings'],
@@ -145,10 +173,11 @@ export default function Settings() {
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['appSettings'] });
+            queryClient.invalidateQueries({ queryKey: ['publicSettings'] });
             setShowSuccess(true);
             setTimeout(() => setShowSuccess(false), 3000);
         },
-        onError: () => toast.error('Les paramètres de la boutique n’ont pas pu être enregistrés.'),
+        onError: () => toast.error(t('SettingsStoreSaveFailed')),
     });
 
     const updateReportSettings = useMutation({
@@ -158,7 +187,7 @@ export default function Settings() {
             setShowSuccess(true);
             setTimeout(() => setShowSuccess(false), 3000);
         },
-        onError: () => toast.error('Les paramètres de rapport n’ont pas pu être enregistrés.'),
+        onError: () => toast.error(t('SettingsReportSaveFailed')),
     });
 
     const testDailyReport = useMutation({
@@ -177,9 +206,9 @@ export default function Settings() {
         }),
         onSuccess: (res) => {
             const sizeKb = Math.max(1, Math.round(res.data.size / 1024));
-            setBackupDiagnostic(`Sauvegarde generee correctement (${sizeKb} Ko).`);
+            setBackupDiagnostic({ message: t('SettingsBackupGenerated', { size: sizeKb }), isError: false });
         },
-        onError: () => setBackupDiagnostic('Erreur pendant la generation de la sauvegarde.'),
+        onError: () => setBackupDiagnostic({ message: t('SettingsBackupGenerationFailed'), isError: true }),
     });
 
     const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -194,7 +223,7 @@ export default function Settings() {
         if (logoPreview) URL.revokeObjectURL(logoPreview);
     }, [logoPreview]);
 
-    const dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
     return (
         <div className="space-y-6 animate-fadeIn">
@@ -202,11 +231,11 @@ export default function Settings() {
             {showSuccess && (
                 <div className="fixed top-4 right-4 z-50 bg-success text-white px-6 py-4 rounded-lg shadow-xl flex items-center gap-3 animate-slideUp" role="status" aria-live="polite">
                     <Check size={24} />
-                    <span>Paramètres sauvegardés!</span>
+                    <span>{t('SettingsSaved')}</span>
                 </div>
             )}
 
-            <h1 className="text-2xl font-bold">Paramètres</h1>
+            <h1 className="text-2xl font-bold">{t('Settings')}</h1>
 
             <div className="card max-w-4xl p-4">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
@@ -215,24 +244,26 @@ export default function Settings() {
                         <p className="font-mono text-xs break-all">{getApiUrl()}</p>
                     </div>
                     <div>
-                        <p className="text-muted">Version backend</p>
+                        <p className="text-muted">{t('SettingsBackendVersion')}</p>
                         <p className="font-mono">{appVersion?.backend_commit_short || '-'}</p>
                     </div>
                     <div>
-                        <p className="text-muted">Version frontend</p>
+                        <p className="text-muted">{t('SettingsFrontendVersion')}</p>
                         <p className="font-mono">{frontendCommit === '-' ? '-' : frontendCommit.slice(0, 12)}</p>
                     </div>
                 </div>
             </div>
 
             {/* Tabs */}
-            <div className="settings-tabs flex gap-2 border-b overflow-x-auto" role="tablist" aria-label="Sections des paramètres">
+            <div className="settings-tabs flex gap-2 border-b overflow-x-auto" role="tablist" aria-label={t('SettingsSections')}>
                 <button
                     type="button"
                     role="tab"
                     id="settings-tab-store"
                     aria-selected={activeTab === 'store'}
                     aria-controls="settings-panel-store"
+                    tabIndex={activeTab === 'store' ? 0 : -1}
+                    onKeyDown={handleTabKeyDown}
                     onClick={() => setActiveTab('store')}
                     className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'store'
                         ? 'border-accent text-accent'
@@ -240,7 +271,7 @@ export default function Settings() {
                         }`}
                 >
                     <SettingsIcon size={18} className="inline mr-2" />
-                    Boutique & Impression
+                    {t('SettingsStoreAndPrinting')}
                 </button>
                 <button
                     type="button"
@@ -248,6 +279,8 @@ export default function Settings() {
                     id="settings-tab-reports"
                     aria-selected={activeTab === 'reports'}
                     aria-controls="settings-panel-reports"
+                    tabIndex={activeTab === 'reports' ? 0 : -1}
+                    onKeyDown={handleTabKeyDown}
                     onClick={() => setActiveTab('reports')}
                     className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'reports'
                         ? 'border-accent text-accent'
@@ -255,7 +288,7 @@ export default function Settings() {
                         }`}
                 >
                     <Mail size={18} className="inline mr-2" />
-                    Rapports & Email
+                    {t('SettingsReportsAndEmail')}
                 </button>
                 <button
                     type="button"
@@ -263,6 +296,8 @@ export default function Settings() {
                     id="settings-tab-permissions"
                     aria-selected={activeTab === 'permissions'}
                     aria-controls="settings-panel-permissions"
+                    tabIndex={activeTab === 'permissions' ? 0 : -1}
+                    onKeyDown={handleTabKeyDown}
                     onClick={() => setActiveTab('permissions')}
                     className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'permissions'
                         ? 'border-accent text-accent'
@@ -270,7 +305,7 @@ export default function Settings() {
                         }`}
                 >
                     <Shield size={18} className="inline mr-2" />
-                    Permissions & Sécurité
+                    {t('SettingsPermissionsAndSecurity')}
                 </button>
                 <button
                     type="button"
@@ -278,6 +313,8 @@ export default function Settings() {
                     id="settings-tab-backup"
                     aria-selected={activeTab === 'backup'}
                     aria-controls="settings-panel-backup"
+                    tabIndex={activeTab === 'backup' ? 0 : -1}
+                    onKeyDown={handleTabKeyDown}
                     onClick={() => setActiveTab('backup')}
                     className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'backup'
                         ? 'border-accent text-accent'
@@ -285,17 +322,17 @@ export default function Settings() {
                         }`}
                 >
                     <Database size={18} className="inline mr-2" />
-                    Sauvegarde
+                    {t('Backup')}
                 </button>
             </div>
 
-            {activeTab === 'store' && appSettingsLoading && <div className="text-center py-12 text-muted" role="status">Chargement…</div>}
+            {activeTab === 'store' && appSettingsLoading && <div className="text-center py-12 text-muted" role="status">{t('Loading')}</div>}
             {activeTab === 'store' && appSettingsError && (
-                <div className="network-error-state" role="alert"><p>Les paramètres de la boutique sont indisponibles. Le formulaire est désactivé pour protéger les valeurs existantes.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchAppSettings()}>Réessayer</button></div>
+                <div className="network-error-state" role="alert"><p>{t('SettingsStoreUnavailable')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchAppSettings()}>{t('Retry')}</button></div>
             )}
-            {activeTab === 'reports' && reportSettingsLoading && <div className="text-center py-12 text-muted" role="status">Chargement…</div>}
+            {activeTab === 'reports' && reportSettingsLoading && <div className="text-center py-12 text-muted" role="status">{t('Loading')}</div>}
             {activeTab === 'reports' && reportSettingsError && (
-                <div className="network-error-state" role="alert"><p>Les paramètres de rapport sont indisponibles. Le formulaire est désactivé pour protéger les valeurs existantes.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchReportSettings()}>Réessayer</button></div>
+                <div className="network-error-state" role="alert"><p>{t('SettingsReportsUnavailable')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchReportSettings()}>{t('Retry')}</button></div>
             )}
 
             {/* Store Settings */}
@@ -313,7 +350,7 @@ export default function Settings() {
                     {/* General Info */}
                     <div className="card max-w-2xl">
                         <div className="card-header">
-                            <h2 className="font-semibold text-lg">Informations de la boutique</h2>
+                            <h2 className="font-semibold text-lg">{t('SettingsStoreInformation')}</h2>
                         </div>
                         <div className="card-body space-y-4">
                             {/* Logo Upload */}
@@ -321,11 +358,11 @@ export default function Settings() {
                                 <div className="relative group cursor-pointer w-32 h-32">
                                     <div className="w-32 h-32 rounded-lg overflow-hidden border-2 border-dashed border-muted flex items-center justify-center bg-tertiary">
                                         {currentLogoPreview ? (
-                                            <img src={currentLogoPreview} alt="Logo" className="w-full h-full object-contain" />
+                                            <img src={currentLogoPreview} alt={t('SettingsStoreLogo')} className="w-full h-full object-contain" />
                                         ) : (
                                             <div className="text-center p-2">
                                                 <Upload className="mx-auto text-muted mb-1" size={24} />
-                                                <span className="text-xs text-muted">Upload Logo</span>
+                                                <span className="text-xs text-muted">{t('SettingsUploadLogo')}</span>
                                             </div>
                                         )}
                                     </div>
@@ -335,16 +372,16 @@ export default function Settings() {
                                         accept="image/*"
                                         onChange={handleLogoChange}
                                         className="absolute inset-0 opacity-0 cursor-pointer"
-                                        aria-label="Choisir le logo de la boutique"
+                                        aria-label={t('SettingsChooseStoreLogo')}
                                     />
                                     <div className="absolute inset-0 bg-black bg-opacity-40 rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white text-xs text-center">
-                                        Modifier
+                                        {t('Edit')}
                                     </div>
                                 </div>
                             </div>
 
                             <div>
-                                <label htmlFor="settings-store-name" className="block text-sm font-medium mb-2">Nom de la boutique</label>
+                                <label htmlFor="settings-store-name" className="block text-sm font-medium mb-2">{t('SettingsStoreName')}</label>
                                 <input
                                     id="settings-store-name"
                                     type="text"
@@ -354,7 +391,7 @@ export default function Settings() {
                             </div>
 
                             <div>
-                                <label htmlFor="settings-store-address" className="block text-sm font-medium mb-2">Adresse</label>
+                                <label htmlFor="settings-store-address" className="block text-sm font-medium mb-2">{t('Address')}</label>
                                 <textarea
                                     id="settings-store-address"
                                     value={storeForm.store_address || ''}
@@ -365,7 +402,7 @@ export default function Settings() {
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label htmlFor="settings-store-phone" className="block text-sm font-medium mb-2">Téléphone</label>
+                                    <label htmlFor="settings-store-phone" className="block text-sm font-medium mb-2">{t('Phone')}</label>
                                     <input
                                         id="settings-store-phone"
                                         type="tel"
@@ -374,7 +411,7 @@ export default function Settings() {
                                     />
                                 </div>
                                 <div>
-                                    <label htmlFor="settings-store-email" className="block text-sm font-medium mb-2">Email</label>
+                                    <label htmlFor="settings-store-email" className="block text-sm font-medium mb-2">{t('Email')}</label>
                                     <input
                                         id="settings-store-email"
                                         type="email"
@@ -386,7 +423,7 @@ export default function Settings() {
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label htmlFor="settings-currency" className="block text-sm font-medium mb-2">Devise</label>
+                                    <label htmlFor="settings-currency" className="block text-sm font-medium mb-2">{t('Currency')}</label>
                                     <input
                                         id="settings-currency"
                                         type="text"
@@ -395,7 +432,7 @@ export default function Settings() {
                                     />
                                 </div>
                                 <div>
-                                    <label htmlFor="settings-currency-symbol" className="block text-sm font-medium mb-2">Symbole</label>
+                                    <label htmlFor="settings-currency-symbol" className="block text-sm font-medium mb-2">{t('SettingsCurrencySymbol')}</label>
                                     <input
                                         id="settings-currency-symbol"
                                         type="text"
@@ -411,27 +448,27 @@ export default function Settings() {
                     <div className="card max-w-2xl">
                         <div className="card-header flex items-center gap-2">
                             <Printer size={20} className="text-primary" />
-                            <h2 className="font-semibold text-lg">Personnalisation du Ticket</h2>
+                            <h2 className="font-semibold text-lg">{t('SettingsReceiptCustomization')}</h2>
                         </div>
                         <div className="card-body space-y-4">
                             <div>
-                                <label htmlFor="settings-print-header" className="block text-sm font-medium mb-2">En-tête du ticket (message de bienvenue)</label>
+                                <label htmlFor="settings-print-header" className="block text-sm font-medium mb-2">{t('SettingsReceiptHeader')}</label>
                                 <textarea
                                     id="settings-print-header"
                                     value={storeForm.print_header || ''}
                                     onChange={(e) => setStoreForm({ ...storeForm, print_header: e.target.value })}
                                     rows={2}
-                                    placeholder="Ex: Bienvenue à la Librairie Attaquaddoum !"
+                                    placeholder={t('SettingsReceiptHeaderPlaceholder')}
                                 />
                             </div>
                             <div>
-                                <label htmlFor="settings-print-footer" className="block text-sm font-medium mb-2">Pied de page (message de fin)</label>
+                                <label htmlFor="settings-print-footer" className="block text-sm font-medium mb-2">{t('SettingsReceiptFooter')}</label>
                                 <textarea
                                     id="settings-print-footer"
                                     value={storeForm.print_footer || ''}
                                     onChange={(e) => setStoreForm({ ...storeForm, print_footer: e.target.value })}
                                     rows={2}
-                                    placeholder="Ex: Merci de votre visite. À bientôt !"
+                                    placeholder={t('SettingsReceiptFooterPlaceholder')}
                                 />
                             </div>
                         </div>
@@ -440,7 +477,7 @@ export default function Settings() {
                     <div className="pt-2 max-w-2xl">
                         <button type="submit" className="btn-primary flex items-center gap-2 w-full justify-center">
                             <Save size={18} />
-                            <span>Sauvegarder Tout</span>
+                            <span>{t('SaveAll')}</span>
                         </button>
                     </div>
                 </form>
@@ -459,7 +496,7 @@ export default function Settings() {
                     className="card max-w-2xl"
                 >
                     <div className="card-header">
-                        <h2 className="font-semibold text-lg">Configuration des Rapports et Email</h2>
+                        <h2 className="font-semibold text-lg">{t('SettingsReportEmailConfiguration')}</h2>
                     </div>
                     <div className="card-body space-y-8">
 
@@ -467,17 +504,17 @@ export default function Settings() {
                         <div className="space-y-2 border-b pb-6">
                             <h3 className="font-medium text-primary flex items-center gap-2">
                                 <Mail size={18} />
-                                Configuration Serveur d'Envoi (SMTP)
+                                {t('SettingsSmtpConfiguration')}
                             </h3>
                             <p className="text-sm text-muted">
-                                La configuration SMTP (serveur, identifiants, mot de passe) est désormais gérée
-                                par les variables d'environnement du serveur :
+                                {t('SettingsSmtpEnvironmentIntro')}
+                                {' '}
                                 <code className="ml-1">EMAIL_HOST</code>,
                                 <code className="ml-1">EMAIL_PORT</code>,
                                 <code className="ml-1">EMAIL_HOST_USER</code>,
                                 <code className="ml-1">EMAIL_HOST_PASSWORD</code>,
                                 <code className="ml-1">EMAIL_USE_TLS</code>.
-                                Contactez votre administrateur pour les modifier.
+                                {' '}{t('SettingsContactAdministrator')}
                             </p>
                         </div>
 
@@ -486,10 +523,10 @@ export default function Settings() {
                                 <div>
                                     <h3 className="font-medium text-primary flex items-center gap-2">
                                         <AlertCircle size={18} />
-                                        Diagnostic rapport journalier
+                                        {t('SettingsDailyReportDiagnostic')}
                                     </h3>
                                     <p className="text-sm text-muted">
-                                        Verifie les destinataires, SMTP, dernier envoi et commande PythonAnywhere.
+                                        {t('SettingsDailyReportDiagnosticHelp')}
                                     </p>
                                 </div>
                                 <div className="flex gap-2">
@@ -500,7 +537,7 @@ export default function Settings() {
                                         disabled={diagnoseReports.isPending}
                                     >
                                         <AlertCircle size={16} />
-                                        Diagnostiquer
+                                        {t('Diagnose')}
                                     </button>
                                     <button
                                         type="button"
@@ -509,25 +546,25 @@ export default function Settings() {
                                         disabled={testDailyReport.isPending}
                                     >
                                         <Send size={16} />
-                                        Envoyer test
+                                        {t('SendTest')}
                                     </button>
                                 </div>
                             </div>
                             {reportDiagnostic && (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                                     <div className="p-3 bg-tertiary/40 rounded-lg">
-                                        <p className="font-semibold mb-1">Email</p>
-                                        <p>Backend: {reportDiagnostic.smtp_config?.backend || '-'}</p>
+                                        <p className="font-semibold mb-1">{t('Email')}</p>
+                                        <p>{t('Backend')}: {reportDiagnostic.smtp_config?.backend || '-'}</p>
                                         <p>SMTP: {reportDiagnostic.smtp_config?.host || '-'}:{reportDiagnostic.smtp_config?.port || '-'}</p>
-                                        <p>Utilisateur: {reportDiagnostic.smtp_config?.user_set || reportDiagnostic.smtp_config?.user ? 'OK' : 'Manquant'}</p>
-                                        <p>Mot de passe: {reportDiagnostic.smtp_config?.password_set ? 'OK' : 'Manquant'}</p>
+                                        <p>{t('User')}: {reportDiagnostic.smtp_config?.user_set || reportDiagnostic.smtp_config?.user ? t('OK') : t('Missing')}</p>
+                                        <p>{t('Password')}: {reportDiagnostic.smtp_config?.password_set ? t('OK') : t('Missing')}</p>
                                     </div>
                                     <div className="p-3 bg-tertiary/40 rounded-lg">
-                                        <p className="font-semibold mb-1">Rapport</p>
-                                        <p>Actif: {diagnosticSettings?.daily_enabled ? 'Oui' : 'Non'}</p>
-                                        <p>Destinataires: {diagnosticSettings?.recipients_count ?? '-'}</p>
-                                        <p>Heure: {diagnosticSettings?.daily_time || '-'}</p>
-                                        <p>Dernier statut: {diagnosticLog?.success === true ? 'OK' : diagnosticLog ? 'Erreur' : '-'}</p>
+                                        <p className="font-semibold mb-1">{t('Report')}</p>
+                                        <p>{t('Active')}: {diagnosticSettings?.daily_enabled ? t('Yes') : t('No')}</p>
+                                        <p>{t('Recipients')}: {diagnosticSettings?.recipients_count ?? '-'}</p>
+                                        <p>{t('Time')}: {diagnosticSettings?.daily_time || '-'}</p>
+                                        <p>{t('LastStatus')}: {diagnosticLog?.success === true ? t('OK') : diagnosticLog ? t('Error') : '-'}</p>
                                     </div>
                                     {diagnosticLog?.error_message && (
                                         <div className="md:col-span-2 p-3 bg-danger-light text-danger rounded-lg">
@@ -541,11 +578,11 @@ export default function Settings() {
                                     )}
                                     {reportDiagnostic.pythonanywhere_task && (
                                         <div className="md:col-span-2 p-3 bg-tertiary/40 rounded-lg">
-                                            <p className="font-semibold mb-1">Commande PythonAnywhere quotidienne</p>
+                                            <p className="font-semibold mb-1">{t('SettingsDailyPythonAnywhereCommand')}</p>
                                             <code className="text-xs">{reportDiagnostic.pythonanywhere_task}</code>
                                             {reportDiagnostic.pythonanywhere_env_file && (
                                                 <p className="text-xs text-muted mt-2">
-                                                    Variables chargees depuis {reportDiagnostic.pythonanywhere_env_file}
+                                                    {t('SettingsVariablesLoadedFrom', { file: reportDiagnostic.pythonanywhere_env_file })}
                                                 </p>
                                             )}
                                         </div>
@@ -557,7 +594,7 @@ export default function Settings() {
                         {/* Recipients */}
                         <div>
                             <label htmlFor="settings-report-recipients" className="block text-sm font-medium mb-2">
-                                Destinataires des rapports
+                                {t('SettingsReportRecipients')}
                             </label>
                             <input
                                 id="settings-report-recipients"
@@ -566,14 +603,14 @@ export default function Settings() {
                                 value={reportForm.email_recipients || ''}
                                 onChange={(e) => setReportForm({ ...reportForm, email_recipients: e.target.value })}
                             />
-                            <p className="text-xs text-muted mt-1">Séparez les adresses par des virgules</p>
+                            <p className="text-xs text-muted mt-1">{t('SettingsSeparateEmails')}</p>
                         </div>
 
                         {/* Schedules */}
                         <div className="space-y-4">
                             <h3 className="font-medium text-primary flex items-center gap-2">
                                 <Clock size={18} />
-                                Planification
+                                {t('Schedule')}
                             </h3>
 
                             {/* Daily */}
@@ -582,13 +619,14 @@ export default function Settings() {
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="checkbox"
+                                            aria-label={t('SettingsDailyReport')}
                                             checked={reportForm.daily_enabled}
                                             onChange={(e) => setReportForm({ ...reportForm, daily_enabled: e.target.checked })}
                                             className="w-5 h-5"
                                         />
                                         <div>
-                                            <p className="font-medium">Rapport Journalier</p>
-                                            <p className="text-sm text-muted">Tous les jours</p>
+                                            <p className="font-medium">{t('SettingsDailyReport')}</p>
+                                            <p className="text-sm text-muted">{t('EveryDay')}</p>
                                         </div>
                                     </div>
                                     <input
@@ -606,23 +644,24 @@ export default function Settings() {
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="checkbox"
+                                            aria-label={t('SettingsWeeklyReport')}
                                             checked={reportForm.weekly_enabled}
                                             onChange={(e) => setReportForm({ ...reportForm, weekly_enabled: e.target.checked })}
                                             className="w-5 h-5"
                                         />
                                         <div>
-                                            <p className="font-medium">Rapport Hebdomadaire</p>
-                                            <p className="text-sm text-muted">Chaque semaine</p>
+                                            <p className="font-medium">{t('SettingsWeeklyReport')}</p>
+                                            <p className="text-sm text-muted">{t('EveryWeek')}</p>
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-2">
                                         <select
-                                            value={reportForm.weekly_day || 6}
+                                            value={resolveWeeklyReportDay(reportForm.weekly_day)}
                                             onChange={(e) => setReportForm({ ...reportForm, weekly_day: parseInt(e.target.value) })}
                                             className="w-auto"
                                         >
                                             {dayNames.map((day, i) => (
-                                                <option key={day} value={i}>{day}</option>
+                                                <option key={day} value={i}>{t(day)}</option>
                                             ))}
                                         </select>
                                         <input
@@ -641,13 +680,14 @@ export default function Settings() {
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="checkbox"
+                                            aria-label={t('SettingsMonthlyReport')}
                                             checked={reportForm.monthly_enabled}
                                             onChange={(e) => setReportForm({ ...reportForm, monthly_enabled: e.target.checked })}
                                             className="w-5 h-5"
                                         />
                                         <div>
-                                            <p className="font-medium">Rapport Mensuel</p>
-                                            <p className="text-sm text-muted">Dernier jour du mois</p>
+                                            <p className="font-medium">{t('SettingsMonthlyReport')}</p>
+                                            <p className="text-sm text-muted">{t('LastDayOfMonth')}</p>
                                         </div>
                                     </div>
                                     <input
@@ -665,13 +705,14 @@ export default function Settings() {
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="checkbox"
+                                            aria-label={t('SettingsQuarterlyReport')}
                                             checked={reportForm.quarterly_enabled}
                                             onChange={(e) => setReportForm({ ...reportForm, quarterly_enabled: e.target.checked })}
                                             className="w-5 h-5"
                                         />
                                         <div>
-                                            <p className="font-medium">Rapport Trimestriel</p>
-                                            <p className="text-sm text-muted">Fin Mars, Juin, Sept, Déc</p>
+                                            <p className="font-medium">{t('SettingsQuarterlyReport')}</p>
+                                            <p className="text-sm text-muted">{t('SettingsQuarterEnds')}</p>
                                         </div>
                                     </div>
                                     <input
@@ -689,13 +730,14 @@ export default function Settings() {
                                     <div className="flex items-center gap-3">
                                         <input
                                             type="checkbox"
+                                            aria-label={t('SettingsYearlyReport')}
                                             checked={reportForm.yearly_enabled}
                                             onChange={(e) => setReportForm({ ...reportForm, yearly_enabled: e.target.checked })}
                                             className="w-5 h-5"
                                         />
                                         <div>
-                                            <p className="font-medium">Rapport Annuel</p>
-                                            <p className="text-sm text-muted">31 Décembre</p>
+                                            <p className="font-medium">{t('SettingsYearlyReport')}</p>
+                                            <p className="text-sm text-muted">{t('SettingsYearEnd')}</p>
                                         </div>
                                     </div>
                                     <input
@@ -711,7 +753,7 @@ export default function Settings() {
                         <div className="pt-4 border-t">
                             <button type="submit" className="btn-primary flex items-center gap-2">
                                 <Save size={18} />
-                                <span>Sauvegarder les configurations email</span>
+                                <span>{t('SettingsSaveEmailConfiguration')}</span>
                             </button>
                         </div>
                     </div>
@@ -719,9 +761,9 @@ export default function Settings() {
             )}
 
             {/* Permissions Settings */}
-            {activeTab === 'permissions' && appSettingsLoading && <div className="text-center py-12 text-muted" role="status">Chargement…</div>}
+            {activeTab === 'permissions' && appSettingsLoading && <div className="text-center py-12 text-muted" role="status">{t('Loading')}</div>}
             {activeTab === 'permissions' && appSettingsError && (
-                <div className="network-error-state" role="alert"><p>Les permissions sont indisponibles. Aucun changement n’est possible tant que les valeurs actuelles ne sont pas chargées.</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchAppSettings()}>Réessayer</button></div>
+                <div className="network-error-state" role="alert"><p>{t('SettingsPermissionsUnavailable')}</p><button type="button" className="btn-secondary mt-4" onClick={() => void refetchAppSettings()}>{t('Retry')}</button></div>
             )}
             {activeTab === 'permissions' && !appSettingsLoading && !appSettingsError && (
                 <form
@@ -739,17 +781,17 @@ export default function Settings() {
                 >
                     <div className="card-header flex items-center gap-2">
                         <Lock size={20} className="text-primary" />
-                        <h2 className="font-semibold text-lg">Permissions & Sécurité</h2>
+                        <h2 className="font-semibold text-lg">{t('SettingsPermissionsAndSecurity')}</h2>
                     </div>
                     <div className="card-body space-y-6 py-8">
                         <div className="w-16 h-16 bg-accent-light rounded-full flex items-center justify-center mx-auto mb-4">
                             <Shield size={32} className="text-accent" />
                         </div>
 
-                        <h3 className="text-xl font-bold text-center">Droits stock des vendeurs</h3>
+                        <h3 className="text-xl font-bold text-center">{t('SettingsSellerStockRights')}</h3>
 
                         <p className="text-muted max-w-lg mx-auto text-center">
-                            Ces droits globaux s’appliquent à tous les vendeurs. Les droits individuels configurés dans « Utilisateurs » s’ajoutent à ces valeurs ; ils ne peuvent pas retirer un droit global.
+                            {t('SettingsSellerStockRightsHelp')}
                         </p>
 
                         <div className="space-y-3 rounded-xl border border-border p-4 bg-secondary">
@@ -766,7 +808,7 @@ export default function Settings() {
                                             : false,
                                     })}
                                 />
-                                <span><strong className="block">Autoriser tous les vendeurs à voir le stock</strong><span className="text-sm text-muted">Donne accès au module Stock en lecture seule.</span></span>
+                                <span><strong className="block">{t('SettingsAllowSellerViewStock')}</strong><span className="text-sm text-muted">{t('SettingsAllowSellerViewStockHelp')}</span></span>
                             </label>
                             <label className="flex items-start gap-3 cursor-pointer text-left">
                                 <input
@@ -781,7 +823,7 @@ export default function Settings() {
                                             : Boolean(storeForm.cashier_can_view_stock),
                                     })}
                                 />
-                                <span><strong className="block">Autoriser tous les vendeurs à gérer le stock</strong><span className="text-sm text-muted">Inclut automatiquement le droit de voir le stock.</span></span>
+                                <span><strong className="block">{t('SettingsAllowSellerManageStock')}</strong><span className="text-sm text-muted">{t('SettingsAllowSellerManageStockHelp')}</span></span>
                             </label>
                         </div>
 
@@ -792,7 +834,7 @@ export default function Settings() {
                                 disabled={updateAppSettings.isPending}
                             >
                                 <Save size={18} />
-                                {updateAppSettings.isPending ? 'Enregistrement…' : 'Enregistrer les droits globaux'}
+                                {updateAppSettings.isPending ? t('Saving') : t('SettingsSaveGlobalRights')}
                             </button>
                             <button
                                 type="button"
@@ -800,7 +842,7 @@ export default function Settings() {
                                 className="btn-secondary inline-flex items-center justify-center gap-2"
                             >
                                 <Users size={18} />
-                                Gérer les droits individuels
+                                {t('SettingsManageIndividualRights')}
                             </button>
                         </div>
                     </div>
@@ -812,15 +854,15 @@ export default function Settings() {
                 <div id="settings-panel-backup" role="tabpanel" aria-labelledby="settings-tab-backup" className="card max-w-2xl">
                     <div className="card-header flex items-center gap-2">
                         <Database size={20} className="text-primary" />
-                        <h2 className="font-semibold text-lg">Sauvegarde de la base de données</h2>
+                        <h2 className="font-semibold text-lg">{t('SettingsDatabaseBackup')}</h2>
                     </div>
                     <div className="card-body space-y-6 py-8">
                         <div className="text-center">
                             <div className="w-16 h-16 bg-accent-light rounded-full flex items-center justify-center mx-auto mb-4">
                                 <Database size={32} className="text-accent" />
                             </div>
-                            <h3 className="text-xl font-bold">Télécharger une copie de vos données</h3>
-                            <p className="text-muted mt-2">Sélectionnez les données à inclure dans la sauvegarde :</p>
+                            <h3 className="text-xl font-bold">{t('SettingsDownloadDataCopy')}</h3>
+                            <p className="text-muted mt-2">{t('SettingsSelectBackupData')}</p>
                         </div>
 
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-lg mx-auto">
@@ -831,7 +873,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">📦 Produits</span>
+                                <span className="text-sm font-medium">📦 {t('Products')}</span>
                             </label>
                             <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
                                 <input
@@ -840,7 +882,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">📂 Catégories</span>
+                                <span className="text-sm font-medium">📂 {t('Categories')}</span>
                             </label>
                             <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
                                 <input
@@ -849,7 +891,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">🏢 Fournisseurs</span>
+                                <span className="text-sm font-medium">🏢 {t('Suppliers')}</span>
                             </label>
                             <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
                                 <input
@@ -858,7 +900,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">💰 Ventes</span>
+                                <span className="text-sm font-medium">💰 {t('Sales')}</span>
                             </label>
                             <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
                                 <input
@@ -867,7 +909,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">👥 Utilisateurs</span>
+                                <span className="text-sm font-medium">👥 {t('Users')}</span>
                             </label>
                             <label className="flex items-center gap-2 p-3 bg-tertiary/30 rounded-lg cursor-pointer hover:bg-tertiary/50 transition-colors">
                                 <input
@@ -876,7 +918,7 @@ export default function Settings() {
                                     defaultChecked
                                     className="w-5 h-5 accent-accent"
                                 />
-                                <span className="text-sm font-medium">⚙️ Paramètres</span>
+                                <span className="text-sm font-medium">⚙️ {t('Settings')}</span>
                             </label>
                         </div>
 
@@ -904,7 +946,7 @@ export default function Settings() {
                                         });
 
                                         if (selectedCount === 0) {
-                                            toast.warning('Sélectionnez au moins une rubrique à sauvegarder.');
+                                            toast.warning(t('SettingsSelectBackupSection'));
                                             return;
                                         }
 
@@ -923,13 +965,13 @@ export default function Settings() {
                                         setShowSuccess(true);
                                         setTimeout(() => setShowSuccess(false), 3000);
                                     } catch {
-                                        toast.error('La sauvegarde n’a pas pu être téléchargée. Réessayez.');
+                                        toast.error(t('SettingsBackupDownloadFailed'));
                                     }
                                 }}
                                 className="btn-primary inline-flex items-center gap-2 px-8 py-3 text-lg"
                             >
                                 <Download size={24} />
-                                Télécharger la sauvegarde
+                                {t('SettingsDownloadBackup')}
                             </button>
                         </div>
 
@@ -941,22 +983,22 @@ export default function Settings() {
                                 className="btn-secondary inline-flex items-center gap-2"
                             >
                                 <Database size={18} />
-                                {testBackup.isPending ? 'Verification...' : 'Tester la sauvegarde'}
+                                {testBackup.isPending ? t('Checking') : t('SettingsTestBackup')}
                             </button>
                             {backupDiagnostic && (
-                                <p className={`text-sm mt-3 ${backupDiagnostic.startsWith('Erreur') ? 'text-danger' : 'text-success'}`}>
-                                    {backupDiagnostic}
+                                <p className={`text-sm mt-3 ${backupDiagnostic.isError ? 'text-danger' : 'text-success'}`}>
+                                    {backupDiagnostic.message}
                                 </p>
                             )}
                         </div>
 
                         <p className="text-xs text-muted text-center">
-                            Le fichier sera au format Excel (.xlsx) avec plusieurs feuilles. Ouvrez-le avec Excel ou Google Sheets.
+                            {t('SettingsBackupFileHelp')}
                         </p>
                         <div className="p-4 bg-tertiary/40 rounded-lg text-sm">
-                            <p className="font-semibold mb-2">Sauvegarde locale automatique</p>
+                            <p className="font-semibold mb-2">{t('SettingsAutomaticLocalBackup')}</p>
                             <p className="text-muted mb-2">
-                                Pour un serveur local/offline, planifiez cette commande toutes les 30 minutes. Elle cree d'abord une sauvegarde locale, puis tente une synchronisation cloud si elle est configuree.
+                                {t('SettingsAutomaticLocalBackupHelp')}
                             </p>
                             <code className="text-xs">cd ~/libtak/backend && python manage.py local_backup_sync</code>
                         </div>

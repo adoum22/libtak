@@ -8,8 +8,11 @@ Designed for a local/offline-first deployment. Schedule every 30 minutes:
 The command never fails just because internet/cloud sync is unavailable:
 the local backup is created first, then sync is best-effort.
 """
-from django.core.management.base import BaseCommand
+from django.core.management import call_command
+from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
+from reporting.models import ReportLog
 from reporting.tasks import daily_database_backup
 
 
@@ -17,8 +20,32 @@ class Command(BaseCommand):
     help = 'Create a local backup and optionally push pending data to cloud.'
 
     def handle(self, *args, **options):
-        backup_result = daily_database_backup()
-        self.stdout.write(self.style.SUCCESS(f'backup: {backup_result}'))
+        failures = []
+        already_backed_up = ReportLog.objects.filter(
+            report_type=ReportLog.ReportType.BACKUP,
+            period_start=timezone.localdate(),
+            success=True,
+        ).exists()
+        if already_backed_up:
+            self.stdout.write('backup: already completed today')
+        else:
+            backup_result = str(daily_database_backup())
+            writer = (
+                self.style.ERROR
+                if backup_result.startswith('Backup failed:')
+                else self.style.SUCCESS
+            )
+            self.stdout.write(writer(f'backup: {backup_result}'))
+            if backup_result.startswith('Backup failed:'):
+                failures.append('local encrypted backup')
+
+        # Use the same database-driven report scheduler as Celery/cron. Its
+        # durable claims make this safe when invoked every 30 minutes.
+        try:
+            call_command('send_scheduled_reports', '--skip-backup')
+        except CommandError as exc:
+            self.stderr.write(self.style.ERROR(f'scheduler: {exc}'))
+            failures.append('scheduled reports')
 
         try:
             from core.sync_service import sync_service
@@ -33,3 +60,8 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('sync: non configure, backup local uniquement'))
         else:
             self.stdout.write(self.style.WARNING(f'sync: {sync_result}'))
+
+        if failures:
+            raise CommandError(
+                'Local maintenance failed: ' + ', '.join(failures)
+            )

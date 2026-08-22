@@ -452,7 +452,7 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class StockInSerializer(serializers.Serializer):
     """Serializer simplifié pour l'entrée de stock"""
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-    quantity = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=1_000_000)
     unit_cost = serializers.DecimalField(
         max_digits=10, decimal_places=2, min_value=Decimal('0'), required=False
     )
@@ -461,7 +461,11 @@ class StockInSerializer(serializers.Serializer):
     )
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all(), required=False)
     reference = serializers.CharField(max_length=100, required=False, allow_blank=True)
-    notes = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(
+        max_length=2000,
+        required=False,
+        allow_blank=True,
+    )
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -512,6 +516,24 @@ class StockInSerializer(serializers.Serializer):
             created_by=self.context['request'].user
         )
         return movement
+
+
+MAX_BULK_STOCK_ITEMS = 200
+
+
+class BulkStockInSerializer(serializers.Serializer):
+    """Validate and create a bounded stock-entry batch atomically."""
+
+    items = StockInSerializer(
+        many=True,
+        allow_empty=False,
+        max_length=MAX_BULK_STOCK_ITEMS,
+    )
+
+    @transaction.atomic
+    def create(self, validated_data):
+        child = self.fields['items'].child
+        return [child.create(item) for item in validated_data['items']]
 
 
 # ---- Purchase Order Serializers ----

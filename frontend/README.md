@@ -1,5 +1,20 @@
 # React + TypeScript + Vite
 
+## End-to-end regression tests
+
+The Playwright suite is intentionally locked to an isolated API/database. It refuses to start unless the isolation flag, local frontend URL, and dedicated credentials are supplied:
+
+```powershell
+$env:E2E_CONFIRM_ISOLATED_DB='1'
+$env:E2E_BASE_URL='http://127.0.0.1:5173'
+$env:E2E_ADMIN_USERNAME='<isolated-admin>'
+$env:E2E_SELLER_USERNAME='<isolated-seller>'
+$env:E2E_PASSWORD='<isolated-password>'
+npm run test:e2e
+```
+
+The backend used by `E2E_BASE_URL` must point to a disposable database. The suite does not need real products: its cart scenario intercepts product search with an in-memory fixture. A non-local frontend is rejected unless `E2E_ALLOW_REMOTE=1` is also set explicitly.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

@@ -59,5 +59,16 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'data-vendor': ['@tanstack/react-query', 'axios'],
+          'i18n-vendor': ['i18next', 'react-i18next'],
+        },
+      },
+    },
   }
 })

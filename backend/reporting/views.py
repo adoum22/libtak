@@ -9,9 +9,14 @@ from django.utils import timezone
 from datetime import timedelta, datetime
 from decimal import Decimal
 
-from sales.aggregates import completed_returns_for_period, financials_for_period
+from sales.aggregates import (
+    completed_returns_for_period,
+    financials_for_period,
+    recognized_refund_expression,
+)
 from sales.models import Return, Sale
 from inventory.models import Product
+from core.models import AppSettings
 from core.permissions import IsAdminRole, CanAccessReports
 from django.http import HttpResponse
 from .models import ReportSettings, ReportLog
@@ -102,6 +107,9 @@ class ExportReportView(APIView):
 
         # Données
         data = get_report_data(start_date, end_date)
+        currency_symbol = str(
+            AppSettings.get_settings().currency_symbol or 'DH'
+        ).strip() or 'DH'
 
         # Forcer Excel si demandé explicitement (?format=xlsx)
         fmt = (request.query_params.get('format') or '').lower()
@@ -154,7 +162,11 @@ class ExportReportView(APIView):
             # Résumé (Tableau stats)
             summary_data = [
                 ['Ventes', "CA", "Bénéfice Net"],
-                [str(data['total_sales']), f"{data['total_revenue']:.2f} DH", f"{data['total_profit']:.2f} DH"]
+                [
+                    str(data['total_sales']),
+                    f"{data['total_revenue']:.2f} {currency_symbol}",
+                    f"{data['total_profit']:.2f} {currency_symbol}",
+                ]
             ]
 
             summary_table = Table(summary_data, colWidths=[5*cm, 5*cm, 5*cm])
@@ -217,9 +229,9 @@ class ExportReportView(APIView):
             if data.get('returns_count', 0) > 0:
                 returns_data = [
                     ['CA Brut', 'Retours', 'CA Net'],
-                    [f"{data.get('gross_revenue', 0):.2f} DH",
-                     f"-{data.get('total_returns', 0):.2f} DH ({data.get('returns_count', 0)})",
-                     f"{data['total_revenue']:.2f} DH"]
+                    [f"{data.get('gross_revenue', 0):.2f} {currency_symbol}",
+                     f"-{data.get('total_returns', 0):.2f} {currency_symbol} ({data.get('returns_count', 0)})",
+                     f"{data['total_revenue']:.2f} {currency_symbol}"]
                 ]
 
                 returns_table = Table(returns_data, colWidths=[5*cm, 5*cm, 5*cm])
@@ -269,6 +281,9 @@ class ExportReportView(APIView):
         explicitement avec ?format=xlsx. Dépend uniquement d'openpyxl,
         toujours disponible (utilisé déjà par /core/backup/)."""
         try:
+            currency_symbol = str(
+                AppSettings.get_settings().currency_symbol or 'DH'
+            ).strip() or 'DH'
             from openpyxl import Workbook
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
@@ -306,13 +321,13 @@ class ExportReportView(APIView):
             row = 4
             summary = [
                 ('Ventes', data.get('total_sales', 0), None),
-                ('CA net', f"{data.get('total_revenue', 0):.2f} DH", None),
+                ('CA net', f"{data.get('total_revenue', 0):.2f} {currency_symbol}", None),
                 ('Marge brute (vente - achat)',
-                 f"{data.get('gross_margin', 0):.2f} DH", None),
+                 f"{data.get('gross_margin', 0):.2f} {currency_symbol}", None),
                 ('Dépenses d\'exploitation',
-                 f"{data.get('operating_expenses', 0):.2f} DH", red),
+                 f"{data.get('operating_expenses', 0):.2f} {currency_symbol}", red),
                 ('Bénéfice net',
-                 f"{data.get('total_profit', 0):.2f} DH", green),
+                 f"{data.get('total_profit', 0):.2f} {currency_symbol}", green),
             ]
             for label, value, font in summary:
                 ws.cell(row=row, column=1, value=label).font = Font(bold=True)
@@ -326,7 +341,7 @@ class ExportReportView(APIView):
                 ws.cell(row=row, column=1,
                         value='Retours').font = Font(bold=True)
                 ws.cell(row=row, column=2,
-                        value=f"-{data.get('total_returns', 0):.2f} DH "
+                        value=f"-{data.get('total_returns', 0):.2f} {currency_symbol} "
                               f"({data.get('returns_count', 0)})").font = red
                 row += 1
 
@@ -585,6 +600,7 @@ class StatsView(APIView):
                 row['day'].date(): row
                 for row in CreditPayment.objects.filter(
                     created_at__date__gte=period_start,
+                    status=CreditPayment.PaymentStatus.ACTIVE,
                 ).annotate(day=TruncDay('created_at')).values('day').annotate(
                     revenue=Sum('amount'), count=Count('id'),
                 )
@@ -594,7 +610,10 @@ class StatsView(APIView):
                 completed_returns_for_period(period_start, today)
                 .annotate(day=TruncDay('completed_at'))
                 .values('day')
-                .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+                .annotate(
+                    refunds=Sum(recognized_refund_expression()),
+                    returns_count=Count('id'),
+                )
             )
             returns_by_day = {
                 row['day'].date(): row for row in daily_returns if row['day']
@@ -633,7 +652,10 @@ class StatsView(APIView):
                 completed_returns_for_period(period_start, today)
                 .annotate(w=TruncWeek('completed_at'))
                 .values('w')
-                .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+                .annotate(
+                    refunds=Sum(recognized_refund_expression()),
+                    returns_count=Count('id'),
+                )
             )
             sales_by_week = {
                 row['w'].date(): row for row in weekly_qs if row['w']
@@ -642,6 +664,7 @@ class StatsView(APIView):
                 row['w'].date(): row
                 for row in CreditPayment.objects.filter(
                     created_at__date__gte=period_start,
+                    status=CreditPayment.PaymentStatus.ACTIVE,
                 ).annotate(w=TruncWeek('created_at')).values('w').annotate(
                     revenue=Sum('amount'), count=Count('id'),
                 )
@@ -683,6 +706,7 @@ class StatsView(APIView):
             row['hour'].hour: row
             for row in CreditPayment.objects.filter(
                 created_at__date=today,
+                status=CreditPayment.PaymentStatus.ACTIVE,
             ).annotate(hour=TruncHour('created_at')).values('hour').annotate(
                 revenue=Sum('amount'), count=Count('id'),
             )
@@ -692,7 +716,10 @@ class StatsView(APIView):
             completed_returns_for_period(today, today)
             .annotate(hour=TruncHour('completed_at'))
             .values('hour')
-            .annotate(refunds=Sum('refund_amount'), returns_count=Count('id'))
+            .annotate(
+                refunds=Sum(recognized_refund_expression()),
+                returns_count=Count('id'),
+            )
         )
         returns_by_hour = {
             row['hour'].hour: row for row in hourly_returns if row['hour']

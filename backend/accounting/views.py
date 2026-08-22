@@ -4,7 +4,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 
 from django.db import IntegrityError, transaction
-from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+from django.db.models import F, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -27,8 +27,9 @@ from sales.aggregates import (
     revenue_for_month,
     gross_margin_for_period,
     operating_expenses_for_period,
+    recognized_return_effects_by_day,
 )
-from sales.models import Return, ReturnItem, Sale, SaleItem
+from sales.models import Return, Sale, SaleItem
 
 from .models import (
     CashRegisterAdjustment,
@@ -754,7 +755,9 @@ class CashRegisterView(APIView):
         except Exception:
             return Decimal('0')
         return (
-            CreditPayment.objects.aggregate(total=Sum('amount'))['total']
+            CreditPayment.objects.filter(
+                status=CreditPayment.PaymentStatus.ACTIVE,
+            ).aggregate(total=Sum('amount'))['total']
             or Decimal('0')
         )
 
@@ -764,7 +767,7 @@ class CashRegisterView(APIView):
                 status=Return.ReturnStatus.COMPLETED,
                 refund_method=Sale.PaymentMethod.CASH,
             )
-            .aggregate(total=Sum('refund_amount'))['total']
+            .aggregate(total=Sum('cash_refund_amount'))['total']
             or Decimal('0')
         )
 
@@ -1147,16 +1150,9 @@ class PeriodSummaryView(APIView):
             .annotate(total=Sum('total_ttc'))
         )
         result = {row['d']: row['total'] or Decimal('0') for row in rows}
-        refunds = (
-            completed_returns_for_period(start, end)
-            .annotate(d=TruncDate('completed_at', tzinfo=tz))
-            .values('d')
-            .annotate(total=Sum('refund_amount'))
-        )
-        for row in refunds:
-            result[row['d']] = result.get(row['d'], Decimal('0')) - (
-                row['total'] or Decimal('0')
-            )
+        refunds_by_day, _ = recognized_return_effects_by_day(start, end)
+        for day, refund in refunds_by_day.items():
+            result[day] = result.get(day, Decimal('0')) - refund
         for d, amount in self._credit_payments_by_day(start, end).items():
             result[d] = result.get(d, Decimal('0')) + amount
         return result
@@ -1199,33 +1195,13 @@ class PeriodSummaryView(APIView):
             margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
                 row['total'] or Decimal('0')
             )
-        refunds = (
-            completed_returns_for_period(start, end)
-            .annotate(d=TruncDate('completed_at', tzinfo=tz))
-            .values('d')
-            .annotate(total=Sum('refund_amount'))
+        refunds_by_day, returned_costs_by_day = (
+            recognized_return_effects_by_day(start, end)
         )
-        for row in refunds:
-            margin[row['d']] = margin.get(row['d'], Decimal('0')) - (
-                row['total'] or Decimal('0')
-            )
-
-        returned_cost = (
-            ReturnItem.objects.filter(
-                return_order__in=completed_returns_for_period(start, end),
-                restock=True,
-            )
-            .annotate(d=TruncDate('return_order__completed_at', tzinfo=tz))
-            .values('d')
-            .annotate(total=Sum(ExpressionWrapper(
-                F('sale_item__unit_purchase_price') * F('quantity'),
-                output_field=DecimalField(max_digits=14, decimal_places=2),
-            )))
-        )
-        for row in returned_cost:
-            margin[row['d']] = margin.get(row['d'], Decimal('0')) + (
-                row['total'] or Decimal('0')
-            )
+        for day, refund in refunds_by_day.items():
+            margin[day] = margin.get(day, Decimal('0')) - refund
+        for day, returned_cost in returned_costs_by_day.items():
+            margin[day] = margin.get(day, Decimal('0')) + returned_cost
         payments_by_day = self._credit_payments_by_day(start, end)
         costs_by_day = self._credit_payment_costs_by_day(start, end)
         for d, amount in payments_by_day.items():
@@ -1245,6 +1221,7 @@ class PeriodSummaryView(APIView):
             CreditPayment.objects.filter(
                 created_at__gte=start_dt,
                 created_at__lte=end_dt,
+                status=CreditPayment.PaymentStatus.ACTIVE,
             )
             .annotate(d=TruncDate('created_at', tzinfo=tz))
             .values('d')
@@ -1268,6 +1245,7 @@ class PeriodSummaryView(APIView):
             CreditPayment.objects.filter(
                 created_at__gte=start_dt,
                 created_at__lte=end_dt,
+                status=CreditPayment.PaymentStatus.ACTIVE,
             )
             .select_related('credit_sale__sale')
             .annotate(d=TruncDate('created_at', tzinfo=tz))

@@ -5,6 +5,7 @@ import './index.css'
 import i18n from './i18n'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import ErrorBoundary from './components/ErrorBoundary'
+import ModalFocusManager from './components/ModalFocusManager'
 import { registerSW } from 'virtual:pwa-register'
 import { clearChunkReloadFlag, reloadOnceForNewVersion } from './utils/reloadOnChunkError'
 
@@ -34,6 +35,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
+        <ModalFocusManager />
         <App />
       </QueryClientProvider>
     </ErrorBoundary>

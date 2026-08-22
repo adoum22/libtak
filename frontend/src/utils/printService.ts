@@ -3,6 +3,8 @@
  * Uses the browser's print dialog with receipt-optimized styling
  */
 
+import i18n from '../i18n';
+
 export interface PrintReceiptItem {
     product: {
         name: string;
@@ -35,6 +37,7 @@ interface StoreSettings {
     logoUrl?: string | null;
     header?: string;
     footer?: string;
+    currencySymbol?: string;
 }
 
 const defaultSettings: StoreSettings = {
@@ -43,14 +46,17 @@ const defaultSettings: StoreSettings = {
     phone: '',
     taxId: '',
     header: '',
-    footer: 'Merci pour votre visite!'
+    footer: ''
 };
 
 /**
  * Format currency for receipt
  */
-function formatPrice(amount: number): string {
-    return amount.toFixed(2) + ' DH';
+function formatPrice(amount: number, locale: string, currencySymbol: string): string {
+    return amount.toLocaleString(locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }) + ` ${currencySymbol}`;
 }
 
 function escapeHtml(value: string | number | null | undefined): string {
@@ -76,17 +82,28 @@ function safeImageUrl(value: string | null | undefined): string | null {
 /**
  * Generate receipt HTML for thermal printer (80mm width)
  */
-export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSettings = defaultSettings): string {
+export function generateReceiptHTML(
+    data: PrintReceiptData,
+    settings: StoreSettings = defaultSettings,
+    language = i18n.resolvedLanguage || i18n.language || 'fr',
+): string {
+    const locale = language === 'ar' ? 'ar-MA' : language === 'en' ? 'en-GB' : 'fr-FR';
+    const direction = language === 'ar' ? 'rtl' : 'ltr';
+    const currencySymbol = String(settings.currencySymbol || 'DH').trim() || 'DH';
+    const translate = (key: string, options?: Record<string, unknown>) => String(i18n.t(key, {
+        ...options,
+        lng: language,
+    }));
     const now = new Date();
-    const dateStr = now.toLocaleDateString('fr-FR');
-    const timeStr = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const dateStr = now.toLocaleDateString(locale);
+    const timeStr = now.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
 
     const paymentLabels: Record<string, string> = {
-        'CASH': 'Espèces',
-        'CARD': 'Carte Bancaire',
-        'CREDIT': 'Crédit (à régler)',
-        'OTHER': 'Autre',
-        'TRANSFER': 'Virement',
+        'CASH': translate('ReceiptPaymentCash'),
+        'CARD': translate('ReceiptPaymentCard'),
+        'CREDIT': translate('ReceiptPaymentCredit'),
+        'OTHER': translate('ReceiptPaymentOther'),
+        'TRANSFER': translate('ReceiptPaymentTransfer'),
     };
 
     let itemsHTML = '';
@@ -98,9 +115,9 @@ export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSetti
                 <td colspan="3" class="item-name">${escapeHtml(item.product.name)}</td>
             </tr>
             <tr>
-                <td class="qty">${item.quantity} x ${formatPrice(unitPrice)}</td>
+                <td class="qty">${item.quantity} x ${formatPrice(unitPrice, locale, currencySymbol)}</td>
                 <td></td>
-                <td class="price">${formatPrice(lineTotal)}</td>
+                <td class="price">${formatPrice(lineTotal, locale, currencySymbol)}</td>
             </tr>
         `;
     }
@@ -109,10 +126,10 @@ export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSetti
 
     return `
 <!DOCTYPE html>
-<html>
+<html lang="${escapeHtml(language)}" dir="${direction}">
 <head>
     <meta charset="UTF-8">
-    <title>Ticket #${data.saleId}</title>
+    <title>${escapeHtml(translate('ReceiptTitle', { id: data.saleId }))}</title>
     <style>
         * {
             margin: 0;
@@ -227,16 +244,16 @@ export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSetti
         ${logoUrl ? `<img class="store-logo" src="${escapeHtml(logoUrl)}" alt="Logo" />` : ''}
         <div class="store-name">${escapeHtml(settings.storeName)}</div>
         ${settings.address ? `<div class="store-info">${escapeHtml(settings.address)}</div>` : ''}
-        ${settings.phone ? `<div class="store-info">Tel: ${escapeHtml(settings.phone)}</div>` : ''}
+        ${settings.phone ? `<div class="store-info">${escapeHtml(translate('ReceiptPhone'))}: ${escapeHtml(settings.phone)}</div>` : ''}
         ${settings.email ? `<div class="store-info">${escapeHtml(settings.email)}</div>` : ''}
         ${settings.taxId ? `<div class="store-info">IF: ${escapeHtml(settings.taxId)}</div>` : ''}
         ${settings.header ? `<div class="store-info">${escapeHtml(settings.header)}</div>` : ''}
     </div>
 
     <div class="receipt-info">
-        <div><span>Ticket N°:</span><span>${data.saleId}</span></div>
-        <div><span>Date:</span><span>${dateStr} ${timeStr}</span></div>
-        ${data.cashierName ? `<div><span>Vendeur:</span><span>${escapeHtml(data.cashierName)}</span></div>` : ''}
+        <div><span>${escapeHtml(translate('ReceiptNumber'))}:</span><span>${data.saleId}</span></div>
+        <div><span>${escapeHtml(translate('Date'))}:</span><span>${dateStr} ${timeStr}</span></div>
+        ${data.cashierName ? `<div><span>${escapeHtml(translate('Cashier'))}:</span><span>${escapeHtml(data.cashierName)}</span></div>` : ''}
     </div>
 
     <div class="separator"></div>
@@ -251,23 +268,23 @@ export function generateReceiptHTML(data: PrintReceiptData, settings: StoreSetti
 
     <div class="totals">
         ${data.discount ? `
-            <div><span>Sous-total:</span><span>${formatPrice(data.subtotal)}</span></div>
-            <div class="discount"><span>Remise (${escapeHtml(data.discount.name)}):</span><span>-${formatPrice(data.discount.amount)}</span></div>
+            <div><span>${escapeHtml(translate('Subtotal'))}:</span><span>${formatPrice(data.subtotal, locale, currencySymbol)}</span></div>
+            <div class="discount"><span>${escapeHtml(translate('Discount'))} (${escapeHtml(data.discount.name)}):</span><span>-${formatPrice(data.discount.amount, locale, currencySymbol)}</span></div>
         ` : ''}
         <div class="total-line">
-            <span>TOTAL:</span>
-            <span>${formatPrice(data.total)}</span>
+            <span>${escapeHtml(translate('Total')).toUpperCase()}:</span>
+            <span>${formatPrice(data.total, locale, currencySymbol)}</span>
         </div>
     </div>
 
     <div class="payment-info">
-        <div><span>Mode de paiement:</span><span>${escapeHtml(paymentLabels[data.paymentMethod] || data.paymentMethod)}</span></div>
-        ${data.paymentMethod === 'CASH' && data.amountGiven !== undefined ? `<div><span>Montant reçu:</span><span>${formatPrice(data.amountGiven)}</span></div>` : ''}
-        ${data.paymentMethod === 'CASH' && data.change !== undefined && data.change > 0 ? `<div><span>Monnaie rendue:</span><span>${formatPrice(data.change)}</span></div>` : ''}
+        <div><span>${escapeHtml(translate('PaymentMethod'))}:</span><span>${escapeHtml(paymentLabels[data.paymentMethod] || data.paymentMethod)}</span></div>
+        ${data.paymentMethod === 'CASH' && data.amountGiven !== undefined ? `<div><span>${escapeHtml(translate('AmountReceived'))}:</span><span>${formatPrice(data.amountGiven, locale, currencySymbol)}</span></div>` : ''}
+        ${data.paymentMethod === 'CASH' && data.change !== undefined && data.change > 0 ? `<div><span>${escapeHtml(translate('ChangeReturned'))}:</span><span>${formatPrice(data.change, locale, currencySymbol)}</span></div>` : ''}
     </div>
 
     <div class="footer">
-        ${escapeHtml(settings.footer || 'Merci pour votre visite!')}
+        ${escapeHtml(settings.footer || translate('ReceiptThankYou'))}
     </div>
 
     <div class="barcode">

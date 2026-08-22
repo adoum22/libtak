@@ -2,10 +2,10 @@ from calendar import monthrange
 from datetime import date, datetime, time
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+from django.db.models import Case, DecimalField, F, Sum, When
 from django.utils import timezone
 
-from .models import Return, ReturnItem, Sale, SaleItem
+from .models import Return, Sale, SaleItem
 
 
 def local_datetime_bounds(start_date, end_date):
@@ -38,6 +38,72 @@ def completed_returns_for_period(start_date, end_date):
     )
 
 
+def recognized_refund_expression():
+    """Expression SQL du remboursement affectant le revenu reconnu."""
+    return Case(
+        When(
+            sale__payment_method=Sale.PaymentMethod.CREDIT,
+            then=F('cash_refund_amount'),
+        ),
+        default=F('refund_amount'),
+        output_field=DecimalField(max_digits=10, decimal_places=2),
+    )
+
+
+def recognized_return_effect(return_order):
+    """Montants à extourner selon ce qui avait réellement été encaissé.
+
+    Une vente immédiate reconnaît tout le retour. Pour une vente à crédit,
+    seule la somme effectivement rendue au client avait déjà été reconnue en
+    chiffre d'affaires; la part restante annule simplement sa dette.
+    """
+    is_credit = return_order.sale.payment_method == Sale.PaymentMethod.CREDIT
+    recognized_refund = (
+        return_order.cash_refund_amount
+        if is_credit
+        else return_order.refund_amount
+    ) or Decimal('0.00')
+    restocked_cost = sum(
+        (
+            item.sale_item.unit_purchase_price * item.quantity
+            for item in return_order.items.all()
+            if item.restock
+        ),
+        Decimal('0.00'),
+    )
+    if is_credit:
+        full_return = return_order.refund_amount or Decimal('0.00')
+        if full_return <= 0 or recognized_refund <= 0:
+            recognized_cost = Decimal('0.00')
+        else:
+            recognized_cost = (
+                restocked_cost * recognized_refund / full_return
+            ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    else:
+        recognized_cost = restocked_cost
+    return recognized_refund, recognized_cost
+
+
+def recognized_return_effects_by_day(start_date, end_date):
+    """Effets revenu/coût des retours, groupés par date de complétion."""
+    refunds = {}
+    returned_costs = {}
+    tz = timezone.get_current_timezone()
+    returns = (
+        completed_returns_for_period(start_date, end_date)
+        .select_related('sale')
+        .prefetch_related('items__sale_item')
+    )
+    for return_order in returns:
+        day = timezone.localtime(return_order.completed_at, tz).date()
+        refund, returned_cost = recognized_return_effect(return_order)
+        refunds[day] = refunds.get(day, Decimal('0.00')) + refund
+        returned_costs[day] = (
+            returned_costs.get(day, Decimal('0.00')) + returned_cost
+        )
+    return refunds, returned_costs
+
+
 def _credit_payments_total(start_dt, end_dt) -> Decimal:
     """Cash received from credit customers during the period."""
     from credit.models import CreditPayment
@@ -46,6 +112,7 @@ def _credit_payments_total(start_dt, end_dt) -> Decimal:
         CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
+            status=CreditPayment.PaymentStatus.ACTIVE,
         ).aggregate(total=Sum('amount'))['total']
         or Decimal('0')
     )
@@ -59,6 +126,7 @@ def _credit_payments_cost(start_dt, end_dt) -> Decimal:
         CreditPayment.objects.filter(
             created_at__gte=start_dt,
             created_at__lte=end_dt,
+            status=CreditPayment.PaymentStatus.ACTIVE,
         ).select_related('credit_sale__sale')
     )
     sale_ids = {payment.credit_sale.sale_id for payment in payments}
@@ -107,15 +175,11 @@ def financials_for_period(start_date, end_date):
     gross_cost = immediate_cost + credit_cost
 
     completed_returns = completed_returns_for_period(start_date, end_date)
-    refunds = completed_returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0')
-    returned_cost_expression = ExpressionWrapper(
-        F('sale_item__unit_purchase_price') * F('quantity'),
-        output_field=DecimalField(max_digits=14, decimal_places=2),
+    refunds_by_day, returned_costs_by_day = recognized_return_effects_by_day(
+        start_date, end_date,
     )
-    returned_cost = ReturnItem.objects.filter(
-        return_order__in=completed_returns,
-        restock=True,
-    ).aggregate(total=Sum(returned_cost_expression))['total'] or Decimal('0')
+    refunds = sum(refunds_by_day.values(), Decimal('0.00'))
+    returned_cost = sum(returned_costs_by_day.values(), Decimal('0.00'))
 
     net_revenue = gross_revenue - refunds
     net_cost = gross_cost - returned_cost

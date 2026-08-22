@@ -45,6 +45,8 @@ class ReplacedFileCleanupMixin:
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    role = serializers.CharField(read_only=True)
+
     def validate(self, attrs):
         username = attrs.get('username') or attrs.get('email')
         password = attrs.get('password')
@@ -78,6 +80,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             except Exception:
                 pass
             raise
+        data['role'] = self.user.role
         try:
             AuditLog.log(
                 user=self.user,
